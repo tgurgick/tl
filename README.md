@@ -10,8 +10,9 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 
 ```
 throughline/                    # the tool (this repo, public)
-├── _skills/                    # /tl triage, /tl dedup, /tl bug-capture
-├── _templates/                 # intent.md, spec/, bug.md, ...
+├── .claude-plugin/             # plugin manifest — installs as "tl"
+├── skills/                     # /tl new, triage, dedup, bug-capture
+├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
 ├── docs/                       # design process docs
@@ -29,7 +30,14 @@ throughline/                    # the tool (this repo, public)
         └── _metrics/           # JSONL logs from skill runs
 ```
 
-To start a new workspace, copy `examples/sample-project/` into `projects/<name>/` and edit `triage.yml`. The frontmatter contract every file follows is `_templates/SCHEMA.md`.
+To start a new workspace, run `/tl:new` for a guided setup — or copy `examples/sample-project/` into `projects/<name>/` and edit `triage.yml` by hand. The frontmatter contract every file follows is `_templates/SCHEMA.md`.
+
+## Install
+
+The repo is a Claude Code / Cowork plugin and its own marketplace. Two ways to use it:
+
+- **Install the plugin** (works in any directory): add this repo as a marketplace — `/plugin marketplace add <github-path-or-local-clone>` — then `/plugin install tl@throughline`. Skills invoke as `/tl:new`, `/tl:triage`, `/tl:dedup`, `/tl:bug-capture`.
+- **Clone and work inside it**: your workspaces live in `projects/` (already gitignored). Run `/plugin marketplace add .` from the repo root and install from there, or simply ask Claude to run a skill by name — the skill files in `skills/` are self-contained.
 
 ## The model
 
@@ -72,7 +80,7 @@ Edit the config when goals change. The backlog re-sorts on the next triage run. 
 
 All tool commands live under the `/tl` prefix (as a Cowork plugin today; the future CLI will mirror the same verbs). Skills are batch jobs with LLM reasoning steps, not autonomous agents. Each runs against one workspace, takes the workspace name as its argument (optional when `projects/` holds only one), and reads that workspace's `triage.yml`.
 
-The full algorithm for each skill lives in its `_skills/<name>/SKILL.md` — that file is the source of truth, not this README.
+The full algorithm for each skill lives in its `skills/<name>/SKILL.md` — that file is the source of truth, not this README.
 
 Run them on demand from any Claude Code session, or schedule them as routines — triage and dedup need no network, so a local scheduled task (or a cron'd headless run, e.g. `claude -p "/tl triage my-app"`) covers the core loop. The intended cadence: bug-capture every 15 minutes, dedup daily at 6am, triage daily at 8am — sweep before you rank.
 

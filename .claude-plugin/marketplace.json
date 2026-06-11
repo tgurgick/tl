@@ -1,0 +1,13 @@
+{
+  "name": "throughline",
+  "owner": {
+    "name": "Trevor Gurgick"
+  },
+  "plugins": [
+    {
+      "name": "tl",
+      "source": "./",
+      "description": "Markdown-native project management: human intents, agent-ready specs, and scheduled triage driven by a config you own."
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "tl",
+  "description": "Markdown-native project management: human intents, agent-ready specs, and scheduled triage driven by a config you own.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Trevor Gurgick"
+  }
+}
