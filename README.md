@@ -1,6 +1,30 @@
-# Throughline (tl)
+<p align="center">
+  <img src="assets/logo.svg" width="110" alt="tl — a line through the work">
+</p>
 
-Markdown-native project management built on two concepts: **intents** are what humans want, **specs** are what agents execute. Scheduled skills handle triage, dedup, and metrics. A config file you own drives prioritization.
+<h1 align="center">tl</h1>
+
+<p align="center">
+  <strong>Lightweight spec-driven development, in markdown.</strong><br>
+  Intents are what humans want. Specs are what agents execute.<br>
+  The throughline is traceability — every line of code traces back to a human reason.
+</p>
+
+---
+
+Throughline (`tl`) is markdown-native project management for agent-driven development. Scheduled skills handle triage, dedup, and bug capture; a config file you own drives prioritization; git is the database.
+
+## Quick start
+
+```
+/plugin marketplace add tgurgick/tl
+/plugin install tl@throughline
+
+/tl:new          # guided setup — goals, rules, first intents
+/tl:triage       # rank the backlog (then schedule it daily)
+```
+
+Prefer to clone? Work inside the repo — your workspaces live in the gitignored `projects/`, and the skill files in `skills/` are self-contained (`/plugin marketplace add .` also works from the repo root).
 
 ## Tool vs. workspace
 
@@ -31,13 +55,6 @@ throughline/                    # the tool (this repo, public)
 ```
 
 To start a new workspace, run `/tl:new` for a guided setup — or copy `examples/sample-project/` into `projects/<name>/` and edit `triage.yml` by hand. The frontmatter contract every file follows is `_templates/SCHEMA.md`.
-
-## Install
-
-The repo is a Claude Code / Cowork plugin and its own marketplace. Two ways to use it:
-
-- **Install the plugin** (works in any directory): `/plugin marketplace add tgurgick/tl`, then `/plugin install tl@throughline`. Skills invoke as `/tl:new`, `/tl:triage`, `/tl:dedup`, `/tl:bug-capture`.
-- **Clone and work inside it**: your workspaces live in `projects/` (already gitignored). Run `/plugin marketplace add .` from the repo root and install from there, or simply ask Claude to run a skill by name — the skill files in `skills/` are self-contained.
 
 ## The model
 

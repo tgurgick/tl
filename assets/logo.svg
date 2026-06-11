@@ -1,0 +1,8 @@
+<svg width="140" height="120" viewBox="0 0 140 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="tl logo: an angled T with an arrow passing through it">
+  <g transform="translate(6,0) skewX(-10)">
+    <rect x="38" y="16" width="72" height="16" rx="3" fill="#8b949e"/>
+    <rect x="66" y="16" width="16" height="88" rx="3" fill="#8b949e"/>
+    <rect x="16" y="54" width="98" height="12" rx="6" fill="#1FA97A"/>
+    <polygon points="114,46 136,60 114,74" fill="#1FA97A"/>
+  </g>
+</svg>
