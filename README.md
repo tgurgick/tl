@@ -25,10 +25,11 @@ throughline/                    # the tool (this repo, public)
         ├── specs/              # agent-ready specifications (folders)
         ├── in-progress/        # specs being worked
         ├── done/               # completed, with feedback
-        └── triage/             # ideas being evaluated
+        ├── triage/             # ideas being evaluated
+        └── _metrics/           # JSONL logs from skill runs
 ```
 
-To start a new workspace, copy `examples/sample-project/` into `projects/<name>/` and edit `triage.yml`.
+To start a new workspace, copy `examples/sample-project/` into `projects/<name>/` and edit `triage.yml`. The frontmatter contract every file follows is `_templates/SCHEMA.md`.
 
 ## The model
 
@@ -53,7 +54,7 @@ specs/signup-apple-auth/
 
 SPEC.md references shared docs in the project repo by path (e.g. "see ARCHITECTURE.md, Stack Decisions section"). The `context/` folder holds only things the agent can't get from the repo: crash logs, pattern excerpts, third-party API formats.
 
-Templates: `_templates/spec/` (spec folder), `_templates/intent.md`, `_templates/bug.md`. A fully worked example: `examples/sample-project/`.
+Templates: `_templates/spec/` (spec folder), `_templates/intent.md`, `_templates/bug.md`. Field definitions: `_templates/SCHEMA.md`. A fully worked example: `examples/sample-project/`.
 
 ## The config: triage.yml
 
@@ -69,75 +70,32 @@ Edit the config when goals change. The backlog re-sorts on the next triage run. 
 
 ## Skills
 
-All tool commands live under the `/tl` prefix (as a Cowork plugin today; the future CLI will mirror the same verbs). Skills are batch jobs with LLM reasoning steps, not autonomous agents. Each runs against one workspace and reads that workspace's `triage.yml`.
+All tool commands live under the `/tl` prefix (as a Cowork plugin today; the future CLI will mirror the same verbs). Skills are batch jobs with LLM reasoning steps, not autonomous agents. Each runs against one workspace, takes the workspace name as its argument (optional when `projects/` holds only one), and reads that workspace's `triage.yml`.
 
-### /tl bug-capture
+The full algorithm for each skill lives in its `_skills/<name>/SKILL.md` — that file is the source of truth, not this README.
 
-Polls error tracking (Sentry/Datadog/Bugsnag) for new crashes. Creates spec folders with crash details.
-
-**Schedule:** Every 15 minutes (disabled until error tracking is connected).
-
-**How it works:**
-
-1. Read the workspace's `triage.yml` for error tracking provider and project
-2. Query provider MCP for issues since last check (track timestamp in `_metrics/capture-log.jsonl`)
-3. Deduplicate: skip if a spec with this issue ID already exists
-4. For each new issue:
-   - Pull: stack trace, breadcrumbs, device info, OS, affected user count, first/last seen
-   - Read source files named in the stack trace from the project repo
-   - Create spec folder in `specs/bug-{slug}-{date}/` using `_templates/bug.md`:
-     - `SPEC.md`: title from issue, repro from breadcrumbs, abridged stack trace, criteria ("crash no longer occurs" + "root cause documented")
-     - `context/crash-report.md`: full error report
-     - `context/affected-code.md`: source excerpts from stack frames
-   - Append to "Untriaged" in the workspace's `priorities.md`
-5. Log: `{"timestamp": "...", "source": "sentry", "issue_id": "...", "spec": "specs/bug-...", "affected_users": N}`
-
-### /tl dedup
-
-Daily cleanup of duplicate and resolved bug specs.
-
-**Schedule:** Daily at 6am (before triage).
-
-**How it works:**
-
-1. For each bug spec with a `source_id`:
-   - Query provider for current status
-   - **Resolved** (no recurrence in 72hr): move to `done/`, write auto-resolution in `outcome/feedback.md`
-   - **Merged** in provider: find target spec, append context, remove duplicate
-2. For bug specs without `source_id` (manual):
-   - Compare affected files and error descriptions across open bug specs
-   - If >50% file overlap or matching error terms: flag both ("Possible duplicate of {other}") — don't auto-merge
-3. Bugs older than 14 days, not P0: flag as stale
-4. Log: `{"date": "...", "merged": N, "auto_closed": N, "flagged": N, "total_open_bugs": N}`
+Run them on demand from any Claude Code session, or schedule them as routines — triage and dedup need no network, so a local scheduled task (or a cron'd headless run, e.g. `claude -p "/tl triage my-app"`) covers the core loop. The intended cadence: bug-capture every 15 minutes, dedup daily at 6am, triage daily at 8am — sweep before you rank.
 
 ### /tl triage
 
-Daily prioritization against goals and allocation targets.
+Ranks the backlog. Scores every spec against the weighted goals in `triage.yml`, applies the priority rules (first match wins), checks allocation drift, and rewrites `priorities.md`. Detects priorities a human changed by hand since the last run and records them in `override-log.jsonl`. Never creates, executes, or deletes specs, and never re-scores a human-set priority — only an explicit rule can change one.
 
-**Schedule:** Daily at 8am.
+### /tl dedup
 
-**How it works:**
+Sweeps bug specs before triage ranks them. With error tracking connected it auto-closes provider-resolved bugs and merges provider-confirmed duplicates; offline it still flags likely duplicates (never auto-merging a heuristic match) and marks stale bugs.
 
-1. Read the workspace's `triage.yml`: goals (with weights), allocation targets, priority rules
-2. Read all specs in `specs/` and `in-progress/`. Parse frontmatter: type, priority, depends_on, blocks, created date, source_id, affected_users
-3. **Apply rules** (first match wins):
-   - `affected_users > 10` → P0
-   - `sentry_status == regression` → P0
-   - `blocks_count > 2` → boost one level
-   - `age > 14 days AND not P0` → flag for review
-   - All `depends_on` in `done/` → set status `ready`
-4. **Score untriaged specs against goals:**
-   - Does this spec advance a key result? Is it prerequisite to one?
-   - Multiply by goal weight. Top quartile → P1, middle → P2, bottom → P3
-   - Write priority to spec frontmatter
-5. **Check allocation:**
-   - Count specs by `type` across `specs/` and `in-progress/`
-   - Compare to targets. If drift > threshold: warn with suggestion
-6. **Rewrite the workspace's `priorities.md`:** Active, Next up (sorted by priority + goal score), Blocked, Untriaged, Backlog, Icebox
-7. **Write summary** to `_metrics/triage-{date}.md`: priority changes, unblocked specs, allocation check, stale items, goal progress
-8. **Log:** `{"date": "...", "total": N, "by_priority": {...}, "by_type": {...}, "allocation_actual": {...}, "goal_progress": {...}}`
+### /tl bug-capture
 
-Triage does NOT create specs, execute them, merge duplicates, or override human-set priorities (unless a P0 rule fires).
+The one skill that needs network. Polls the provider configured in `triage.yml` `error_tracking`, and turns each new issue into a `specs/bug-*/` folder — spec, full crash report, and affected-code excerpts — that an agent can pick up cold. Leaves priority blank; that's triage's job.
+
+## The learning loop
+
+Auto-triage gets smarter from two signals the system records as a side effect of normal use:
+
+- **Overrides** — every time you hand-change a priority the triage skill set, the next run logs it to `_metrics/override-log.jsonl` and marks the spec `priority_set_by: human` so it stops fighting you.
+- **Outcomes** — `feedback.md` frontmatter carries 1–5 scores and a `priority_was_right` flag for every completed spec.
+
+A future `/tl reflect` skill reads both and proposes diffs to `triage.yml` — weights and rules, reviewed by you — rather than tuning an opaque model. Prioritization policy stays a diffable config file.
 
 ---
 
