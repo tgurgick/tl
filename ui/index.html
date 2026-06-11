@@ -43,81 +43,84 @@ a { color: inherit; }
 
 .wrap { max-width: 1180px; margin: 0 auto; padding: 26px 32px 80px; }
 
-header { display: flex; align-items: center; gap: 13px; margin-bottom: 30px; }
-header img { width: 42px; height: auto; }
+header { display: flex; align-items: center; gap: 13px; margin-bottom: 28px; }
+header img { width: 40px; height: auto; }
 header .name { font-size: 17px; font-weight: 500; letter-spacing: -0.2px; }
 header .spacer { flex: 1; }
-select {
-  appearance: none; background: var(--card); color: var(--ink);
-  border: 1px solid var(--line-strong); border-radius: 10px;
-  padding: 7px 32px 7px 12px; font: inherit; font-size: 14px; cursor: pointer;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' stroke='%238a877f' fill='none' stroke-width='1.5' stroke-linecap='round'/></svg>");
-  background-repeat: no-repeat; background-position: right 12px center;
-}
 
-.tabs { display: flex; gap: 26px; border-bottom: 1px solid var(--line); margin-bottom: 30px; }
+/* project multi-select */
+.msel { position: relative; }
+.msel > button {
+  background: var(--card); border: 1px solid var(--line-strong); color: var(--ink);
+  border-radius: 10px; padding: 7px 14px; font: inherit; font-size: 14px; cursor: pointer;
+}
+.msel-panel {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 6;
+  background: var(--card); border: 1px solid var(--line-strong); border-radius: 12px;
+  padding: 7px; min-width: 220px; display: none;
+  box-shadow: 0 10px 30px rgba(20,19,17,.10);
+}
+.msel.open .msel-panel { display: block; }
+.msel-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border-radius: 8px; font-size: 14px; cursor: pointer;
+}
+.msel-item:hover { background: var(--lane); }
+.msel-item input { accent-color: var(--accent); }
+.msel-item .ex { color: var(--faint); font-size: 12px; }
+
+.tabs { display: flex; gap: 26px; border-bottom: 1px solid var(--line); margin-bottom: 26px; }
 .tab {
   background: none; border: none; font: inherit; font-size: 14px; color: var(--muted);
   padding: 0 1px 11px; cursor: pointer; border-bottom: 1.5px solid transparent; margin-bottom: -1px;
 }
 .tab:hover { color: var(--ink); }
 .tab.active { color: var(--ink); border-color: var(--ink); }
-.tab .n { color: var(--faint); font-size: 12px; margin-left: 5px; }
 
 .label {
   font-size: 11px; font-weight: 500; letter-spacing: 1.4px; text-transform: uppercase;
   color: var(--muted);
 }
 
-/* board */
-.board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-items: start; }
-@media (max-width: 900px) { .board { grid-template-columns: repeat(2, 1fr); } }
-.lane { background: var(--lane); border-radius: 16px; padding: 12px; min-height: 180px; }
-.lane-head { display: flex; align-items: baseline; gap: 8px; padding: 2px 6px 12px; }
-.lane-head .count { font-size: 12px; color: var(--faint); }
-.col { display: flex; flex-direction: column; gap: 10px; }
+/* board: swimlanes */
+.cols-head { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding-bottom: 10px; }
+.cols-head .label { padding-left: 4px; }
+.swimlane { border-top: 1px solid var(--line); padding: 15px 0 20px; }
+.lane-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.lane-title { font-size: 14px; font-weight: 500; }
+.lane-proj { color: var(--muted); font-weight: 400; }
+.lane-meta { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
+.lane-meta .p0flag { color: var(--danger); }
+.progress { width: 64px; height: 3px; background: var(--line); border-radius: 2px; }
+.progress i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+.lane-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.cell { display: flex; flex-direction: column; gap: 8px; }
+
 .card {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
-  padding: 13px 15px; cursor: pointer; transition: border-color .12s, transform .12s;
+  padding: 12px 14px; cursor: pointer; transition: border-color .12s, transform .12s;
+  font-size: 14px; font-weight: 500; line-height: 1.4;
 }
 .card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
-.card .t { font-size: 14px; font-weight: 500; line-height: 1.4; margin-bottom: 9px; }
-.meta { display: flex; flex-wrap: wrap; gap: 6px; }
-.pill {
-  font-size: 11px; letter-spacing: .3px; color: var(--muted);
-  border: 1px solid var(--line-strong); border-radius: 999px; padding: 1.5px 9px;
+.card .dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--danger); margin-right: 8px; vertical-align: 1px;
 }
-.pill.p0 { color: var(--danger); border-color: var(--danger); }
-.pill.p1 { color: var(--ink); border-color: var(--ink); }
-.pill.solid { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-.empty { font-size: 13px; color: var(--faint); padding: 4px 6px; }
+.card.dim { color: var(--muted); font-weight: 400; }
 
-/* intents */
-.intents { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
-.hint { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
-
-/* metrics */
-.goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 14px; }
-.goal {
-  background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
-  padding: 16px 18px 14px;
+/* backlog */
+.blog-row {
+  display: flex; align-items: baseline; gap: 14px; padding: 13px 6px;
+  border-bottom: 1px solid var(--line); cursor: pointer;
 }
-.goal .desc { font-size: 14px; font-weight: 500; margin-bottom: 10px; }
-.goal .track { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
-.goal .fill { height: 100%; background: var(--accent); border-radius: 2px; }
-.goal .pct { font-size: 12px; color: var(--muted); margin-top: 7px; }
-.panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-@media (max-width: 900px) { .panels { grid-template-columns: 1fr; } }
-.panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 18px 20px; }
-.panel h3 { font-size: 13px; font-weight: 500; color: var(--muted); margin-bottom: 14px; }
-.alloc-row { display: grid; grid-template-columns: 90px 1fr 88px; align-items: center; gap: 12px; margin-bottom: 10px; font-size: 13px; }
-.alloc-track { position: relative; height: 5px; background: var(--line); border-radius: 3px; }
-.alloc-fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 3px; }
-.alloc-target { position: absolute; top: -3.5px; width: 1.5px; height: 12px; background: var(--muted); }
-.alloc-pct { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
-.stat-row { display: flex; gap: 28px; flex-wrap: wrap; }
-.stat .n { font-size: 26px; font-weight: 500; letter-spacing: -0.5px; }
-.stat .k { font-size: 12px; color: var(--muted); }
+.blog-row:hover { background: var(--lane); }
+.rank { font-size: 12px; color: var(--faint); min-width: 20px; text-align: right; font-variant-numeric: tabular-nums; }
+.blog-title { font-size: 14px; font-weight: 500; }
+.blog-sub { font-size: 12.5px; color: var(--muted); }
+.blog-p { margin-left: auto; font-size: 12px; color: var(--muted); letter-spacing: .4px; }
+.blog-p.p0 { color: var(--danger); }
+.section-gap { margin-top: 34px; }
+.empty { font-size: 13px; color: var(--faint); padding: 8px 4px; }
 
 /* drawer */
 .scrim { position: fixed; inset: 0; background: rgba(20,19,17,.32); opacity: 0; pointer-events: none; transition: opacity .18s; }
@@ -131,7 +134,12 @@ select {
 .open .drawer { transform: none; }
 .drawer .path { font-size: 12px; color: var(--faint); font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-bottom: 10px; }
 .drawer h2 { font-size: 19px; font-weight: 500; letter-spacing: -0.2px; margin-bottom: 14px; }
-.drawer .meta { margin-bottom: 24px; }
+.drawer .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px; }
+.pill {
+  font-size: 11px; letter-spacing: .3px; color: var(--muted);
+  border: 1px solid var(--line-strong); border-radius: 999px; padding: 1.5px 9px;
+}
+.pill.p0 { color: var(--danger); border-color: var(--danger); }
 .md { font-size: 14.5px; }
 .md h1, .md h2, .md h3 { font-size: 13px; font-weight: 500; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); margin: 26px 0 10px; }
 .md p { margin: 0 0 12px; }
@@ -154,37 +162,19 @@ select {
     <img src="/logo.png" alt="">
     <span class="name">Throughline</span>
     <span class="spacer"></span>
-    <select id="wsSelect" aria-label="Workspace"></select>
+    <div class="msel" id="msel">
+      <button id="wsBtn" aria-haspopup="true">projects</button>
+      <div class="msel-panel" id="wsPanel"></div>
+    </div>
   </header>
 
   <nav class="tabs" role="tablist">
-    <button class="tab active" data-view="board" role="tab">Board<span class="n" id="nBoard"></span></button>
-    <button class="tab" data-view="intents" role="tab">Intents<span class="n" id="nIntents"></span></button>
-    <button class="tab" data-view="metrics" role="tab">Metrics</button>
+    <button class="tab active" data-view="board" role="tab">Board</button>
+    <button class="tab" data-view="backlog" role="tab">Backlog</button>
   </nav>
 
-  <section id="view-board">
-    <div class="board" id="board"></div>
-  </section>
-
-  <section id="view-intents" hidden>
-    <div class="hint">Intents are upstream of the board — human outcomes that decompose into specs.</div>
-    <div class="intents" id="intents"></div>
-  </section>
-
-  <section id="view-metrics" hidden>
-    <div class="goals" id="goals"></div>
-    <div class="panels">
-      <div class="panel" id="allocPanel" hidden>
-        <h3>Allocation — actual vs target</h3>
-        <div id="alloc"></div>
-      </div>
-      <div class="panel">
-        <h3>Pulse</h3>
-        <div class="stat-row" id="stats"></div>
-      </div>
-    </div>
-  </section>
+  <section id="view-board"></section>
+  <section id="view-backlog" hidden></section>
 
   <div class="footnote">read-only — every change is a file edit · git is the database</div>
 </div>
@@ -195,6 +185,7 @@ select {
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const PRIO = { p0: 0, p1: 1, p2: 2, p3: 3 };
 
 // --- tiny markdown renderer ---
 function inline(s) {
@@ -252,163 +243,208 @@ function md(src) {
   return html;
 }
 
-// --- rendering ---
-const PRIO_ORDER = { p0: 0, p1: 1, p2: 2, p3: 3 };
-function pills(meta, feedback, extra) {
-  let h = '';
-  const p = (meta.priority || '').toLowerCase();
-  if (p) h += `<span class="pill ${p}">${esc(p.toUpperCase())}</span>`;
-  if (meta.type) h += `<span class="pill">${esc(String(meta.type).replace('_', ' '))}</span>`;
-  if (meta.size) h += `<span class="pill">${esc(meta.size)}</span>`;
-  if (meta.status === 'blocked') h += `<span class="pill solid">blocked</span>`;
-  if ((meta.tags || []).includes('stale')) h += `<span class="pill">stale</span>`;
-  if (feedback && feedback.scores) {
-    const s = feedback.scores;
-    const avg = ['correctness','completeness','scope_discipline'].map(k => s[k]).filter(n => typeof n === 'number');
-    if (avg.length) h += `<span class="pill">${(avg.reduce((a,b)=>a+b,0)/avg.length).toFixed(1)} / 5</span>`;
-  }
-  if (extra) h += extra;
-  return h;
-}
-
-function card(item, extraPills) {
-  const el = document.createElement('div');
-  el.className = 'card';
-  el.innerHTML = `<div class="t">${esc(item.title)}</div><div class="meta">${pills(item.meta, item.feedback, extraPills)}</div>`;
-  el.onclick = () => openDrawer(item);
-  return el;
-}
-
-const COLS = [
-  ['triage', 'Triage'],
-  ['ready', 'Ready'],
-  ['in-progress', 'In progress'],
-  ['done', 'Done'],
-];
-
-function render(ws) {
-  // board lanes
-  const board = $('board');
-  board.innerHTML = '';
-  let openCount = 0;
-  for (const [key, name] of COLS) {
-    let items = ws.specs.filter(s => s.stage === key);
-    if (key === 'ready' || key === 'in-progress') openCount += items.length;
-    if (key === 'ready') items.sort((a, b) =>
-      (PRIO_ORDER[a.meta.priority] ?? 9) - (PRIO_ORDER[b.meta.priority] ?? 9) || a.title.localeCompare(b.title));
-    if (key === 'done') items.sort((a, b) => b.mtime - a.mtime);
-    const lane = document.createElement('div');
-    lane.className = 'lane';
-    lane.innerHTML = `<div class="lane-head"><span class="label">${name}</span><span class="count">${items.length}</span></div>`;
-    const col = document.createElement('div');
-    col.className = 'col';
-    if (!items.length) col.innerHTML = '<div class="empty">—</div>';
-    items.forEach(s => col.appendChild(card(s)));
-    lane.appendChild(col);
-    board.appendChild(lane);
-  }
-  $('nBoard').textContent = openCount || '';
-
-  // intents
-  $('nIntents').textContent = ws.intents.length || '';
-  const intents = $('intents');
-  intents.innerHTML = '';
-  if (!ws.intents.length) intents.innerHTML = '<div class="empty">No intents yet — run /tl:new or draft one from _templates/intent.md</div>';
-  ws.intents.forEach(it => {
-    const nSpecs = (it.meta.specs || []).length;
-    const extra = nSpecs ? `<span class="pill">${nSpecs} spec${nSpecs > 1 ? 's' : ''}</span>` : '';
-    intents.appendChild(card(
-      { ...it, meta: { priority: it.meta.priority, type: it.meta.status } }, extra));
-  });
-
-  // goals
-  const goals = (ws.config && ws.config.goals) || [];
-  $('goals').innerHTML = goals.map(g => `
-    <div class="goal">
-      <div class="desc">${esc(g.description || g.id)}</div>
-      <div class="track"><div class="fill" style="width:${Math.round((g.weight || 0) * 100)}%"></div></div>
-      <div class="pct">weight ${(g.weight ?? 0).toFixed(2)}</div>
-    </div>`).join('');
-
-  // allocation
-  const alloc = ws.config && ws.config.allocation;
-  const open = ws.specs.filter(s => s.stage === 'ready' || s.stage === 'in-progress');
-  $('allocPanel').hidden = !alloc;
-  if (alloc) {
-    const typeKey = { bug: 'bugs', feature: 'features', tech_debt: 'tech_debt', research: 'research' };
-    const counts = { bugs: 0, features: 0, tech_debt: 0, research: 0 };
-    open.forEach(s => { const k = typeKey[s.meta.type]; if (k) counts[k]++; });
-    $('alloc').innerHTML = Object.keys(counts).map(k => {
-      const target = alloc[k] ?? 0;
-      const actual = open.length ? counts[k] / open.length : 0;
-      return `<div class="alloc-row">
-        <span>${esc(k.replace('_', ' '))}</span>
-        <span class="alloc-track">
-          <span class="alloc-fill" style="width:${Math.round(actual * 100)}%"></span>
-          <span class="alloc-target" style="left:${Math.round(target * 100)}%"></span>
-        </span>
-        <span class="alloc-pct">${Math.round(actual * 100)}% / ${Math.round(target * 100)}%</span>
-      </div>`;
-    }).join('');
-  }
-
-  // pulse
-  const byPrio = { p0: 0, p1: 0, p2: 0, p3: 0 };
-  open.forEach(s => { const p = (s.meta.priority || '').toLowerCase(); if (byPrio[p] !== undefined) byPrio[p]++; });
-  const tlog = (ws.metrics && ws.metrics['triage-log']) || [];
-  const overrides = (ws.metrics && ws.metrics['override-log']) || [];
-  $('stats').innerHTML = `
-    <div class="stat"><div class="n">${open.length}</div><div class="k">open specs</div></div>
-    <div class="stat"><div class="n">${byPrio.p0}</div><div class="k">p0</div></div>
-    <div class="stat"><div class="n">${ws.specs.filter(s => s.stage === 'done').length}</div><div class="k">done</div></div>
-    <div class="stat"><div class="n">${overrides.length}</div><div class="k">overrides logged</div></div>
-    <div class="stat"><div class="n">${tlog.length ? esc(tlog[tlog.length - 1].date) : '—'}</div><div class="k">last triage</div></div>`;
-}
-
-// --- tabs ---
-document.querySelectorAll('.tab').forEach(btn => {
-  btn.onclick = () => {
-    document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b === btn));
-    for (const v of ['board', 'intents', 'metrics'])
-      $('view-' + v).hidden = v !== btn.dataset.view;
-    localStorage.setItem('tl-view', btn.dataset.view);
-  };
-});
-const savedView = localStorage.getItem('tl-view');
-if (savedView) document.querySelector(`.tab[data-view="${savedView}"]`)?.click();
-
 // --- drawer ---
 function openDrawer(item) {
-  const d = $('drawer');
+  const meta = item.meta || {};
+  let pills = '';
+  const p = (meta.priority || '').toLowerCase();
+  if (p) pills += `<span class="pill ${p}">${esc(p.toUpperCase())}</span>`;
+  for (const k of ['type', 'size', 'status']) if (meta[k]) pills += `<span class="pill">${esc(String(meta[k]).replace('_',' '))}</span>`;
+  if (item._ws) pills += `<span class="pill">${esc(item._ws)}</span>`;
   const body = (item.body || '').replace(/^\s*# .*\n+/, '');
-  d.innerHTML = `
+  $('drawer').innerHTML = `
     <div class="path">${esc(item.path || '')}</div>
     <h2>${esc(item.title)}</h2>
-    <div class="meta">${pills(item.meta, item.feedback)}</div>
+    <div class="meta">${pills}</div>
     <div class="md">${md(body)}</div>`;
   document.body.classList.add('open');
 }
 $('scrim').onclick = () => document.body.classList.remove('open');
 addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('open'); });
 
-// --- boot ---
-async function load(name) {
-  const ws = await (await fetch('/api/ws/' + encodeURIComponent(name))).json();
-  localStorage.setItem('tl-ws', name);
-  render(ws);
+// --- board (swimlanes) ---
+const STAGES = ['triage', 'ready', 'in-progress', 'done'];
+const STAGE_NAMES = { triage: 'Triage', ready: 'Ready', 'in-progress': 'In progress', done: 'Done' };
+
+function specCard(s) {
+  const el = document.createElement('div');
+  el.className = 'card' + (s.meta.status === 'blocked' ? ' dim' : '');
+  el.innerHTML = (s.meta.priority === 'p0' ? '<span class="dot"></span>' : '') + esc(s.title);
+  el.onclick = () => openDrawer(s);
+  return el;
 }
+
+function renderBoard(wss) {
+  const root = $('view-board');
+  root.innerHTML = '';
+  const multi = wss.length > 1;
+
+  const head = document.createElement('div');
+  head.className = 'cols-head';
+  head.innerHTML = STAGES.map(s => `<span class="label">${STAGE_NAMES[s]}</span>`).join('');
+  root.appendChild(head);
+
+  const lanes = [];
+  for (const ws of wss) {
+    for (const intent of ws.intents) {
+      lanes.push({ ws: ws.name, intent, key: ws.name + '|' + intent.path, specs: [] });
+    }
+  }
+  const unattached = { ws: null, intent: null, specs: [] };
+  for (const ws of wss) {
+    for (const s of ws.specs) {
+      s._ws = ws.name;
+      const ip = (s.meta.intent || '').replace(/^\.\//, '').trim();
+      const lane = ip && lanes.find(l => l.ws === ws.name && l.intent.path === ip);
+      (lane || unattached).specs.push(s);
+    }
+  }
+  lanes.sort((a, b) =>
+    (PRIO[a.intent.meta.priority] ?? 9) - (PRIO[b.intent.meta.priority] ?? 9) ||
+    a.intent.title.localeCompare(b.intent.title));
+  if (unattached.specs.length) lanes.push(unattached);
+
+  if (!lanes.length) {
+    root.innerHTML += '<div class="empty">Nothing here yet — run /tl:new to start a project.</div>';
+    return;
+  }
+
+  for (const lane of lanes) {
+    const el = document.createElement('div');
+    el.className = 'swimlane';
+
+    const total = lane.specs.length;
+    const done = lane.specs.filter(s => s.stage === 'done').length;
+    const p0 = lane.specs.filter(s => s.meta.priority === 'p0' && s.stage !== 'done').length;
+    const top = document.createElement('div');
+    top.className = 'lane-top';
+    const title = lane.intent
+      ? `${multi ? `<span class="lane-proj">${esc(lane.ws)} / </span>` : ''}<span class="lane-title">${esc(lane.intent.title)}</span>`
+      : '<span class="lane-title" style="color:var(--muted)">Unattached</span>';
+    top.innerHTML = `${title}
+      <span class="lane-meta">
+        ${p0 ? `<span class="p0flag">${p0} p0</span>` : ''}
+        ${total ? `<span>${done}/${total} done</span><span class="progress"><i style="width:${total ? Math.round(done / total * 100) : 0}%"></i></span>` : '<span>no specs yet</span>'}
+      </span>`;
+    if (lane.intent) {
+      top.style.cursor = 'pointer';
+      top.onclick = e => { if (!e.target.closest('.lane-meta')) openDrawer({ ...lane.intent, _ws: lane.ws }); };
+    }
+    el.appendChild(top);
+
+    const grid = document.createElement('div');
+    grid.className = 'lane-grid';
+    for (const stage of STAGES) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      lane.specs.filter(s => s.stage === stage).forEach(s => cell.appendChild(specCard(s)));
+      grid.appendChild(cell);
+    }
+    el.appendChild(grid);
+    root.appendChild(el);
+  }
+}
+
+// --- backlog ---
+function renderBacklog(wss) {
+  const root = $('view-backlog');
+  root.innerHTML = '';
+  const multi = wss.length > 1;
+  const all = [];
+  for (const ws of wss) for (const s of ws.specs) { s._ws = ws.name; all.push(s); }
+
+  const ranked = all.filter(s => s.stage === 'ready')
+    .sort((a, b) => (PRIO[a.meta.priority] ?? 9) - (PRIO[b.meta.priority] ?? 9) || a.title.localeCompare(b.title));
+  const untriaged = all.filter(s => s.stage === 'triage');
+
+  const intentName = s => {
+    const ws = wss.find(w => w.name === s._ws);
+    const ip = (s.meta.intent || '').replace(/^\.\//, '').trim();
+    const it = ws && ws.intents.find(i => i.path === ip);
+    return it ? it.title : null;
+  };
+  const row = (s, n) => {
+    const el = document.createElement('div');
+    el.className = 'blog-row';
+    const sub = [intentName(s), multi ? s._ws : null].filter(Boolean).join(' · ');
+    const p = (s.meta.priority || '').toLowerCase();
+    el.innerHTML = `<span class="rank">${n ?? ''}</span>
+      <span class="blog-title">${esc(s.title)}</span>
+      ${sub ? `<span class="blog-sub">${esc(sub)}</span>` : ''}
+      <span class="blog-p ${p}">${esc(p.toUpperCase())}</span>`;
+    el.onclick = () => openDrawer(s);
+    return el;
+  };
+
+  if (!ranked.length && !untriaged.length) {
+    root.innerHTML = '<div class="empty">Backlog is empty.</div>';
+    return;
+  }
+  ranked.forEach((s, i) => root.appendChild(row(s, i + 1)));
+  if (untriaged.length) {
+    const h = document.createElement('div');
+    h.className = 'label section-gap';
+    h.style.display = 'block';
+    h.textContent = 'Untriaged';
+    root.appendChild(h);
+    untriaged.forEach(s => root.appendChild(row(s)));
+  }
+}
+
+// --- tabs ---
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b === btn));
+    $('view-board').hidden = btn.dataset.view !== 'board';
+    $('view-backlog').hidden = btn.dataset.view !== 'backlog';
+    localStorage.setItem('tl-view', btn.dataset.view);
+  };
+});
+const savedView = localStorage.getItem('tl-view');
+if (savedView === 'backlog') document.querySelector('.tab[data-view="backlog"]')?.click();
+
+// --- project selection + boot ---
+let available = [], selected = [];
+
+function syncButton() {
+  $('wsBtn').textContent = selected.length === 1 ? selected[0] : `${selected.length} projects`;
+}
+async function loadSelected() {
+  const wss = await Promise.all(selected.map(n =>
+    fetch('/api/ws/' + encodeURIComponent(n)).then(r => r.json())));
+  renderBoard(wss);
+  renderBacklog(wss);
+  syncButton();
+}
+function buildPanel() {
+  $('wsPanel').innerHTML = '';
+  available.forEach(w => {
+    const l = document.createElement('label');
+    l.className = 'msel-item';
+    l.innerHTML = `<input type="checkbox" ${selected.includes(w.name) ? 'checked' : ''}>
+      <span>${esc(w.name)}</span>${w.example ? '<span class="ex">example</span>' : ''}`;
+    l.querySelector('input').onchange = e => {
+      if (e.target.checked) selected.push(w.name);
+      else selected = selected.filter(n => n !== w.name);
+      if (!selected.length) { selected = [w.name]; e.target.checked = true; return; }
+      localStorage.setItem('tl-sel', JSON.stringify(selected));
+      loadSelected();
+    };
+    $('wsPanel').appendChild(l);
+  });
+}
+$('wsBtn').onclick = () => $('msel').classList.toggle('open');
+addEventListener('click', e => { if (!e.target.closest('.msel')) $('msel').classList.remove('open'); });
+
 async function boot() {
-  const list = await (await fetch('/api/workspaces')).json();
-  const sel = $('wsSelect');
-  sel.innerHTML = list.map(w =>
-    `<option value="${esc(w.name)}">${esc(w.name)}${w.example ? ' (example)' : ''}</option>`).join('');
-  const saved = localStorage.getItem('tl-ws');
-  const pick = list.find(w => w.name === saved) ? saved : (list[0] && list[0].name);
-  if (!pick) { $('board').innerHTML = '<div class="empty">No workspaces found — run /tl:new</div>'; return; }
-  sel.value = pick;
-  sel.onchange = () => load(sel.value);
-  addEventListener('focus', () => load(sel.value));
-  await load(pick);
+  available = await (await fetch('/api/workspaces')).json();
+  if (!available.length) { $('view-board').innerHTML = '<div class="empty">No workspaces found — run /tl:new</div>'; return; }
+  try { selected = JSON.parse(localStorage.getItem('tl-sel') || '[]').filter(n => available.some(w => w.name === n)); }
+  catch { selected = []; }
+  if (!selected.length) selected = [available[0].name];
+  buildPanel();
+  addEventListener('focus', loadSelected);
+  await loadSelected();
 }
 boot();
 </script>
