@@ -288,7 +288,7 @@ function watchTree(base, wsOf) {
     watcher = fs.watch(base, { recursive: true }, (event, rel) => {
       if (!rel) return;
       rel = String(rel).replace(/\\/g, '/');
-      if (/\.git\/|\.DS_Store|\.swp$|~$|^\.#/.test(rel)) return;
+      if (/(^|\/)\.|\.swp$|~$/.test(rel)) return; // dotfiles, editor temp files
       const key = base + '|' + rel;
       clearTimeout(debounceTimers.get(key));
       debounceTimers.set(key, setTimeout(() => {
@@ -351,6 +351,20 @@ const server = http.createServer((req, res) => {
       req.on('close', () => clients.delete(res));
     } else if (u.pathname === '/api/changes') {
       json(res, 200, Array.from(changes.values()).sort((a, b) => b.ts - a.ts).slice(0, 120));
+    } else if (u.pathname === '/api/tree') {
+      const ws = listWorkspaces().find(w => w.name === u.searchParams.get('ws'));
+      if (!ws) return json(res, 404, { error: 'unknown workspace' });
+      const build = (dir, rel) => {
+        let entries;
+        try { entries = fs.readdirSync(dir).filter(e => !e.startsWith('.') && e !== 'node_modules'); } catch { return []; }
+        const dirs = entries.filter(e => isDir(path.join(dir, e))).sort();
+        const files = entries.filter(e => !isDir(path.join(dir, e))).sort();
+        return [
+          ...dirs.map(e => ({ name: e, path: rel + e, dir: true, children: build(path.join(dir, e), rel + e + '/') })),
+          ...files.map(e => ({ name: e, path: rel + e, dir: false })),
+        ];
+      };
+      json(res, 200, { name: ws.name, tree: build(ws.dir, '') });
     } else if (u.pathname === '/api/file') {
       const ws = listWorkspaces().find(w => w.name === u.searchParams.get('ws'));
       const rel = u.searchParams.get('path') || '';

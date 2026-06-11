@@ -17,6 +17,8 @@
   --line-strong: rgba(47,46,43,.16);
   --accent: #3b3a36;
   --danger: #b4543a;
+  --amber: #9c7c3c;
+  --sage: #5f8468;
   --r: 14px;
 }
 @media (prefers-color-scheme: dark) {
@@ -31,6 +33,8 @@
     --line-strong: rgba(233,231,225,.18);
     --accent: #d8d6cf;
     --danger: #d4795f;
+    --amber: #c9a35c;
+    --sage: #6f9a7b;
   }
 }
 * { box-sizing: border-box; margin: 0; }
@@ -38,15 +42,53 @@ body {
   background: var(--bg); color: var(--ink);
   font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  padding-bottom: 44px;
 }
+body.term-open { padding-bottom: 230px; }
 a { color: inherit; }
 
-.wrap { max-width: 1180px; margin: 0 auto; padding: 26px 32px 80px; }
+.app { display: flex; }
+
+/* file tree sidebar */
+.side {
+  width: 240px; flex: none; position: sticky; top: 0; align-self: flex-start;
+  height: calc(100vh - 44px); overflow-y: auto;
+  border-right: 1px solid var(--line); background: var(--lane);
+  padding: 22px 10px 40px 14px;
+}
+body.term-open .side { height: calc(100vh - 230px); }
+body.side-closed .side { display: none; }
+.side .label { display: block; padding: 0 6px 12px; }
+.tn {
+  display: flex; align-items: center; gap: 6px; padding: 2.5px 7px;
+  border-radius: 6px; font-size: 13px; cursor: pointer; color: var(--ink);
+  white-space: nowrap;
+}
+.tn:hover { background: rgba(47,46,43,.05); }
+@media (prefers-color-scheme: dark) { .tn:hover { background: rgba(233,231,225,.06); } }
+.tn .arr { width: 10px; flex: none; color: var(--faint); font-size: 9px; transition: transform .12s; }
+.tn.x .arr { transform: rotate(90deg); }
+.tn.dirn { color: var(--muted); font-weight: 500; }
+.tn .nm { overflow: hidden; text-overflow: ellipsis; }
+.tn .st { margin-left: auto; flex: none; font: 10px ui-monospace, Menlo, monospace; }
+.st.A { color: var(--sage); }
+.st.M { color: var(--amber); }
+.st.D { color: var(--danger); }
+.tn.flash { animation: treeflash 1.4s ease-out; }
+@keyframes treeflash { 0% { background: rgba(201,163,92,.30); } 100% { background: transparent; } }
+.tkids { padding-left: 15px; }
+
+.wrap { flex: 1; min-width: 0; max-width: 1180px; margin: 0 auto; padding: 26px 32px 60px; }
 
 header { display: flex; align-items: center; gap: 13px; margin-bottom: 28px; }
 header img { width: 40px; height: auto; }
 header .name { font-size: 17px; font-weight: 500; letter-spacing: -0.2px; }
 header .spacer { flex: 1; }
+.ghost {
+  background: none; border: 1px solid var(--line-strong); color: var(--muted);
+  border-radius: 10px; padding: 6px 11px; font: inherit; font-size: 14px; cursor: pointer;
+}
+.ghost:hover { color: var(--ink); border-color: var(--ink); }
 
 /* project multi-select */
 .msel { position: relative; }
@@ -97,18 +139,6 @@ header .spacer { flex: 1; }
 .cell { display: flex; flex-direction: column; gap: 8px; }
 .cell-label { display: none; }
 
-@media (max-width: 880px) {
-  .wrap { padding: 18px 16px 80px; }
-  header { flex-wrap: wrap; }
-  .cols-head { display: none; }
-  .lane-grid { grid-template-columns: 1fr; }
-  .cell:empty { display: none; }
-  .cell-label { display: block; padding-left: 2px; }
-  .lane-meta { gap: 8px; }
-  .progress { width: 44px; }
-  .blog-row { flex-wrap: wrap; row-gap: 2px; }
-}
-
 .card {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
   padding: 12px 14px; cursor: pointer; transition: border-color .12s, transform .12s;
@@ -135,10 +165,23 @@ header .spacer { flex: 1; }
 .section-gap { margin-top: 34px; }
 .empty { font-size: 13px; color: var(--faint); padding: 8px 4px; }
 
+@media (max-width: 880px) {
+  .wrap { padding: 18px 16px 60px; }
+  header { flex-wrap: wrap; }
+  .side { display: none; }
+  .cols-head { display: none; }
+  .lane-grid { grid-template-columns: 1fr; }
+  .cell:empty { display: none; }
+  .cell-label { display: block; padding-left: 2px; }
+  .lane-meta { gap: 8px; }
+  .progress { width: 44px; }
+  .blog-row { flex-wrap: wrap; row-gap: 2px; }
+}
+
 /* drawer */
-.scrim { position: fixed; inset: 0; background: rgba(20,19,17,.32); opacity: 0; pointer-events: none; transition: opacity .18s; }
+.scrim { position: fixed; inset: 0; background: rgba(20,19,17,.32); opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 7; }
 .drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 92vw);
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 92vw); z-index: 8;
   background: var(--card); border-left: 1px solid var(--line);
   transform: translateX(102%); transition: transform .22s cubic-bezier(.3,.8,.3,1);
   overflow-y: auto; padding: 30px 34px 60px;
@@ -168,9 +211,7 @@ header .spacer { flex: 1; }
 .md input[type=checkbox] { accent-color: var(--accent); margin-right: 6px; }
 .footnote { margin-top: 60px; text-align: center; font-size: 12px; color: var(--faint); }
 
-/* activity terminal */
-body { padding-bottom: 44px; }
-body.term-open { padding-bottom: 230px; }
+/* activity terminal + current focus */
 .term {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 4;
   background: #201f1c; color: #b8b5ac; border-top: 1px solid rgba(255,255,255,.07);
@@ -189,39 +230,41 @@ body.term-open { padding-bottom: 230px; }
 @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
 .term-bar .chev { margin-left: auto; color: #6b6962; transition: transform .15s; }
 body.term-open .chev { transform: rotate(180deg); }
-.term-panes { display: none; grid-template-columns: 1fr 360px; }
+.term-panes { display: none; grid-template-columns: 1fr 400px; }
 body.term-open .term-panes { display: grid; }
 .term-body { height: 178px; overflow-y: auto; padding: 2px 20px 14px; }
-.term-changes {
-  height: 178px; overflow-y: auto; padding: 2px 16px 14px;
-  border-left: 1px solid rgba(255,255,255,.07);
-}
-.ch-head { color: #6b6962; letter-spacing: 1.2px; font-size: 10px; padding: 2px 0 6px; }
-.ch-row { display: flex; align-items: baseline; gap: 9px; padding: 1.5px 0; cursor: pointer; }
-.ch-row:hover .ch-path { color: #e6e3da; }
-.ch-st { width: 10px; flex: none; }
-.ch-st.A { color: #6f9a7b; }
-.ch-st.M { color: #c9a35c; }
-.ch-st.D { color: #b4543a; }
-.ch-path { color: #cfccc2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ch-path.gone { color: #8f8c84; text-decoration: line-through; }
-.ch-diff { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
-.ch-plus { color: #6f9a7b; }
-.ch-minus { color: #b4543a; margin-left: 6px; }
-@media (max-width: 880px) {
-  .term-panes { grid-template-columns: 1fr; }
-  .term-changes { display: none; }
-}
 .tl-line { padding: 1.5px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tl-time { color: #6b6962; margin-right: 12px; }
 .tl-ws { color: #8f8c84; margin-right: 12px; }
 .tl-msg { color: #cfccc2; }
 .tl-msg.gone { color: #8f8c84; text-decoration: line-through; }
+
+.focus {
+  height: 178px; overflow-y: auto; padding: 2px 18px 14px;
+  border-left: 1px solid rgba(255,255,255,.07);
+}
+.fo-head { color: #6b6962; letter-spacing: 1.2px; font-size: 10px; padding: 2px 0 7px; }
+.fo-ws { color: #8f8c84; font-size: 11px; }
+.fo-goal { color: #e6e3da; padding: 1px 0; }
+.fo-goal .w { color: #6b6962; margin-left: 8px; }
+.fo-logic { color: #8f8c84; padding: 1px 0 8px; }
+.fo-recent { border-top: 1px solid rgba(255,255,255,.07); padding-top: 7px; margin-top: 2px; }
+@media (max-width: 880px) {
+  .term-panes { grid-template-columns: 1fr; }
+  .focus { display: none; }
+}
 </style>
 </head>
 <body>
+<div class="app">
+<aside class="side" id="side">
+  <span class="label">Files</span>
+  <div id="tree"></div>
+</aside>
+
 <div class="wrap">
   <header>
+    <button class="ghost" id="sideToggle" title="Toggle file tree">⌥</button>
     <img src="/icon.png" alt="">
     <span class="name">Throughline</span>
     <span class="spacer"></span>
@@ -241,6 +284,7 @@ body.term-open .term-panes { display: grid; }
 
   <div class="footnote">read-only — every change is a file edit · git is the database</div>
 </div>
+</div>
 
 <div class="term" id="term">
   <div class="term-bar" id="termBar">
@@ -250,7 +294,11 @@ body.term-open .term-panes { display: grid; }
   </div>
   <div class="term-panes">
     <div class="term-body" id="termBody"></div>
-    <div class="term-changes" id="termChanges"></div>
+    <div class="focus" id="focusPane">
+      <div class="fo-head">CURRENT FOCUS</div>
+      <div id="focusInfo"></div>
+      <div class="fo-recent" id="focusRecent"></div>
+    </div>
   </div>
 </div>
 
@@ -337,6 +385,19 @@ function openDrawer(item) {
 $('scrim').onclick = () => document.body.classList.remove('open');
 addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('open'); });
 
+async function openFile(ws, rel) {
+  const r = await fetch(`/api/file?ws=${encodeURIComponent(ws)}&path=${encodeURIComponent(rel)}`);
+  if (!r.ok) return;
+  const f = await r.json();
+  const isMd = /\.md$/.test(rel);
+  openDrawer({
+    path: rel, _ws: ws,
+    title: rel.split('/').pop(),
+    meta: {},
+    body: isMd ? f.content : '```\n' + f.content + '\n```',
+  });
+}
+
 // --- board (swimlanes) ---
 const STAGES = ['triage', 'ready', 'in-progress', 'done'];
 const STAGE_NAMES = { triage: 'Triage', ready: 'Ready', 'in-progress': 'In progress', done: 'Done' };
@@ -362,7 +423,7 @@ function renderBoard(wss) {
   const lanes = [];
   for (const ws of wss) {
     for (const intent of ws.intents) {
-      lanes.push({ ws: ws.name, intent, key: ws.name + '|' + intent.path, specs: [] });
+      lanes.push({ ws: ws.name, intent, specs: [] });
     }
   }
   const unattached = { ws: null, intent: null, specs: [] };
@@ -473,6 +534,85 @@ function renderBacklog(wss) {
   }
 }
 
+// --- file tree sidebar ---
+let expanded;
+try { expanded = new Set(JSON.parse(localStorage.getItem('tl-tree-x') || '[]')); } catch { expanded = new Set(); }
+let expandedInit = expanded.size > 0;
+const changedMap = new Map();   // 'ws|path' -> status
+let treeData = [];              // [{name, tree}]
+
+function saveExpanded() { localStorage.setItem('tl-tree-x', JSON.stringify([...expanded])); }
+
+function treeNode(ws, node, depth) {
+  const key = ws + '|' + node.path;
+  const el = document.createElement('div');
+  if (node.dir) {
+    const isX = expanded.has(key);
+    const row = document.createElement('div');
+    row.className = 'tn dirn' + (isX ? ' x' : '');
+    row.dataset.key = key;
+    row.innerHTML = `<span class="arr">▶</span><span class="nm">${esc(node.name)}</span>`;
+    row.onclick = () => {
+      if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
+      saveExpanded(); renderTree();
+    };
+    el.appendChild(row);
+    if (isX && node.children && node.children.length) {
+      const kids = document.createElement('div');
+      kids.className = 'tkids';
+      node.children.forEach(c => kids.appendChild(treeNode(ws, c, depth + 1)));
+      el.appendChild(kids);
+    }
+  } else {
+    const st = changedMap.get(key);
+    const row = document.createElement('div');
+    row.className = 'tn';
+    row.dataset.key = key;
+    row.innerHTML = `<span class="arr"></span><span class="nm">${esc(node.name)}</span>` +
+      (st ? `<span class="st ${st}">${st}</span>` : '');
+    row.onclick = () => openFile(ws, node.path);
+    el.appendChild(row);
+  }
+  return el;
+}
+
+function renderTree() {
+  const root = $('tree');
+  root.innerHTML = '';
+  const multi = treeData.length > 1;
+  for (const t of treeData) {
+    if (!expandedInit) {
+      t.tree.filter(n => n.dir).forEach(n => expanded.add(t.name + '|' + n.path));
+    }
+    if (multi) {
+      const h = document.createElement('div');
+      h.className = 'tn dirn';
+      h.style.marginTop = '8px';
+      h.innerHTML = `<span class="arr"></span><span class="nm" style="letter-spacing:.5px">${esc(t.name)}</span>`;
+      root.appendChild(h);
+    }
+    t.tree.forEach(n => root.appendChild(treeNode(t.name, n, 0)));
+  }
+  if (!expandedInit) { expandedInit = true; saveExpanded(); renderTree(); }
+}
+
+async function loadTrees() {
+  treeData = await Promise.all(selected.map(n =>
+    fetch('/api/tree?ws=' + encodeURIComponent(n)).then(r => r.json())));
+  renderTree();
+}
+
+async function seedChanges() {
+  const list = await (await fetch('/api/changes')).json();
+  for (const c of list) changedMap.set(c.ws + '|' + c.path, c.status);
+}
+
+$('sideToggle').onclick = () => {
+  document.body.classList.toggle('side-closed');
+  localStorage.setItem('tl-side', document.body.classList.contains('side-closed') ? '0' : '1');
+};
+if (localStorage.getItem('tl-side') === '0') document.body.classList.add('side-closed');
+
 // --- tabs ---
 document.querySelectorAll('.tab').forEach(btn => {
   btn.onclick = () => {
@@ -482,57 +622,27 @@ document.querySelectorAll('.tab').forEach(btn => {
     localStorage.setItem('tl-view', btn.dataset.view);
   };
 });
-const savedView = localStorage.getItem('tl-view');
-if (savedView === 'backlog') document.querySelector('.tab[data-view="backlog"]')?.click();
-
-// --- project selection + boot ---
-let available = [], selected = [];
-
-function syncButton() {
-  $('wsBtn').textContent = selected.length === 1 ? selected[0] : `${selected.length} projects`;
-}
-async function loadSelected() {
-  const wss = await Promise.all(selected.map(n =>
-    fetch('/api/ws/' + encodeURIComponent(n)).then(r => r.json())));
-  renderBoard(wss);
-  renderBacklog(wss);
-  syncButton();
-}
-function buildPanel() {
-  $('wsPanel').innerHTML = '';
-  available.forEach(w => {
-    const l = document.createElement('label');
-    l.className = 'msel-item';
-    l.innerHTML = `<input type="checkbox" ${selected.includes(w.name) ? 'checked' : ''}>
-      <span>${esc(w.name)}</span>${w.example ? '<span class="ex">example</span>' : ''}`;
-    l.querySelector('input').onchange = e => {
-      if (e.target.checked) selected.push(w.name);
-      else selected = selected.filter(n => n !== w.name);
-      if (!selected.length) { selected = [w.name]; e.target.checked = true; return; }
-      localStorage.setItem('tl-sel', JSON.stringify(selected));
-      loadSelected();
-      loadChanges();
-    };
-    $('wsPanel').appendChild(l);
-  });
-}
-$('wsBtn').onclick = () => $('msel').classList.toggle('open');
-addEventListener('click', e => { if (!e.target.closest('.msel')) $('msel').classList.remove('open'); });
+if (localStorage.getItem('tl-view') === 'backlog') document.querySelector('.tab[data-view="backlog"]')?.click();
 
 // --- activity terminal ---
 const termBody = $('termBody');
 let termLines = 0;
-function termLog(ws, msg, opts = {}) {
-  const t = new Date().toLocaleTimeString('en-GB', { hour12: false });
+function feedLine(target, html) {
   const el = document.createElement('div');
   el.className = 'tl-line';
-  el.innerHTML = `<span class="tl-time">${t}</span>` +
+  el.innerHTML = html;
+  const stick = target.scrollTop + target.clientHeight >= target.scrollHeight - 24;
+  target.appendChild(el);
+  if (stick) target.scrollTop = target.scrollHeight;
+  return el;
+}
+function termLog(ws, msg, opts = {}) {
+  const t = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  feedLine(termBody,
+    `<span class="tl-time">${t}</span>` +
     (ws ? `<span class="tl-ws">${esc(ws)}</span>` : '') +
-    `<span class="tl-msg${opts.gone ? ' gone' : ''}">${esc(msg)}</span>`;
-  const stick = termBody.scrollTop + termBody.clientHeight >= termBody.scrollHeight - 24;
-  termBody.appendChild(el);
+    `<span class="tl-msg${opts.gone ? ' gone' : ''}">${esc(msg)}</span>`);
   if (++termLines > 500) { termBody.removeChild(termBody.firstChild); termLines--; }
-  if (stick) termBody.scrollTop = termBody.scrollHeight;
 }
 $('termBar').onclick = () => {
   document.body.classList.toggle('term-open');
@@ -541,6 +651,37 @@ $('termBar').onclick = () => {
 };
 if (localStorage.getItem('tl-term') !== '0') document.body.classList.add('term-open');
 
+// --- current focus ---
+function renderFocus(wss) {
+  const info = $('focusInfo');
+  info.innerHTML = '';
+  for (const ws of wss) {
+    const goals = (ws.config && ws.config.goals) || [];
+    if (!goals.length) continue;
+    const top = goals.slice().sort((a, b) => (b.weight || 0) - (a.weight || 0))[0];
+    const alloc = (ws.config && ws.config.allocation) || {};
+    const rules = (ws.config && ws.config.rules) || [];
+    const mix = ['bugs', 'features', 'tech_debt', 'research']
+      .filter(k => alloc[k] != null)
+      .map(k => `${k.replace('tech_', '')} ${Math.round(alloc[k] * 100)}`).join(' · ');
+    const block = document.createElement('div');
+    block.innerHTML =
+      (wss.length > 1 ? `<div class="fo-ws">${esc(ws.name)}</div>` : '') +
+      `<div class="fo-goal">◎ ${esc(top.description || top.id)}<span class="w">${(top.weight ?? 0).toFixed(2)}</span></div>` +
+      `<div class="fo-logic">${rules.length} rules · ${mix}</div>`;
+    info.appendChild(block);
+  }
+  if (!info.children.length) info.innerHTML = '<div class="fo-logic">no goals configured</div>';
+}
+let focusLines = 0;
+function focusLog(ws, msg) {
+  const t = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  feedLine($('focusRecent'),
+    `<span class="tl-time">${t}</span><span class="tl-msg">${esc(msg)}</span>`);
+  if (++focusLines > 60) { const r = $('focusRecent'); r.removeChild(r.firstChild); focusLines--; }
+}
+
+// --- events ---
 const NOISE_DIRS = ['specs', 'in-progress', 'done', 'triage', 'intents', '_metrics', 'context', 'outcome'];
 function describeEvent(e) {
   if (!e.log && e.exists && !/\.\w+$/.test(e.path)) {
@@ -563,41 +704,12 @@ function describeEvent(e) {
   if (/SPEC\.md$/.test(e.path)) return `spec updated — ${e.path}`;
   if (/^intents\//.test(e.path)) return `intent updated — ${e.path}`;
   if (/feedback\.md$/.test(e.path)) return `feedback written — ${e.path}`;
+  if (/triage\.yml$/.test(e.path)) return 'triage.yml edited — logic changed';
   return `updated ${e.path}`;
 }
-
-// --- changes pane ---
-async function openFile(ws, rel) {
-  const r = await fetch(`/api/file?ws=${encodeURIComponent(ws)}&path=${encodeURIComponent(rel)}`);
-  if (!r.ok) return;
-  const f = await r.json();
-  const isMd = /\.md$/.test(rel);
-  openDrawer({
-    path: rel, _ws: ws,
-    title: rel.split('/').pop(),
-    meta: {},
-    body: isMd ? f.content : '```\n' + f.content + '\n```',
-  });
-}
-
-async function loadChanges() {
-  const list = await (await fetch('/api/changes')).json();
-  const root = $('termChanges');
-  root.innerHTML = '<div class="ch-head label" style="color:#6b6962">CHANGES</div>';
-  const mine = list.filter(c => selected.includes(c.ws));
-  if (!mine.length) {
-    root.innerHTML += '<div class="ch-row"><span class="ch-path" style="color:#6b6962">no changes this session</span></div>';
-    return;
-  }
-  for (const c of mine.slice(0, 60)) {
-    const el = document.createElement('div');
-    el.className = 'ch-row';
-    el.innerHTML = `<span class="ch-st ${c.status}">${c.status}</span>
-      <span class="ch-path${c.status === 'D' ? ' gone' : ''}" title="${esc(c.ws + '/' + c.path)}">${esc(c.path)}</span>
-      <span class="ch-diff">${c.added ? `<span class="ch-plus">+${c.added}</span>` : ''}${c.removed ? `<span class="ch-minus">−${c.removed}</span>` : ''}</span>`;
-    if (c.status !== 'D') el.onclick = () => openFile(c.ws, c.path);
-    root.appendChild(el);
-  }
+function isFocusEvent(e) {
+  if (e.log && (e.log.file === 'override-log' || e.log.file === 'triage-log')) return true;
+  return /(^|\/)(triage\.yml|priorities\.md)$/.test(e.path || '');
 }
 
 let refreshTimer = null;
@@ -610,15 +722,66 @@ function connectEvents() {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     if (!e.path && !e.log) return;
     clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => { loadSelected(); loadChanges(); }, 600);
+    refreshTimer = setTimeout(() => { loadSelected(); loadTrees(); }, 600);
+    if (e.exists && /\.(md|yml|yaml|jsonl)$/.test(e.path || '') && !e.change) return; // duplicate event, content unchanged
+
+    if (e.change) {
+      const key = e.ws + '|' + e.path;
+      if (e.change.status === 'D') changedMap.set(key, 'D'); else changedMap.set(key, e.change.status);
+      const row = document.querySelector(`.tn[data-key="${CSS.escape(key)}"]`);
+      if (row) {
+        row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash');
+        let st = row.querySelector('.st');
+        if (!st) { st = document.createElement('span'); st.className = 'st'; row.appendChild(st); }
+        st.className = 'st ' + changedMap.get(key);
+        st.textContent = changedMap.get(key);
+      }
+    }
+
     const msg = describeEvent(e);
     if (!msg) return;
     const sig = e.ws + '|' + msg;
     if (sig === lastMsg && Date.now() - lastAt < 2500) return;
     lastMsg = sig; lastAt = Date.now();
     termLog(e.ws, msg, { gone: !e.exists });
+    if (isFocusEvent(e) && selected.includes(e.ws)) focusLog(e.ws, msg);
   };
 }
+
+// --- project selection + boot ---
+let available = [], selected = [];
+
+function syncButton() {
+  $('wsBtn').textContent = selected.length === 1 ? selected[0] : `${selected.length} projects`;
+}
+async function loadSelected() {
+  const wss = await Promise.all(selected.map(n =>
+    fetch('/api/ws/' + encodeURIComponent(n)).then(r => r.json())));
+  renderBoard(wss);
+  renderBacklog(wss);
+  renderFocus(wss);
+  syncButton();
+}
+function buildPanel() {
+  $('wsPanel').innerHTML = '';
+  available.forEach(w => {
+    const l = document.createElement('label');
+    l.className = 'msel-item';
+    l.innerHTML = `<input type="checkbox" ${selected.includes(w.name) ? 'checked' : ''}>
+      <span>${esc(w.name)}</span>${w.example ? '<span class="ex">example</span>' : ''}`;
+    l.querySelector('input').onchange = e => {
+      if (e.target.checked) selected.push(w.name);
+      else selected = selected.filter(n => n !== w.name);
+      if (!selected.length) { selected = [w.name]; e.target.checked = true; return; }
+      localStorage.setItem('tl-sel', JSON.stringify(selected));
+      loadSelected();
+      loadTrees();
+    };
+    $('wsPanel').appendChild(l);
+  });
+}
+$('wsBtn').onclick = () => $('msel').classList.toggle('open');
+addEventListener('click', e => { if (!e.target.closest('.msel')) $('msel').classList.remove('open'); });
 
 async function boot() {
   connectEvents();
@@ -629,8 +792,9 @@ async function boot() {
   if (!selected.length) selected = [available[0].name];
   buildPanel();
   addEventListener('focus', loadSelected);
+  await seedChanges();
   await loadSelected();
-  await loadChanges();
+  await loadTrees();
 }
 boot();
 </script>
