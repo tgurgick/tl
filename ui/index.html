@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Throughline</title>
+<link rel="icon" href="/logo.png">
+<style>
+:root {
+  --bg: #f7f6f3;
+  --card: #fffefb;
+  --ink: #2f2e2b;
+  --muted: #8a877f;
+  --faint: #b9b6ae;
+  --line: rgba(47,46,43,.08);
+  --line-strong: rgba(47,46,43,.16);
+  --accent: #3b3a36;
+  --danger: #b4543a;
+  --r: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161614;
+    --card: #1e1d1a;
+    --ink: #e9e7e1;
+    --muted: #8f8c84;
+    --faint: #5c5a54;
+    --line: rgba(233,231,225,.08);
+    --line-strong: rgba(233,231,225,.18);
+    --accent: #d8d6cf;
+    --danger: #d4795f;
+  }
+}
+* { box-sizing: border-box; margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 32px 80px; }
+
+header { display: flex; align-items: center; gap: 14px; margin-bottom: 36px; }
+header img { width: 40px; height: 40px; border-radius: 10px; }
+header .name { font-size: 17px; font-weight: 500; letter-spacing: -0.2px; }
+header .spacer { flex: 1; }
+select {
+  appearance: none; background: var(--card); color: var(--ink);
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  padding: 7px 32px 7px 12px; font: inherit; font-size: 14px; cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' stroke='%238a877f' fill='none' stroke-width='1.5' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat; background-position: right 12px center;
+}
+.ghost {
+  background: none; border: 1px solid var(--line-strong); color: var(--muted);
+  border-radius: 10px; padding: 7px 14px; font: inherit; font-size: 14px; cursor: pointer;
+}
+.ghost:hover { color: var(--ink); border-color: var(--ink); }
+
+.label {
+  font-size: 11px; font-weight: 500; letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 14px;
+}
+section { margin-bottom: 44px; }
+
+/* goals */
+.goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.goal {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 16px 18px 14px;
+}
+.goal .desc { font-size: 14px; font-weight: 500; margin-bottom: 10px; }
+.goal .track { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.goal .fill { height: 100%; background: var(--accent); border-radius: 2px; }
+.goal .pct { font-size: 12px; color: var(--muted); margin-top: 7px; }
+
+/* board */
+.board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+@media (max-width: 900px) { .board { grid-template-columns: repeat(2, 1fr); } }
+.col-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; }
+.col-head .count { font-size: 12px; color: var(--faint); }
+.col { min-height: 40px; display: flex; flex-direction: column; gap: 10px; }
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 14px 16px; cursor: pointer; transition: border-color .12s, transform .12s;
+}
+.card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.card .t { font-size: 14px; font-weight: 500; line-height: 1.4; margin-bottom: 9px; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill {
+  font-size: 11px; letter-spacing: .3px; color: var(--muted);
+  border: 1px solid var(--line-strong); border-radius: 999px; padding: 1.5px 9px;
+}
+.pill.p0 { color: var(--danger); border-color: var(--danger); }
+.pill.p1 { color: var(--ink); border-color: var(--ink); }
+.pill.solid { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.empty { font-size: 13px; color: var(--faint); padding: 6px 2px; }
+
+/* intents */
+.intents { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+
+/* metrics */
+.metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 900px) { .metrics { grid-template-columns: 1fr; } }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 18px 20px; }
+.panel h3 { font-size: 13px; font-weight: 500; color: var(--muted); margin-bottom: 14px; }
+.alloc-row { display: grid; grid-template-columns: 90px 1fr 88px; align-items: center; gap: 12px; margin-bottom: 10px; font-size: 13px; }
+.alloc-track { position: relative; height: 5px; background: var(--line); border-radius: 3px; }
+.alloc-fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 3px; }
+.alloc-target { position: absolute; top: -3.5px; width: 1.5px; height: 12px; background: var(--muted); }
+.alloc-pct { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.stat-row { display: flex; gap: 28px; flex-wrap: wrap; }
+.stat .n { font-size: 26px; font-weight: 500; letter-spacing: -0.5px; }
+.stat .k { font-size: 12px; color: var(--muted); }
+
+/* drawer */
+.scrim { position: fixed; inset: 0; background: rgba(20,19,17,.32); opacity: 0; pointer-events: none; transition: opacity .18s; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 92vw);
+  background: var(--card); border-left: 1px solid var(--line);
+  transform: translateX(102%); transition: transform .22s cubic-bezier(.3,.8,.3,1);
+  overflow-y: auto; padding: 30px 34px 60px;
+}
+.open .scrim { opacity: 1; pointer-events: auto; }
+.open .drawer { transform: none; }
+.drawer .path { font-size: 12px; color: var(--faint); font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-bottom: 10px; }
+.drawer h2 { font-size: 19px; font-weight: 500; letter-spacing: -0.2px; margin-bottom: 14px; }
+.drawer .meta { margin-bottom: 24px; }
+.md { font-size: 14.5px; }
+.md h1, .md h2, .md h3 { font-size: 13px; font-weight: 500; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); margin: 26px 0 10px; }
+.md p { margin: 0 0 12px; }
+.md ul { margin: 0 0 12px; padding-left: 20px; }
+.md li { margin-bottom: 4px; }
+.md code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; background: var(--line); border-radius: 5px; padding: 1.5px 5px; }
+.md pre { background: var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; margin: 0 0 12px; }
+.md pre code { background: none; padding: 0; }
+.md table { border-collapse: collapse; margin: 0 0 14px; width: 100%; font-size: 13.5px; }
+.md th { text-align: left; font-weight: 500; color: var(--muted); }
+.md th, .md td { border-bottom: 1px solid var(--line); padding: 6px 10px 6px 0; }
+.md blockquote { border-left: 2px solid var(--line-strong); padding-left: 14px; color: var(--muted); margin: 0 0 12px; }
+.md input[type=checkbox] { accent-color: var(--accent); margin-right: 6px; }
+.footnote { margin-top: 60px; text-align: center; font-size: 12px; color: var(--faint); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="/logo.png" alt="">
+    <span class="name">Throughline</span>
+    <span class="spacer"></span>
+    <select id="wsSelect" aria-label="Workspace"></select>
+    <button class="ghost" id="refresh">Refresh</button>
+  </header>
+
+  <section id="goalsSection" hidden>
+    <div class="label">Goals</div>
+    <div class="goals" id="goals"></div>
+  </section>
+
+  <section>
+    <div class="label">Board</div>
+    <div class="board" id="board"></div>
+  </section>
+
+  <section id="intentsSection" hidden>
+    <div class="label">Intents</div>
+    <div class="intents" id="intents"></div>
+  </section>
+
+  <section class="metrics">
+    <div class="panel" id="allocPanel" hidden>
+      <h3>Allocation — actual vs target</h3>
+      <div id="alloc"></div>
+    </div>
+    <div class="panel">
+      <h3>Pulse</h3>
+      <div class="stat-row" id="stats"></div>
+    </div>
+  </section>
+
+  <div class="footnote">read-only — every change is a file edit · git is the database</div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Detail"></aside>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let current = null;
+
+// --- tiny markdown renderer ---
+function inline(s) {
+  return s
+    .replace(/`([^`]+)`/g, (_, c) => '<code>' + c + '</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+function md(src) {
+  const lines = esc(src).split('\n');
+  let html = '', i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^```/.test(l)) {
+      let code = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) code.push(lines[i++]);
+      i++;
+      html += '<pre><code>' + code.join('\n') + '</code></pre>';
+    } else if (/^#{1,4}\s/.test(l)) {
+      const level = l.match(/^#+/)[0].length;
+      html += `<h${Math.min(level,3)}>` + inline(l.replace(/^#+\s*/, '')) + `</h${Math.min(level,3)}>`;
+      i++;
+    } else if (/^\s*[-*]\s/.test(l)) {
+      let items = [];
+      while (i < lines.length && /^\s*[-*]\s/.test(lines[i])) {
+        let it = lines[i].replace(/^\s*[-*]\s/, '');
+        it = it.replace(/^\[([ xX])\]\s*/, (_, c) =>
+          `<input type="checkbox" disabled${c.trim() ? ' checked' : ''}>`);
+        items.push('<li>' + inline(it) + '</li>'); i++;
+      }
+      html += '<ul>' + items.join('') + '</ul>';
+    } else if (/^\|/.test(l)) {
+      let rows = [];
+      while (i < lines.length && /^\|/.test(lines[i])) { rows.push(lines[i]); i++; }
+      const cells = r => r.replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      let t = '<table>';
+      rows.forEach((r, idx) => {
+        if (/^\|[\s:|-]+\|$/.test(r)) return;
+        const tag = idx === 0 ? 'th' : 'td';
+        t += '<tr>' + cells(r).map(c => `<${tag}>` + inline(c) + `</${tag}>`).join('') + '</tr>';
+      });
+      html += t + '</table>';
+    } else if (/^>\s?/.test(l)) {
+      let q = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) { q.push(lines[i].replace(/^>\s?/, '')); i++; }
+      html += '<blockquote>' + inline(q.join(' ')) + '</blockquote>';
+    } else if (/^---+\s*$/.test(l)) { html += '<hr>'; i++; }
+    else if (!l.trim()) { i++; }
+    else {
+      let p = [];
+      while (i < lines.length && lines[i].trim() && !/^(#|```|\||>|---|\s*[-*]\s)/.test(lines[i])) { p.push(lines[i]); i++; }
+      html += '<p>' + inline(p.join(' ')) + '</p>';
+    }
+  }
+  return html;
+}
+
+// --- rendering ---
+const PRIO_ORDER = { p0: 0, p1: 1, p2: 2, p3: 3 };
+function pills(meta, feedback) {
+  let h = '';
+  const p = (meta.priority || '').toLowerCase();
+  if (p) h += `<span class="pill ${p}">${esc(p.toUpperCase())}</span>`;
+  if (meta.type) h += `<span class="pill">${esc(meta.type.replace('_', ' '))}</span>`;
+  if (meta.size) h += `<span class="pill">${esc(meta.size)}</span>`;
+  if (meta.status === 'blocked') h += `<span class="pill solid">blocked</span>`;
+  if ((meta.tags || []).includes('stale')) h += `<span class="pill">stale</span>`;
+  if (feedback && feedback.scores) {
+    const s = feedback.scores;
+    const avg = ['correctness','completeness','scope_discipline'].map(k => s[k]).filter(n => typeof n === 'number');
+    if (avg.length) h += `<span class="pill">${(avg.reduce((a,b)=>a+b,0)/avg.length).toFixed(1)} / 5</span>`;
+  }
+  return h;
+}
+
+function card(item) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  el.innerHTML = `<div class="t">${esc(item.title)}</div><div class="meta">${pills(item.meta, item.feedback)}</div>`;
+  el.onclick = () => openDrawer(item);
+  return el;
+}
+
+const COLS = [
+  ['triage', 'Triage'],
+  ['ready', 'Ready'],
+  ['in-progress', 'In progress'],
+  ['done', 'Done'],
+];
+
+function render(ws) {
+  current = ws;
+  // goals
+  const goals = (ws.config && ws.config.goals) || [];
+  $('goalsSection').hidden = !goals.length;
+  $('goals').innerHTML = goals.map(g => `
+    <div class="goal">
+      <div class="desc">${esc(g.description || g.id)}</div>
+      <div class="track"><div class="fill" style="width:${Math.round((g.weight || 0) * 100)}%"></div></div>
+      <div class="pct">weight ${(g.weight ?? 0).toFixed(2)}</div>
+    </div>`).join('');
+
+  // board
+  const board = $('board');
+  board.innerHTML = '';
+  for (const [key, name] of COLS) {
+    let items = ws.specs.filter(s => s.stage === key);
+    if (key === 'ready') items.sort((a, b) =>
+      (PRIO_ORDER[a.meta.priority] ?? 9) - (PRIO_ORDER[b.meta.priority] ?? 9) || a.title.localeCompare(b.title));
+    if (key === 'done') items.sort((a, b) => b.mtime - a.mtime);
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `<div class="col-head"><span class="label" style="margin:0">${name}</span><span class="count">${items.length}</span></div>`;
+    const col = document.createElement('div');
+    col.className = 'col';
+    if (!items.length) col.innerHTML = '<div class="empty">—</div>';
+    items.forEach(s => col.appendChild(card(s)));
+    wrap.appendChild(col);
+    board.appendChild(wrap);
+  }
+
+  // intents
+  $('intentsSection').hidden = !ws.intents.length;
+  const intents = $('intents');
+  intents.innerHTML = '';
+  ws.intents.forEach(it => {
+    const el = card({ ...it, meta: { priority: it.meta.priority, type: it.meta.status } });
+    intents.appendChild(el);
+  });
+
+  // allocation
+  const alloc = ws.config && ws.config.allocation;
+  const open = ws.specs.filter(s => s.stage === 'ready' || s.stage === 'in-progress');
+  $('allocPanel').hidden = !alloc;
+  if (alloc) {
+    const typeKey = { bug: 'bugs', feature: 'features', tech_debt: 'tech_debt', research: 'research' };
+    const counts = { bugs: 0, features: 0, tech_debt: 0, research: 0 };
+    open.forEach(s => { const k = typeKey[s.meta.type]; if (k) counts[k]++; });
+    $('alloc').innerHTML = Object.keys(counts).map(k => {
+      const target = alloc[k] ?? 0;
+      const actual = open.length ? counts[k] / open.length : 0;
+      return `<div class="alloc-row">
+        <span>${esc(k.replace('_', ' '))}</span>
+        <span class="alloc-track">
+          <span class="alloc-fill" style="width:${Math.round(actual * 100)}%"></span>
+          <span class="alloc-target" style="left:${Math.round(target * 100)}%"></span>
+        </span>
+        <span class="alloc-pct">${Math.round(actual * 100)}% / ${Math.round(target * 100)}%</span>
+      </div>`;
+    }).join('');
+  }
+
+  // pulse
+  const byPrio = { p0: 0, p1: 0, p2: 0, p3: 0 };
+  open.forEach(s => { const p = (s.meta.priority || '').toLowerCase(); if (byPrio[p] !== undefined) byPrio[p]++; });
+  const tlog = (ws.metrics && ws.metrics['triage-log']) || [];
+  const overrides = (ws.metrics && ws.metrics['override-log']) || [];
+  $('stats').innerHTML = `
+    <div class="stat"><div class="n">${open.length}</div><div class="k">open specs</div></div>
+    <div class="stat"><div class="n">${byPrio.p0}</div><div class="k">p0</div></div>
+    <div class="stat"><div class="n">${ws.specs.filter(s => s.stage === 'done').length}</div><div class="k">done</div></div>
+    <div class="stat"><div class="n">${overrides.length}</div><div class="k">overrides logged</div></div>
+    <div class="stat"><div class="n">${tlog.length ? esc(tlog[tlog.length - 1].date) : '—'}</div><div class="k">last triage</div></div>`;
+}
+
+// --- drawer ---
+function openDrawer(item) {
+  const d = $('drawer');
+  const metaPills = pills(item.meta, item.feedback);
+  d.innerHTML = `
+    <div class="path">${esc(item.path || '')}</div>
+    <h2>${esc(item.title)}</h2>
+    <div class="meta">${metaPills}</div>
+    <div class="md">${md(item.body || '')}</div>`;
+  document.body.classList.add('open');
+}
+$('scrim').onclick = () => document.body.classList.remove('open');
+addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('open'); });
+
+// --- boot ---
+async function load(name) {
+  const ws = await (await fetch('/api/ws/' + encodeURIComponent(name))).json();
+  localStorage.setItem('tl-ws', name);
+  render(ws);
+}
+async function boot() {
+  const list = await (await fetch('/api/workspaces')).json();
+  const sel = $('wsSelect');
+  sel.innerHTML = list.map(w =>
+    `<option value="${esc(w.name)}">${esc(w.name)}${w.example ? ' (example)' : ''}</option>`).join('');
+  const saved = localStorage.getItem('tl-ws');
+  const pick = list.find(w => w.name === saved) ? saved : (list[0] && list[0].name);
+  if (!pick) { $('board').innerHTML = '<div class="empty">No workspaces found — run /tl:new</div>'; return; }
+  sel.value = pick;
+  sel.onchange = () => load(sel.value);
+  $('refresh').onclick = () => load(sel.value);
+  addEventListener('focus', () => load(sel.value));
+  await load(pick);
+}
+boot();
+</script>
+</body>
+</html>

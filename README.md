@@ -26,6 +26,16 @@ Throughline (`tl`) is markdown-native project management for agent-driven develo
 
 Prefer to clone? Work inside the repo — your workspaces live in the gitignored `projects/`, and the skill files in `skills/` are self-contained (`/plugin marketplace add .` also works from the repo root).
 
+## UI
+
+A local web view of your workspaces — board by stage, goals, allocation vs target, and the metrics pulse:
+
+```
+node ui/server.js        # → http://localhost:4400
+```
+
+Zero dependencies, no build step, read-only by design: it renders the markdown and JSONL directly and never writes. Changing anything is still a file edit — that's the point.
+
 ## Tool vs. workspace
 
 This repo is the **tool**: the skills, templates, and patterns that make the system run. It ships as a Cowork plugin today, with a CLI planned. Everything tool-side is public and project-agnostic.
@@ -39,6 +49,7 @@ throughline/                    # the tool (this repo, public)
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
+├── ui/                         # local read-only web UI (zero-dep node)
 ├── docs/                       # design process docs
 │
 └── projects/                   # your workspaces (gitignored, private)
