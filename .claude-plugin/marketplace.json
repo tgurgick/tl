@@ -1,5 +1,6 @@
 {
   "name": "throughline",
+  "description": "Home of tl — markdown-native project management for agent-driven development.",
   "owner": {
     "name": "Trevor Gurgick"
   },
