@@ -7,6 +7,7 @@ intent: "intents/2026-06-01-task-reminders.md"
 type: "feature"
 status: "ready"
 priority: "p1"
+priority_set_by: "triage"
 size: "medium"
 depends_on: []
 blocks: []

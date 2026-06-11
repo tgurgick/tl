@@ -7,6 +7,7 @@ intent: ""
 type: "bug"
 status: "done"
 priority: "p0"
+priority_set_by: "human"
 size: "small"
 depends_on: []
 blocks: []

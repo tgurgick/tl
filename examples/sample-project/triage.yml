@@ -38,3 +38,8 @@ rules:
   - condition: "type == 'bug' AND age_days > 14 AND priority != 'p0'"
     action: "flag for review"
     reason: "Stale bugs — close or escalate"
+
+error_tracking:
+  provider: "sentry"
+  project_slug: "todo-app"
+  enabled: false
