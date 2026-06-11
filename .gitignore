@@ -1,0 +1,7 @@
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Private per-project workspaces — the tool is public, the work is not
+/projects/
