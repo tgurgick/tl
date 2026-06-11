@@ -36,7 +36,7 @@ To start a new workspace, run `/tl:new` for a guided setup — or copy `examples
 
 The repo is a Claude Code / Cowork plugin and its own marketplace. Two ways to use it:
 
-- **Install the plugin** (works in any directory): add this repo as a marketplace — `/plugin marketplace add <github-path-or-local-clone>` — then `/plugin install tl@throughline`. Skills invoke as `/tl:new`, `/tl:triage`, `/tl:dedup`, `/tl:bug-capture`.
+- **Install the plugin** (works in any directory): `/plugin marketplace add tgurgick/tl`, then `/plugin install tl@throughline`. Skills invoke as `/tl:new`, `/tl:triage`, `/tl:dedup`, `/tl:bug-capture`.
 - **Clone and work inside it**: your workspaces live in `projects/` (already gitignored). Run `/plugin marketplace add .` from the repo root and install from there, or simply ask Claude to run a skill by name — the skill files in `skills/` are self-contained.
 
 ## The model
