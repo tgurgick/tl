@@ -7,6 +7,7 @@ intent: ""                      # path to parent intent
 type: "feature"                 # feature | bug | tech_debt | research
 status: "ready"                 # ready | in-progress | blocked | done
 priority: ""                    # p0 | p1 | p2 | p3
+priority_set_by: ""             # triage | human — set "human" if you set priority yourself
 size: ""                        # small (< 1hr) | medium (1-3hr) | large (3-8hr)
 depends_on: []
 blocks: []

@@ -5,6 +5,7 @@ project: ""
 repo: ""
 type: "bug"
 priority: ""                    # left blank — triage skill fills this in
+priority_set_by: ""             # triage | human — set "human" if you set priority yourself
 size: ""
 source: ""                      # sentry | datadog | manual
 source_id: ""                   # issue ID from error tracking provider
