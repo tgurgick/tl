@@ -211,10 +211,56 @@ function readWorkspace(ws) {
   };
 }
 
+// ---------- live events (SSE + fs watch) ----------
+
+const clients = new Set();
+function broadcast(obj) {
+  const msg = `data: ${JSON.stringify(obj)}\n\n`;
+  for (const c of clients) c.write(msg);
+}
+setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 30000).unref();
+
+const debounceTimers = new Map();
+function watchTree(base, wsOf) {
+  if (!isDir(base)) return;
+  let watcher;
+  try {
+    watcher = fs.watch(base, { recursive: true }, (event, rel) => {
+      if (!rel) return;
+      rel = String(rel).replace(/\\/g, '/');
+      if (/\.git\/|\.DS_Store|\.swp$|~$|^\.#/.test(rel)) return;
+      const key = base + '|' + rel;
+      clearTimeout(debounceTimers.get(key));
+      debounceTimers.set(key, setTimeout(() => {
+        debounceTimers.delete(key);
+        const full = path.join(base, rel);
+        const ws = wsOf(rel);
+        const payload = {
+          ws: ws.name, path: ws.rel, exists: fs.existsSync(full), ts: Date.now(),
+        };
+        if (ws.rel.endsWith('.jsonl') && payload.exists) {
+          const lines = (safeRead(full) || '').trim().split('\n');
+          try { payload.log = { file: path.basename(ws.rel, '.jsonl'), line: JSON.parse(lines[lines.length - 1]) }; }
+          catch { payload.log = { file: path.basename(ws.rel, '.jsonl'), line: null }; }
+        }
+        broadcast(payload);
+      }, 250));
+    });
+    watcher.on('error', () => {});
+  } catch { /* fs.watch recursive unavailable — feed stays quiet */ }
+}
+
+watchTree(path.join(ROOT, 'projects'), rel => {
+  const ix = rel.indexOf('/');
+  return ix < 0 ? { name: rel, rel: '' } : { name: rel.slice(0, ix), rel: rel.slice(ix + 1) };
+});
+watchTree(path.join(ROOT, 'examples', 'sample-project'), rel => ({ name: 'sample-project', rel }));
+
 // ---------- http ----------
 
 const INDEX = path.join(__dirname, 'index.html');
 const LOGO = path.join(ROOT, 'assets', 'logo.png');
+const ICON = path.join(ROOT, 'assets', 'icon.png');
 
 function json(res, code, data) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
@@ -227,10 +273,19 @@ const server = http.createServer((req, res) => {
     if (u.pathname === '/') {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(safeRead(INDEX) || 'index.html missing');
-    } else if (u.pathname === '/logo.png') {
-      const buf = (() => { try { return fs.readFileSync(LOGO); } catch { return null; } })();
+    } else if (u.pathname === '/logo.png' || u.pathname === '/icon.png') {
+      const buf = (() => { try { return fs.readFileSync(u.pathname === '/icon.png' ? ICON : LOGO); } catch { return null; } })();
       if (buf) { res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(buf); }
       else { res.writeHead(404); res.end(); }
+    } else if (u.pathname === '/api/events') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      res.write(': connected\n\n');
+      clients.add(res);
+      req.on('close', () => clients.delete(res));
     } else if (u.pathname === '/api/workspaces') {
       json(res, 200, listWorkspaces().map(w => ({ name: w.name, example: w.example })));
     } else if (u.pathname.startsWith('/api/ws/')) {
