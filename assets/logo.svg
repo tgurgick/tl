@@ -1,8 +1,7 @@
-<svg width="150" height="120" viewBox="0 0 150 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="tl logo: the /tl slash command as a geometric monoline wordmark">
-  <g stroke="#bdbbb2" stroke-width="14" stroke-linecap="butt" fill="none">
-    <path d="M20 102 L56 18"/>
-    <path d="M88 30 L88 102"/>
-    <path d="M70 54 L106 54"/>
-    <path d="M128 14 L128 102"/>
+<svg width="140" height="145" viewBox="64 56 112 116" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="tl logo: a lowercase t and a slash-slanted l">
+  <g stroke="#3b3a36" stroke-width="12" stroke-linecap="round" fill="none">
+    <path d="M96 70 L96 146 Q96 160 112 160"/>
+    <path d="M78 100 L114 100"/>
+    <path d="M136 158 L162 72"/>
   </g>
 </svg>
