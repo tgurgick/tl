@@ -1,4 +1,8 @@
-<svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="tl logo: a rounded keycap outline with a forward slash">
-  <rect x="6" y="6" width="108" height="108" rx="27" fill="none" stroke="#b6b4ab" stroke-width="6.5"/>
-  <path d="M44 89 L76 31" fill="none" stroke="#94928a" stroke-width="15" stroke-linecap="round"/>
+<svg width="150" height="120" viewBox="0 0 150 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="tl logo: the /tl slash command as a geometric monoline wordmark">
+  <g stroke="#bdbbb2" stroke-width="14" stroke-linecap="butt" fill="none">
+    <path d="M20 102 L56 18"/>
+    <path d="M88 30 L88 102"/>
+    <path d="M70 54 L106 54"/>
+    <path d="M128 14 L128 102"/>
+  </g>
 </svg>
