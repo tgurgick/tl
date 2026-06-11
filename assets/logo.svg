@@ -1,8 +1,0 @@
-<svg width="240" height="240" viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="tl logo: rounded tile with a lowercase t and a slash-slanted l">
-  <rect width="240" height="240" rx="54" fill="#f2f1ee"/>
-  <g stroke="#3b3a36" stroke-width="12" stroke-linecap="round" fill="none">
-    <path d="M96 70 L96 146 Q96 160 112 160"/>
-    <path d="M78 100 L114 100"/>
-    <path d="M136 158 L162 72"/>
-  </g>
-</svg>

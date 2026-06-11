@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" width="110" alt="tl">
+  <img src="assets/logo.png" width="110" alt="tl">
 </p>
 
 <h1 align="center">Throughline</h1>
