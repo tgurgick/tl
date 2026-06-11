@@ -84,6 +84,10 @@ The full algorithm for each skill lives in its `skills/<name>/SKILL.md` — that
 
 Run them on demand from any Claude Code session, or schedule them as routines — triage and dedup need no network, so a local scheduled task (or a cron'd headless run, e.g. `claude -p "/tl triage my-app"`) covers the core loop. The intended cadence: bug-capture every 15 minutes, dedup daily at 6am, triage daily at 8am — sweep before you rank.
 
+### /tl new
+
+Guided workspace setup. Interviews you for goals (with observable key results), allocation targets, priority rules, error tracking, and your first one to three intents — then scaffolds `projects/<name>/` and runs the first triage so the workspace is born with a real `priorities.md`. The only skill meant to be run by hand, once per project.
+
 ### /tl triage
 
 Ranks the backlog. Scores every spec against the weighted goals in `triage.yml`, applies the priority rules (first match wins), checks allocation drift, and rewrites `priorities.md`. Detects priorities a human changed by hand since the last run and records them in `override-log.jsonl`. Never creates, executes, or deletes specs, and never re-scores a human-set priority — only an explicit rule can change one.
