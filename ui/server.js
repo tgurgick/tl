@@ -247,18 +247,71 @@ function diffCounts(oldL, newL) {
   return { added, removed };
 }
 
+// LCS line diff -> ops [type, line] where type is ' ', '+', '-'
+function lcsOps(a, b) {
+  const n = a.length, m = b.length;
+  if (n * m > 4000000) return null; // too big — counts only
+  const w = m + 1;
+  const dp = new Int32Array((n + 1) * w);
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i * w + j] = a[i] === b[j] ? dp[(i + 1) * w + j + 1] + 1 : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { ops.push([' ', a[i]]); i++; j++; }
+    else if (dp[(i + 1) * w + j] >= dp[i * w + j + 1]) { ops.push(['-', a[i]]); i++; }
+    else { ops.push(['+', b[j]]); j++; }
+  }
+  while (i < n) ops.push(['-', a[i++]]);
+  while (j < m) ops.push(['+', b[j++]]);
+  return ops;
+}
+
+// keep 2 context lines around changes, collapse the rest into gap markers
+function toHunks(ops, maxLines = 120) {
+  if (!ops) return null;
+  const keep = new Array(ops.length).fill(false);
+  ops.forEach((o, i) => {
+    if (o[0] !== ' ') for (let k = Math.max(0, i - 2); k <= Math.min(ops.length - 1, i + 2); k++) keep[k] = true;
+  });
+  const out = [];
+  let gap = 0;
+  for (let i = 0; i < ops.length && out.length < maxLines; i++) {
+    if (keep[i]) {
+      if (gap) { out.push({ t: '.', n: gap }); gap = 0; }
+      out.push({ t: ops[i][0], s: ops[i][1].slice(0, 200) });
+    } else gap++;
+  }
+  if (gap) out.push({ t: '.', n: gap });
+  return out;
+}
+
+const diffBuffer = [];
+function pushDiff(rec, hunks) {
+  diffBuffer.push({ ...rec, hunks });
+  if (diffBuffer.length > 60) diffBuffer.shift();
+}
+
 function trackChange(wsName, rel, full, exists) {
   if (!TEXT_RE.test(rel)) return null;
-  let status, added = 0, removed = 0;
+  let status, added = 0, removed = 0, hunks = null;
   const before = snapshots.get(full);
   if (!exists) {
     if (before == null) return null;
     status = 'D'; removed = before.length;
+    hunks = toHunks(before.map(l => ['-', l]));
     snapshots.delete(full);
   } else {
     const now = readLines(full) || [];
-    if (before == null) { status = 'A'; added = now.length; }
-    else { status = 'M'; ({ added, removed } = diffCounts(before, now)); }
+    if (before == null) {
+      status = 'A'; added = now.length;
+      hunks = toHunks(now.map(l => ['+', l]));
+    } else {
+      status = 'M';
+      ({ added, removed } = diffCounts(before, now));
+      hunks = toHunks(lcsOps(before, now));
+    }
     snapshots.set(full, now);
   }
   const key = wsName + '|' + rel;
@@ -268,6 +321,7 @@ function trackChange(wsName, rel, full, exists) {
   const rec = { ws: wsName, path: rel, status, added, removed, ts: Date.now() };
   changes.set(key, rec);
   if (changes.size > 300) changes.delete(changes.keys().next().value);
+  if (added || removed) pushDiff(rec, hunks);
   return rec;
 }
 
@@ -299,7 +353,11 @@ function watchTree(base, wsOf) {
           ws: ws.name, path: ws.rel, exists: fs.existsSync(full), ts: Date.now(),
         };
         const change = trackChange(ws.name, ws.rel, full, payload.exists);
-        if (change) payload.change = { status: change.status, added: change.added, removed: change.removed };
+        if (change) {
+          payload.change = { status: change.status, added: change.added, removed: change.removed };
+          const d = diffBuffer[diffBuffer.length - 1];
+          if (d && d.ws === change.ws && d.path === change.path && d.ts === change.ts) payload.diff = d;
+        }
         if (ws.rel.endsWith('.jsonl') && payload.exists) {
           const lines = (safeRead(full) || '').trim().split('\n');
           try { payload.log = { file: path.basename(ws.rel, '.jsonl'), line: JSON.parse(lines[lines.length - 1]) }; }
@@ -351,6 +409,8 @@ const server = http.createServer((req, res) => {
       req.on('close', () => clients.delete(res));
     } else if (u.pathname === '/api/changes') {
       json(res, 200, Array.from(changes.values()).sort((a, b) => b.ts - a.ts).slice(0, 120));
+    } else if (u.pathname === '/api/diffs') {
+      json(res, 200, diffBuffer.slice().reverse().slice(0, 40));
     } else if (u.pathname === '/api/tree') {
       const ws = listWorkspaces().find(w => w.name === u.searchParams.get('ws'));
       if (!ws) return json(res, 404, { error: 'unknown workspace' });
