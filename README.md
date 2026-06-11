@@ -22,17 +22,20 @@ Throughline (`tl`) is markdown-native project management for agent-driven develo
 
 /tl:new          # guided setup — goals, rules, first intents
 /tl:triage       # rank the backlog (then schedule it daily)
+/tl:ui           # pop out the live board and watch agents work
 ```
 
 Prefer to clone? Work inside the repo — your workspaces live in the gitignored `projects/`, and the skill files in `skills/` are self-contained (`/plugin marketplace add .` also works from the repo root).
 
 ## UI
 
-A local web view of your workspaces — board by stage, goals, allocation vs target, and the metrics pulse:
+A local web view of your workspaces — intent swimlanes with specs rolling up by stage, a priority-ranked backlog, and multi-project boards:
 
 ```
-node ui/server.js        # → http://localhost:4400
+node ui/server.js --open    # → http://localhost:4400  (or just run /tl:ui)
 ```
+
+The bottom of the window is a terminal-style **Activity feed** plus a **Changes pane** (A/M/D and +/− line counts per file): the server watches the workspace trees and streams every file event live, so you can watch an agent triage, write specs, and move work across the board in real time.
 
 Zero dependencies, no build step, read-only by design: it renders the markdown and JSONL directly and never writes. Changing anything is still a file edit — that's the point.
 

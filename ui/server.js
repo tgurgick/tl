@@ -211,6 +211,66 @@ function readWorkspace(ws) {
   };
 }
 
+// ---------- change tracking (snapshot diffs — workspaces aren't in git) ----------
+
+const TEXT_RE = /\.(md|yml|yaml|jsonl)$/;
+const snapshots = new Map();   // full path -> array of lines
+const changes = new Map();     // ws|path -> {ws, path, status, added, removed, ts}
+
+function readLines(p) { const t = safeRead(p); return t === null ? null : t.split('\n'); }
+
+function walkFiles(dir, cb) {
+  let entries;
+  try { entries = fs.readdirSync(dir); } catch { return; }
+  for (const e of entries) {
+    if (e.startsWith('.') || e === 'node_modules') continue;
+    const full = path.join(dir, e);
+    if (isDir(full)) walkFiles(full, cb);
+    else if (TEXT_RE.test(e)) cb(full);
+  }
+}
+
+function primeSnapshots() {
+  for (const ws of listWorkspaces()) walkFiles(ws.dir, f => snapshots.set(f, readLines(f)));
+}
+
+function diffCounts(oldL, newL) {
+  const m = new Map();
+  for (const l of oldL) m.set(l, (m.get(l) || 0) + 1);
+  let added = 0;
+  for (const l of newL) {
+    const c = m.get(l) || 0;
+    if (c > 0) m.set(l, c - 1); else added++;
+  }
+  let removed = 0;
+  for (const c of m.values()) removed += c;
+  return { added, removed };
+}
+
+function trackChange(wsName, rel, full, exists) {
+  if (!TEXT_RE.test(rel)) return null;
+  let status, added = 0, removed = 0;
+  const before = snapshots.get(full);
+  if (!exists) {
+    if (before == null) return null;
+    status = 'D'; removed = before.length;
+    snapshots.delete(full);
+  } else {
+    const now = readLines(full) || [];
+    if (before == null) { status = 'A'; added = now.length; }
+    else { status = 'M'; ({ added, removed } = diffCounts(before, now)); }
+    snapshots.set(full, now);
+  }
+  const key = wsName + '|' + rel;
+  const prev = changes.get(key);
+  if (exists && prev && added === 0 && removed === 0) return null; // duplicate watch event, content unchanged
+  if (prev && prev.status === 'A' && status === 'M') status = 'A';
+  const rec = { ws: wsName, path: rel, status, added, removed, ts: Date.now() };
+  changes.set(key, rec);
+  if (changes.size > 300) changes.delete(changes.keys().next().value);
+  return rec;
+}
+
 // ---------- live events (SSE + fs watch) ----------
 
 const clients = new Set();
@@ -238,6 +298,8 @@ function watchTree(base, wsOf) {
         const payload = {
           ws: ws.name, path: ws.rel, exists: fs.existsSync(full), ts: Date.now(),
         };
+        const change = trackChange(ws.name, ws.rel, full, payload.exists);
+        if (change) payload.change = { status: change.status, added: change.added, removed: change.removed };
         if (ws.rel.endsWith('.jsonl') && payload.exists) {
           const lines = (safeRead(full) || '').trim().split('\n');
           try { payload.log = { file: path.basename(ws.rel, '.jsonl'), line: JSON.parse(lines[lines.length - 1]) }; }
@@ -255,6 +317,7 @@ watchTree(path.join(ROOT, 'projects'), rel => {
   return ix < 0 ? { name: rel, rel: '' } : { name: rel.slice(0, ix), rel: rel.slice(ix + 1) };
 });
 watchTree(path.join(ROOT, 'examples', 'sample-project'), rel => ({ name: 'sample-project', rel }));
+primeSnapshots();
 
 // ---------- http ----------
 
@@ -286,6 +349,17 @@ const server = http.createServer((req, res) => {
       res.write(': connected\n\n');
       clients.add(res);
       req.on('close', () => clients.delete(res));
+    } else if (u.pathname === '/api/changes') {
+      json(res, 200, Array.from(changes.values()).sort((a, b) => b.ts - a.ts).slice(0, 120));
+    } else if (u.pathname === '/api/file') {
+      const ws = listWorkspaces().find(w => w.name === u.searchParams.get('ws'));
+      const rel = u.searchParams.get('path') || '';
+      if (!ws) return json(res, 404, { error: 'unknown workspace' });
+      const full = path.resolve(ws.dir, rel);
+      if (!full.startsWith(path.resolve(ws.dir) + path.sep)) return json(res, 400, { error: 'bad path' });
+      const content = safeRead(full);
+      if (content === null) return json(res, 404, { error: 'not found' });
+      json(res, 200, { path: rel, content });
     } else if (u.pathname === '/api/workspaces') {
       json(res, 200, listWorkspaces().map(w => ({ name: w.name, example: w.example })));
     } else if (u.pathname.startsWith('/api/ws/')) {
@@ -303,4 +377,9 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`tl ui → http://localhost:${PORT}  (root: ${ROOT})`);
+  if (args.includes('--open')) {
+    const cmd = process.platform === 'darwin' ? 'open'
+      : process.platform === 'win32' ? 'start' : 'xdg-open';
+    require('child_process').exec(`${cmd} http://localhost:${PORT}`);
+  }
 });
