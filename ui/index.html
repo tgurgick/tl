@@ -9,6 +9,7 @@
 :root {
   --bg: #f7f6f3;
   --card: #fffefb;
+  --lane: rgba(47,46,43,.035);
   --ink: #2f2e2b;
   --muted: #8a877f;
   --faint: #b9b6ae;
@@ -22,6 +23,7 @@
   :root {
     --bg: #161614;
     --card: #1e1d1a;
+    --lane: rgba(233,231,225,.04);
     --ink: #e9e7e1;
     --muted: #8f8c84;
     --faint: #5c5a54;
@@ -39,10 +41,10 @@ body {
 }
 a { color: inherit; }
 
-.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 32px 80px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 26px 32px 80px; }
 
-header { display: flex; align-items: center; gap: 14px; margin-bottom: 36px; }
-header img { width: 40px; height: 40px; border-radius: 10px; }
+header { display: flex; align-items: center; gap: 13px; margin-bottom: 30px; }
+header img { width: 42px; height: auto; }
 header .name { font-size: 17px; font-weight: 500; letter-spacing: -0.2px; }
 header .spacer { flex: 1; }
 select {
@@ -52,38 +54,31 @@ select {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' stroke='%238a877f' fill='none' stroke-width='1.5' stroke-linecap='round'/></svg>");
   background-repeat: no-repeat; background-position: right 12px center;
 }
-.ghost {
-  background: none; border: 1px solid var(--line-strong); color: var(--muted);
-  border-radius: 10px; padding: 7px 14px; font: inherit; font-size: 14px; cursor: pointer;
+
+.tabs { display: flex; gap: 26px; border-bottom: 1px solid var(--line); margin-bottom: 30px; }
+.tab {
+  background: none; border: none; font: inherit; font-size: 14px; color: var(--muted);
+  padding: 0 1px 11px; cursor: pointer; border-bottom: 1.5px solid transparent; margin-bottom: -1px;
 }
-.ghost:hover { color: var(--ink); border-color: var(--ink); }
+.tab:hover { color: var(--ink); }
+.tab.active { color: var(--ink); border-color: var(--ink); }
+.tab .n { color: var(--faint); font-size: 12px; margin-left: 5px; }
 
 .label {
   font-size: 11px; font-weight: 500; letter-spacing: 1.4px; text-transform: uppercase;
-  color: var(--muted); margin-bottom: 14px;
+  color: var(--muted);
 }
-section { margin-bottom: 44px; }
-
-/* goals */
-.goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
-.goal {
-  background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
-  padding: 16px 18px 14px;
-}
-.goal .desc { font-size: 14px; font-weight: 500; margin-bottom: 10px; }
-.goal .track { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
-.goal .fill { height: 100%; background: var(--accent); border-radius: 2px; }
-.goal .pct { font-size: 12px; color: var(--muted); margin-top: 7px; }
 
 /* board */
-.board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-items: start; }
 @media (max-width: 900px) { .board { grid-template-columns: repeat(2, 1fr); } }
-.col-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; }
-.col-head .count { font-size: 12px; color: var(--faint); }
-.col { min-height: 40px; display: flex; flex-direction: column; gap: 10px; }
+.lane { background: var(--lane); border-radius: 16px; padding: 12px; min-height: 180px; }
+.lane-head { display: flex; align-items: baseline; gap: 8px; padding: 2px 6px 12px; }
+.lane-head .count { font-size: 12px; color: var(--faint); }
+.col { display: flex; flex-direction: column; gap: 10px; }
 .card {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
-  padding: 14px 16px; cursor: pointer; transition: border-color .12s, transform .12s;
+  padding: 13px 15px; cursor: pointer; transition: border-color .12s, transform .12s;
 }
 .card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
 .card .t { font-size: 14px; font-weight: 500; line-height: 1.4; margin-bottom: 9px; }
@@ -95,14 +90,24 @@ section { margin-bottom: 44px; }
 .pill.p0 { color: var(--danger); border-color: var(--danger); }
 .pill.p1 { color: var(--ink); border-color: var(--ink); }
 .pill.solid { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-.empty { font-size: 13px; color: var(--faint); padding: 6px 2px; }
+.empty { font-size: 13px; color: var(--faint); padding: 4px 6px; }
 
 /* intents */
-.intents { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.intents { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.hint { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
 
 /* metrics */
-.metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-@media (max-width: 900px) { .metrics { grid-template-columns: 1fr; } }
+.goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.goal {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 16px 18px 14px;
+}
+.goal .desc { font-size: 14px; font-weight: 500; margin-bottom: 10px; }
+.goal .track { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.goal .fill { height: 100%; background: var(--accent); border-radius: 2px; }
+.goal .pct { font-size: 12px; color: var(--muted); margin-top: 7px; }
+.panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 900px) { .panels { grid-template-columns: 1fr; } }
 .panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 18px 20px; }
 .panel h3 { font-size: 13px; font-weight: 500; color: var(--muted); margin-bottom: 14px; }
 .alloc-row { display: grid; grid-template-columns: 90px 1fr 88px; align-items: center; gap: 12px; margin-bottom: 10px; font-size: 13px; }
@@ -150,32 +155,34 @@ section { margin-bottom: 44px; }
     <span class="name">Throughline</span>
     <span class="spacer"></span>
     <select id="wsSelect" aria-label="Workspace"></select>
-    <button class="ghost" id="refresh">Refresh</button>
   </header>
 
-  <section id="goalsSection" hidden>
-    <div class="label">Goals</div>
-    <div class="goals" id="goals"></div>
-  </section>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-view="board" role="tab">Board<span class="n" id="nBoard"></span></button>
+    <button class="tab" data-view="intents" role="tab">Intents<span class="n" id="nIntents"></span></button>
+    <button class="tab" data-view="metrics" role="tab">Metrics</button>
+  </nav>
 
-  <section>
-    <div class="label">Board</div>
+  <section id="view-board">
     <div class="board" id="board"></div>
   </section>
 
-  <section id="intentsSection" hidden>
-    <div class="label">Intents</div>
+  <section id="view-intents" hidden>
+    <div class="hint">Intents are upstream of the board — human outcomes that decompose into specs.</div>
     <div class="intents" id="intents"></div>
   </section>
 
-  <section class="metrics">
-    <div class="panel" id="allocPanel" hidden>
-      <h3>Allocation — actual vs target</h3>
-      <div id="alloc"></div>
-    </div>
-    <div class="panel">
-      <h3>Pulse</h3>
-      <div class="stat-row" id="stats"></div>
+  <section id="view-metrics" hidden>
+    <div class="goals" id="goals"></div>
+    <div class="panels">
+      <div class="panel" id="allocPanel" hidden>
+        <h3>Allocation — actual vs target</h3>
+        <div id="alloc"></div>
+      </div>
+      <div class="panel">
+        <h3>Pulse</h3>
+        <div class="stat-row" id="stats"></div>
+      </div>
     </div>
   </section>
 
@@ -188,7 +195,6 @@ section { margin-bottom: 44px; }
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let current = null;
 
 // --- tiny markdown renderer ---
 function inline(s) {
@@ -208,8 +214,8 @@ function md(src) {
       i++;
       html += '<pre><code>' + code.join('\n') + '</code></pre>';
     } else if (/^#{1,4}\s/.test(l)) {
-      const level = l.match(/^#+/)[0].length;
-      html += `<h${Math.min(level,3)}>` + inline(l.replace(/^#+\s*/, '')) + `</h${Math.min(level,3)}>`;
+      const level = Math.min(l.match(/^#+/)[0].length, 3);
+      html += `<h${level}>` + inline(l.replace(/^#+\s*/, '')) + `</h${level}>`;
       i++;
     } else if (/^\s*[-*]\s/.test(l)) {
       let items = [];
@@ -248,11 +254,11 @@ function md(src) {
 
 // --- rendering ---
 const PRIO_ORDER = { p0: 0, p1: 1, p2: 2, p3: 3 };
-function pills(meta, feedback) {
+function pills(meta, feedback, extra) {
   let h = '';
   const p = (meta.priority || '').toLowerCase();
   if (p) h += `<span class="pill ${p}">${esc(p.toUpperCase())}</span>`;
-  if (meta.type) h += `<span class="pill">${esc(meta.type.replace('_', ' '))}</span>`;
+  if (meta.type) h += `<span class="pill">${esc(String(meta.type).replace('_', ' '))}</span>`;
   if (meta.size) h += `<span class="pill">${esc(meta.size)}</span>`;
   if (meta.status === 'blocked') h += `<span class="pill solid">blocked</span>`;
   if ((meta.tags || []).includes('stale')) h += `<span class="pill">stale</span>`;
@@ -261,13 +267,14 @@ function pills(meta, feedback) {
     const avg = ['correctness','completeness','scope_discipline'].map(k => s[k]).filter(n => typeof n === 'number');
     if (avg.length) h += `<span class="pill">${(avg.reduce((a,b)=>a+b,0)/avg.length).toFixed(1)} / 5</span>`;
   }
+  if (extra) h += extra;
   return h;
 }
 
-function card(item) {
+function card(item, extraPills) {
   const el = document.createElement('div');
   el.className = 'card';
-  el.innerHTML = `<div class="t">${esc(item.title)}</div><div class="meta">${pills(item.meta, item.feedback)}</div>`;
+  el.innerHTML = `<div class="t">${esc(item.title)}</div><div class="meta">${pills(item.meta, item.feedback, extraPills)}</div>`;
   el.onclick = () => openDrawer(item);
   return el;
 }
@@ -280,43 +287,48 @@ const COLS = [
 ];
 
 function render(ws) {
-  current = ws;
+  // board lanes
+  const board = $('board');
+  board.innerHTML = '';
+  let openCount = 0;
+  for (const [key, name] of COLS) {
+    let items = ws.specs.filter(s => s.stage === key);
+    if (key === 'ready' || key === 'in-progress') openCount += items.length;
+    if (key === 'ready') items.sort((a, b) =>
+      (PRIO_ORDER[a.meta.priority] ?? 9) - (PRIO_ORDER[b.meta.priority] ?? 9) || a.title.localeCompare(b.title));
+    if (key === 'done') items.sort((a, b) => b.mtime - a.mtime);
+    const lane = document.createElement('div');
+    lane.className = 'lane';
+    lane.innerHTML = `<div class="lane-head"><span class="label">${name}</span><span class="count">${items.length}</span></div>`;
+    const col = document.createElement('div');
+    col.className = 'col';
+    if (!items.length) col.innerHTML = '<div class="empty">—</div>';
+    items.forEach(s => col.appendChild(card(s)));
+    lane.appendChild(col);
+    board.appendChild(lane);
+  }
+  $('nBoard').textContent = openCount || '';
+
+  // intents
+  $('nIntents').textContent = ws.intents.length || '';
+  const intents = $('intents');
+  intents.innerHTML = '';
+  if (!ws.intents.length) intents.innerHTML = '<div class="empty">No intents yet — run /tl:new or draft one from _templates/intent.md</div>';
+  ws.intents.forEach(it => {
+    const nSpecs = (it.meta.specs || []).length;
+    const extra = nSpecs ? `<span class="pill">${nSpecs} spec${nSpecs > 1 ? 's' : ''}</span>` : '';
+    intents.appendChild(card(
+      { ...it, meta: { priority: it.meta.priority, type: it.meta.status } }, extra));
+  });
+
   // goals
   const goals = (ws.config && ws.config.goals) || [];
-  $('goalsSection').hidden = !goals.length;
   $('goals').innerHTML = goals.map(g => `
     <div class="goal">
       <div class="desc">${esc(g.description || g.id)}</div>
       <div class="track"><div class="fill" style="width:${Math.round((g.weight || 0) * 100)}%"></div></div>
       <div class="pct">weight ${(g.weight ?? 0).toFixed(2)}</div>
     </div>`).join('');
-
-  // board
-  const board = $('board');
-  board.innerHTML = '';
-  for (const [key, name] of COLS) {
-    let items = ws.specs.filter(s => s.stage === key);
-    if (key === 'ready') items.sort((a, b) =>
-      (PRIO_ORDER[a.meta.priority] ?? 9) - (PRIO_ORDER[b.meta.priority] ?? 9) || a.title.localeCompare(b.title));
-    if (key === 'done') items.sort((a, b) => b.mtime - a.mtime);
-    const wrap = document.createElement('div');
-    wrap.innerHTML = `<div class="col-head"><span class="label" style="margin:0">${name}</span><span class="count">${items.length}</span></div>`;
-    const col = document.createElement('div');
-    col.className = 'col';
-    if (!items.length) col.innerHTML = '<div class="empty">—</div>';
-    items.forEach(s => col.appendChild(card(s)));
-    wrap.appendChild(col);
-    board.appendChild(wrap);
-  }
-
-  // intents
-  $('intentsSection').hidden = !ws.intents.length;
-  const intents = $('intents');
-  intents.innerHTML = '';
-  ws.intents.forEach(it => {
-    const el = card({ ...it, meta: { priority: it.meta.priority, type: it.meta.status } });
-    intents.appendChild(el);
-  });
 
   // allocation
   const alloc = ws.config && ws.config.allocation;
@@ -353,15 +365,27 @@ function render(ws) {
     <div class="stat"><div class="n">${tlog.length ? esc(tlog[tlog.length - 1].date) : '—'}</div><div class="k">last triage</div></div>`;
 }
 
+// --- tabs ---
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b === btn));
+    for (const v of ['board', 'intents', 'metrics'])
+      $('view-' + v).hidden = v !== btn.dataset.view;
+    localStorage.setItem('tl-view', btn.dataset.view);
+  };
+});
+const savedView = localStorage.getItem('tl-view');
+if (savedView) document.querySelector(`.tab[data-view="${savedView}"]`)?.click();
+
 // --- drawer ---
 function openDrawer(item) {
   const d = $('drawer');
-  const metaPills = pills(item.meta, item.feedback);
+  const body = (item.body || '').replace(/^\s*# .*\n+/, '');
   d.innerHTML = `
     <div class="path">${esc(item.path || '')}</div>
     <h2>${esc(item.title)}</h2>
-    <div class="meta">${metaPills}</div>
-    <div class="md">${md(item.body || '')}</div>`;
+    <div class="meta">${pills(item.meta, item.feedback)}</div>
+    <div class="md">${md(body)}</div>`;
   document.body.classList.add('open');
 }
 $('scrim').onclick = () => document.body.classList.remove('open');
@@ -383,7 +407,6 @@ async function boot() {
   if (!pick) { $('board').innerHTML = '<div class="empty">No workspaces found — run /tl:new</div>'; return; }
   sel.value = pick;
   sel.onchange = () => load(sel.value);
-  $('refresh').onclick = () => load(sel.value);
   addEventListener('focus', () => load(sel.value));
   await load(pick);
 }
