@@ -2,17 +2,17 @@
   <img src="assets/logo.svg" width="110" alt="tl">
 </p>
 
-<h1 align="center">tl</h1>
+<h1 align="center">Throughline</h1>
 
 <p align="center">
-  <strong>Lightweight spec-driven development, in markdown.</strong><br>
+  <strong>Lightweight intent-driven development, in markdown.</strong><br>
   Intents are what humans want. Specs are what agents execute.<br>
   The throughline is traceability — every line of code traces back to a human reason.
 </p>
 
 ---
 
-Throughline (`tl`) is markdown-native project management for agent-driven development. Scheduled skills handle triage, dedup, and bug capture; a config file you own drives prioritization; git is the database.
+Throughline (`tl`) is markdown-native project management for agent-driven development. It builds on spec-driven development (SDD) and goes one step upstream: specs aren't written in isolation, they're derived from human intents. Scheduled skills handle triage, dedup, and bug capture; a config file you own drives prioritization; git is the database.
 
 ## Quick start
 
