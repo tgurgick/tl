@@ -381,7 +381,6 @@ primeSnapshots();
 
 const INDEX = path.join(__dirname, 'index.html');
 const LOGO = path.join(ROOT, 'assets', 'logo.png');
-const ICON = path.join(ROOT, 'assets', 'icon.png');
 
 function json(res, code, data) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
@@ -394,8 +393,8 @@ const server = http.createServer((req, res) => {
     if (u.pathname === '/') {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(safeRead(INDEX) || 'index.html missing');
-    } else if (u.pathname === '/logo.png' || u.pathname === '/icon.png') {
-      const buf = (() => { try { return fs.readFileSync(u.pathname === '/icon.png' ? ICON : LOGO); } catch { return null; } })();
+    } else if (u.pathname === '/logo.png') {
+      const buf = (() => { try { return fs.readFileSync(LOGO); } catch { return null; } })();
       if (buf) { res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(buf); }
       else { res.writeHead(404); res.end(); }
     } else if (u.pathname === '/api/events') {
