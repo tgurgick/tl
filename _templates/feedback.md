@@ -23,6 +23,10 @@ priority_was_right: true        # was this worth doing when we did it?
 
 - {Mistakes, misunderstandings, scope drift.}
 
+## Captured threads
+
+{Discoveries that are out of scope but worth keeping — each becomes a file in `threads/`. List the paths, or "none". This is how agent discoveries avoid becoming scope creep or getting lost.}
+
 ## Pattern candidates
 
 {Anything reusable for `_patterns/PATTERNS.md` — phrasing that worked, context that should have been included, a gotcha worth recording. Leave empty if nothing generalizes.}

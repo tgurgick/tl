@@ -12,7 +12,7 @@
 
 ---
 
-Throughline (`tl`) is markdown-native project management for agent-driven development. It builds on spec-driven development (SDD) and goes one step upstream: specs aren't written in isolation, they're derived from human intents. Scheduled skills handle triage, dedup, and bug capture; a config file you own drives prioritization; git is the database.
+Throughline (`tl`) is markdown-native project management for agent-driven development. It builds on spec-driven development (SDD) and goes one step upstream: specs aren't written in isolation, they're derived from human intents. Three primitives, no more: **intents** = why, **specs** = what to do now, **threads** = what not to lose. Scheduled skills handle triage, dedup, and bug capture; a config file you own drives prioritization; git is the database.
 
 ## Quick start
 
@@ -65,6 +65,7 @@ throughline/                    # the tool (this repo, public)
         ├── in-progress/        # specs being worked
         ├── done/               # completed, with feedback
         ├── triage/             # ideas being evaluated
+        ├── threads/            # what not to lose — parked ideas, decisions, open questions
         └── _metrics/           # JSONL logs from skill runs
 ```
 
@@ -79,6 +80,8 @@ Spec-driven development assumes you start with a spec. Throughline goes one step
 **Specs** are written in execution language: "create `auth-stack.ts` with Cognito user pool, ensure `cdk synth` passes." They have acceptance criteria with test commands, file scope boundaries, context folders with crash reports or code excerpts, and implementation hints. An intent decomposes into one or more specs. Each spec is a folder — the self-contained context package an agent receives.
 
 **Triage** is the intake. Raw ideas, bug reports, problems, opportunities. Anything that needs more thought before it becomes an intent or spec. Some items graduate to intents (they need scoping). Some go directly to specs (the intent is obvious, the work just needs to be specified). Some get killed.
+
+**Threads** are everything worth remembering that isn't active work: parked ideas, recorded decisions, open questions, discovered risks, future cleanup. Agents generate discoveries constantly; without a home they become scope creep or get lost. Threads are that home — and open loops, idea lists, and decision history are just filtered views over them, never new object types.
 
 The handoff from intent to spec is the highest-leverage moment in the system. It's where human judgment about what matters becomes machine-readable instructions.
 

@@ -13,6 +13,7 @@ A spec's lifecycle stage is its folder, inside a workspace (`projects/<name>/`):
 | `specs/` | Agent-ready, not started (`status: ready` or `blocked`) |
 | `in-progress/` | Being worked |
 | `done/` | Completed, has `outcome/feedback.md` |
+| `threads/` | Anything worth remembering that isn't active work |
 
 If `status` and folder disagree, the folder wins; skills fix the field to match.
 
@@ -49,6 +50,22 @@ Bug specs add: `source` (`sentry` `datadog` `manual`), `source_id`, `source_url`
 | `priority` | enum | `p0`–`p3` or `""` |
 | `tags` | list | |
 | `specs` | list of paths | specs derived from this intent |
+
+## Thread (`threads/*.md`)
+
+The only primitive besides intents and specs: intents = why, specs = what to do now, threads = what not to lose. Open loops, parked ideas, decision history, and cleanup queues are all *views* over threads — never new object types.
+
+| Field | Type | Values | Notes |
+|-------|------|--------|-------|
+| `title` | string | required | |
+| `created` | date | required | |
+| `type` | enum | `idea` `followup` `decision` `risk` `cleanup` `question` | what kind of memory this is |
+| `status` | enum | `open` `parked` `promoted` `closed` | `open` = unresolved (an open loop); `parked` = good, not now; `promoted` = became a spec; `closed` = resolved/recorded |
+| `origin` | string | spec path, conversation, person | where it came from |
+| `linked_intent` | path | optional | |
+| `linked_spec` | path | optional | |
+
+Body: the thought itself. For `decision` threads, include the why — a recorded decision is `status: closed` and stays as the record.
 
 ## Feedback (`done/*/outcome/feedback.md`)
 

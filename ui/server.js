@@ -391,7 +391,7 @@ const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://localhost');
   try {
     if (u.pathname === '/') {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
       res.end(safeRead(INDEX) || 'index.html missing');
     } else if (u.pathname === '/logo.png') {
       const buf = (() => { try { return fs.readFileSync(LOGO); } catch { return null; } })();

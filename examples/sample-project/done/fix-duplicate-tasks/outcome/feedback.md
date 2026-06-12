@@ -23,6 +23,10 @@ The spec asked for exactly one task per save regardless of tap speed; the agent 
 
 - Nothing notable.
 
+## Captured threads
+
+- none — the fix surfaced no out-of-scope discoveries
+
 ## Pattern candidates
 
 Any async submit button should disable while in flight — added to `_patterns/PATTERNS.md` as "guard async submits".
