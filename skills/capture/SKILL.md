@@ -24,7 +24,7 @@ Same as `/tl triage`: argument or context names a workspace under `projects/`; e
 
 ## When other skills capture
 
-At spec completion, list discoveries under "Captured threads" in `outcome/feedback.md` and write each as a thread via these rules. A completed spec with undocumented discoveries is a leak.
+At spec completion, list discoveries under "Captured threads" in `outcome/FEEDBACK.md` and write each as a thread via these rules. A completed spec with undocumented discoveries is a leak.
 
 ## Guardrails
 

@@ -15,9 +15,9 @@ Same as `/tl triage`: argument is a workspace name under `projects/` or a path; 
 
 **1. Inventory.** Parse frontmatter from every `type: bug` spec in `specs/` and `in-progress/` (schema: `_templates/SCHEMA.md`).
 
-**2. Provider pass** — only if `triage.yml` has `error_tracking.enabled: true` and the provider's MCP tools are available; otherwise skip silently. For each bug spec with a `source_id`:
+**2. Provider pass** — only if `TRIAGE.yml` has `error_tracking.enabled: true` and the provider's MCP tools are available; otherwise skip silently. For each bug spec with a `source_id`:
 - Query the provider for the issue's current status.
-- **Resolved** there, with no recurrence in 72 hours: move the spec folder to `done/`, set `status: done`, and write `outcome/feedback.md` noting auto-resolution (`scores` omitted — nobody executed it).
+- **Resolved** there, with no recurrence in 72 hours: move the spec folder to `done/`, set `status: done`, and write `outcome/FEEDBACK.md` noting auto-resolution (`scores` omitted — nobody executed it).
 - **Merged** in the provider: find the spec for the merge target by `source_id`, append this spec's unique context into the target's `context/`, then delete the duplicate folder. If no target spec exists, just note the merge in the spec body — don't delete.
 
 **3. Manual duplicate pass** — for all open bug specs (with or without `source_id`), pairwise compare likely-file lists and error descriptions:

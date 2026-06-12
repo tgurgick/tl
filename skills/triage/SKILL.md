@@ -1,6 +1,6 @@
 ---
 name: triage
-description: Rank a tl workspace's backlog — score specs against the goals, allocation targets, and rules in its triage.yml, detect human priority overrides, and rewrite priorities.md. Use when asked to triage, prioritize, rank, or re-sort a project's backlog, or as a scheduled daily run.
+description: Rank a tl workspace's backlog — score specs against the goals, allocation targets, and rules in its TRIAGE.yml, detect human priority overrides, and rewrite PRIORITIES.md. Use when asked to triage, prioritize, rank, or re-sort a project's backlog, or as a scheduled daily run.
 ---
 
 # /tl triage
@@ -13,7 +13,7 @@ The argument is a workspace name (a folder under `projects/`) or a path. If no a
 
 ## Steps
 
-**1. Read config.** Parse `triage.yml` (schema: `_templates/SCHEMA.md`). If it's missing or has no goals, stop and tell the user — never invent goals.
+**1. Read config.** Parse `TRIAGE.yml` (schema: `_templates/SCHEMA.md`). If it's missing or has no goals, stop and tell the user — never invent goals.
 
 **2. Inventory.** Parse frontmatter from every `specs/*/SPEC.md` and `in-progress/*/SPEC.md`. Tolerate missing optional fields; report (don't crash on) malformed frontmatter. If a spec's `status` disagrees with its folder, fix the field to match the folder.
 
@@ -24,7 +24,7 @@ The argument is a workspace name (a folder under `projects/`) or a path. If no a
 
 This log is the training signal for future auto-triage tuning. Never skip this step.
 
-**4. Apply rules.** From `triage.yml` `rules`, first match wins per spec. Standard actions: `set priority pN`, `boost priority by 1 level`, `flag for review`. Rules (and only rules) may change a `priority_set_by: human` spec — when one does, note it in the summary. Mark a rule-set priority as `priority_set_by: triage`.
+**4. Apply rules.** From `TRIAGE.yml` `rules`, first match wins per spec. Standard actions: `set priority pN`, `boost priority by 1 level`, `flag for review`. Rules (and only rules) may change a `priority_set_by: human` spec — when one does, note it in the summary. Mark a rule-set priority as `priority_set_by: triage`.
 
 Also: any spec whose `depends_on` entries are all in `done/` gets `status: ready`.
 
@@ -35,7 +35,7 @@ Also: any spec whose `depends_on` entries are all in `done/` gets `status: ready
 
 **6. Allocation check.** Count specs by `type` across `specs/` + `in-progress/`, compare fractions to `allocation` targets. If any drift exceeds `drift_threshold`, include a warning with a concrete suggestion in the summary.
 
-**7. Rewrite `priorities.md`** at the workspace root:
+**7. Rewrite `PRIORITIES.md`** at the workspace root:
 
 ```markdown
 ---
@@ -67,5 +67,5 @@ The `priorities` map is what step 3 diffs against next run — it must list ever
 
 - Never create, edit the body of, execute, or delete a spec.
 - Never demote or promote a `priority_set_by: human` spec by scoring — only an explicit rule can.
-- Never edit `triage.yml`. If the goals look stale, say so in the report instead.
+- Never edit `TRIAGE.yml`. If the goals look stale, say so in the report instead.
 - Never rewrite history in JSONL logs — append only.

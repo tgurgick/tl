@@ -13,7 +13,7 @@ Same as `/tl triage`: argument is a workspace name under `projects/` or a path; 
 
 ## Preconditions
 
-Read `triage.yml` `error_tracking` (schema: `_templates/SCHEMA.md`). If the block is missing, `enabled: false`, or the provider's MCP tools aren't connected: stop and tell the user what's missing — don't fake data.
+Read `TRIAGE.yml` `error_tracking` (schema: `_templates/SCHEMA.md`). If the block is missing, `enabled: false`, or the provider's MCP tools aren't connected: stop and tell the user what's missing — don't fake data.
 
 ## Steps
 

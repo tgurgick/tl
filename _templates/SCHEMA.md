@@ -12,7 +12,7 @@ A spec's lifecycle stage is its folder, inside a workspace (`projects/<name>/`):
 | `intents/` | Human objectives |
 | `specs/` | Agent-ready, not started (`status: ready` or `blocked`) |
 | `in-progress/` | Being worked |
-| `done/` | Completed, has `outcome/feedback.md` |
+| `done/` | Completed, has `outcome/FEEDBACK.md` |
 | `threads/` | Anything worth remembering that isn't active work |
 
 If `status` and folder disagree, the folder wins; skills fix the field to match.
@@ -67,7 +67,7 @@ The only primitive besides intents and specs: intents = why, specs = what to do 
 
 Body: the thought itself. For `decision` threads, include the why — a recorded decision is `status: closed` and stays as the record.
 
-## Feedback (`done/*/outcome/feedback.md`)
+## Feedback (`done/*/outcome/FEEDBACK.md`)
 
 | Field | Type | Values |
 |-------|------|--------|
@@ -81,7 +81,7 @@ Body: the thought itself. For `decision` threads, include the why — a recorded
 
 `scores` and `priority_was_right` are the learnable fields — keep them honest, they feed the same loop as the override log.
 
-## Workspace config (`triage.yml`)
+## Workspace config (`TRIAGE.yml`)
 
 ```yaml
 goals:                  # what matters now

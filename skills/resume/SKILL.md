@@ -13,19 +13,19 @@ Same as `/tl triage`: argument or context names a workspace under `projects/`; e
 
 ## Steps
 
-Read specs (all stages), `threads/`, `priorities.md`, `triage.yml`, and `_metrics/*.jsonl` (last lines). Then report exactly these sections, in this order — they mirror the UI's Resume tab, so CLI and UI never drift:
+Read specs (all stages), `threads/`, `PRIORITIES.md`, `TRIAGE.yml`, and `_metrics/*.jsonl` (last lines). Then report exactly these sections, in this order — they mirror the UI's Resume tab, so CLI and UI never drift:
 
-**1. Focus** — the top-weighted goal from `triage.yml`, one line.
+**1. Focus** — the top-weighted goal from `TRIAGE.yml`, one line.
 
 **2. Last activity** — the most recent meaningful events: latest completed spec (from `done/` mtimes or `cycle-log.jsonl`), latest spec moved to in-progress, latest triage run and whether it detected overrides. Two or three lines, newest first.
 
-**3. Open loops** — threads where `type` is `question`, `decision`, or `risk` AND `status: open`, plus blocked specs with what blocks them, plus done specs missing `outcome/feedback.md`. These are the unresolved items a human forgets; surface them before anything else.
+**3. Open loops** — threads where `type` is `question`, `decision`, or `risk` AND `status: open`, plus blocked specs with what blocks them, plus done specs missing `outcome/FEEDBACK.md`. These are the unresolved items a human forgets; surface them before anything else.
 
 **4. Recent decisions** — the last few `type: decision` threads (any status), title + one-line why.
 
 **5. Parked** — one line: "N parked threads (M ideas, K followups…)" — visibility without noise.
 
-**6. Recommended next** — one concrete action with a reason. Default: the top item of `priorities.md` Next up. Override the default when something upstream matters more: an open `question` thread blocking the top spec, a goal with zero active specs, or work in `in-progress/` that's been idle longest. Say which rule fired.
+**6. Recommended next** — one concrete action with a reason. Default: the top item of `PRIORITIES.md` Next up. Override the default when something upstream matters more: an open `question` thread blocking the top spec, a goal with zero active specs, or work in `in-progress/` that's been idle longest. Say which rule fired.
 
 ## Guardrails
 

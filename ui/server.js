@@ -122,6 +122,7 @@ function parseFrontmatter(text) {
 // ---------- workspace reading ----------
 
 function safeRead(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } }
+function readFirst(...paths) { for (const p of paths) { const t = safeRead(p); if (t !== null) return t; } return null; }
 function isDir(p) { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
 function mtime(p) { try { return fs.statSync(p).mtimeMs; } catch { return 0; } }
 
@@ -158,7 +159,7 @@ function readStage(dir, stage, folder) {
       meta, body, mtime: mtime(file),
     };
     if (stage === 'done' && isFolder) {
-      const fb = safeRead(path.join(p, 'outcome', 'feedback.md'));
+      const fb = readFirst(path.join(p, 'outcome', 'FEEDBACK.md'), path.join(p, 'outcome', 'feedback.md'));
       if (fb) item.feedback = parseFrontmatter(fb).meta;
     }
     out.push(item);
@@ -168,7 +169,7 @@ function readStage(dir, stage, folder) {
 
 function readWorkspace(ws) {
   const dir = ws.dir;
-  const configText = safeRead(path.join(dir, 'triage.yml'));
+  const configText = readFirst(path.join(dir, 'TRIAGE.yml'), path.join(dir, 'triage.yml'));
   let config = null;
   try { config = configText ? parseYaml(configText) : null; } catch { config = null; }
 
@@ -216,7 +217,7 @@ function readWorkspace(ws) {
   return {
     name: ws.name, example: ws.example,
     config, intents, specs, threads, metrics,
-    priorities: safeRead(path.join(dir, 'priorities.md')),
+    priorities: readFirst(path.join(dir, 'PRIORITIES.md'), path.join(dir, 'priorities.md')),
     project: parseFrontmatter(safeRead(path.join(dir, 'PROJECT.md')) || '').meta,
   };
 }

@@ -35,10 +35,11 @@ Create, populating from the interview (frontmatter contract: `_templates/SCHEMA.
 
 ```
 projects/<name>/
-├── triage.yml              # goals, allocation, rules, error_tracking
-├── PROJECT.md              # from _templates/project.md — context map filled with known docs
+├── TRIAGE.yml              # goals, allocation, rules, error_tracking
+├── PROJECT.md              # from _templates/PROJECT.md — context map filled with known docs
 ├── intents/                # the drafted intents
 ├── specs/                  # the first spec, if drafted
+├── threads/
 ├── triage/
 ├── in-progress/
 ├── done/
@@ -47,7 +48,7 @@ projects/<name>/
 
 ## Finish
 
-Run the `/tl triage` algorithm (`../triage/SKILL.md`) on the new workspace so it starts with a real `priorities.md` and its first `triage-log.jsonl` line. Then report: the workspace path, the top of the priority stack, and the two next actions — decompose remaining intents into specs, and schedule the daily triage/dedup runs.
+Run the `/tl triage` algorithm (`../triage/SKILL.md`) on the new workspace so it starts with a real `PRIORITIES.md` and its first `triage-log.jsonl` line. Then report: the workspace path, the top of the priority stack, and the two next actions — decompose remaining intents into specs, and schedule the daily triage/dedup runs.
 
 ## Guardrails
 
