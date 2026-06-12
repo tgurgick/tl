@@ -53,12 +53,20 @@ a { color: inherit; }
 
 .app { display: flex; }
 
+.margin-toggle {
+  position: fixed; top: 16px; left: 12px; z-index: 5;
+  background: none; border: none; cursor: pointer;
+  color: var(--faint); font: 20px/1 inherit; padding: 4px 10px;
+}
+.margin-toggle:hover { color: var(--ink); }
+@media (max-width: 880px) { .margin-toggle { display: none; } }
+
 /* sidebar: file tree + current focus */
 .side {
   width: 248px; flex: none; position: sticky; top: 0; align-self: flex-start;
   height: calc(100vh - 44px); overflow-y: auto;
   border-right: 1px solid var(--line); background: var(--lane);
-  padding: 22px 10px 40px 14px;
+  padding: 48px 10px 40px 14px;
   display: flex; flex-direction: column;
 }
 body.term-open .side { height: calc(100vh - 230px); }
@@ -283,6 +291,7 @@ body.term-open .term-body { display: block; }
 </style>
 </head>
 <body>
+<button id="sideToggle" class="margin-toggle" title="Toggle file tree" aria-label="Toggle file tree">–</button>
 <div class="app">
 <aside class="side" id="side">
   <div class="side-focus">
@@ -296,7 +305,6 @@ body.term-open .term-body { display: block; }
 
 <div class="wrap">
   <header>
-    <button class="ghost" id="sideToggle" title="Toggle file tree" aria-label="Toggle file tree"><svg width="15" height="12" viewBox="0 0 15 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M1 1h13M1 6h13M1 11h13"/></svg></button>
     <img src="/logo.png" alt="">
     <span class="name">Throughline</span>
     <span class="spacer"></span>
