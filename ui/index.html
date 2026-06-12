@@ -497,18 +497,23 @@ function renderResume(wss) {
     if (inprog.length) { next = inprog.slice().sort((a, b) => a.mtime - b.mtime)[0]; why = 'Finish what’s started — work is already in progress.'; }
     else if (openQ) { next = openQ; why = 'An open question is upstream of new work.'; }
     else if (ready.length) { next = ready[0]; why = 'Top of the priority stack.'; }
+    const na = document.createElement('section');
+    na.className = 'next-action';
     if (next) {
       const slug = (next.path || '').replace(/\/$/, '').split('/').pop();
-      const na = document.createElement('section');
-      na.className = 'next-action';
       na.innerHTML = `
         <div class="head"><span class="label">NEXT ACTION</span><span class="chip">${esc(slug)}</span></div>
         <p class="summary">${esc(next.title)}</p>
         <p class="reason">${esc(why)}</p>
         <div class="cta"><button>open spec ${IC.arrow('#b5712a')}</button></div>`;
-      na.querySelector('button').onclick = () => openDrawer(next);
-      block.appendChild(na);
+      na.querySelector('.cta button').onclick = () => openDrawer(next);
+    } else {
+      na.innerHTML = `
+        <div class="head"><span class="label">NEXT ACTION</span></div>
+        <p class="summary">The queue is empty — decompose the next slice of an intent into a spec.</p>
+        <p class="reason">No specs in progress, no open questions, nothing ready. The intent → spec handoff is yours.</p>`;
     }
+    block.appendChild(na);
 
     // three columns
     const cols = document.createElement('div');
@@ -550,13 +555,31 @@ function renderResume(wss) {
     const c2 = document.createElement('section');
     c2.innerHTML = `<p class="label" style="margin-bottom:.75rem">Recent decisions</p>`;
     if (!decs.length) c2.innerHTML += '<div class="empty">no decisions recorded yet</div>';
-    decs.slice(0, 6).forEach(d => {
+    decs.slice(0, 5).forEach(d => {
       const r = document.createElement('div');
       r.className = 'dec-row';
       r.innerHTML = `${IC.check('#3a7d55')}<p class="txt">${esc(d.title)}</p><span class="age">${rel(d.mtime)}</span>`;
       r.onclick = () => openDrawer(d);
       c2.appendChild(r);
     });
+    // last activity — mirrors /tl resume section 2
+    const acts = [
+      ...specs.filter(s => s.stage === 'done').map(s => ({ t: 'completed', it: s })),
+      ...inprog.map(s => ({ t: 'started', it: s })),
+    ].sort((a, b) => b.it.mtime - a.it.mtime).slice(0, 3);
+    const tlog = (ws.metrics && ws.metrics['triage-log']) || [];
+    c2.insertAdjacentHTML('beforeend', `<p class="label" style="margin:1.6rem 0 .75rem">Last activity</p>`);
+    if (!acts.length && !tlog.length) c2.innerHTML += '<div class="empty">no activity yet</div>';
+    acts.forEach(a => {
+      const r = document.createElement('div');
+      r.className = 'loop-row';
+      r.innerHTML = `<span class="mono" style="font-size:.6rem;color:${a.t === 'completed' ? '#3a7d55' : '#6b57c7'};margin-top:3px;flex:none">${a.t === 'completed' ? '✓' : '▸'}</span>
+        <p class="txt">${esc(a.it.title)}</p><span class="age">${rel(a.it.mtime)}</span>`;
+      r.onclick = () => openDrawer(a.it);
+      c2.appendChild(r);
+    });
+    if (tlog.length) c2.insertAdjacentHTML('beforeend',
+      `<div class="empty" style="padding-top:10px">last triage ${esc(tlog[tlog.length - 1].date)} · ${tlog[tlog.length - 1].overrides_detected ?? 0} overrides</div>`);
     cols.appendChild(c2);
 
     // ranked backlog
