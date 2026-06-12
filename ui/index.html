@@ -75,32 +75,26 @@ body {
   background: var(--bg); color: var(--ink);
   font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
-  padding-bottom: 44px;
 }
-body.term-open { padding-bottom: 230px; }
+body.on-live.term-open { padding-bottom: 230px; }
+body.on-live { padding-bottom: 44px; }
 a { color: inherit; }
 
 .app { display: flex; }
 
-.fork-toggle {
-  background: none; border: none; cursor: pointer;
-  color: var(--muted); font: 17px/1 inherit; padding: 4px 6px 4px 0;
-}
-.fork-toggle:hover { color: var(--ink); }
-.fork-toggle span { display: inline-block; transform: scaleX(-1); }
-
-/* sidebar: file tree + current focus */
+/* file tree sidebar — Live Look only */
 .side {
-  width: 248px; flex: none; position: sticky; top: 0; align-self: flex-start;
+  display: none;
+  width: 240px; flex: none; position: sticky; top: 0; align-self: flex-start;
   height: calc(100vh - 44px); overflow-y: auto;
   border-right: 1px solid var(--line); background: var(--lane);
   padding: 24px 10px 40px 14px;
-  display: flex; flex-direction: column;
+  flex-direction: column;
 }
-body.term-open .side { height: calc(100vh - 230px); }
-body.side-closed .side { display: none; }
+body.on-live .side { display: flex; }
+body.on-live.term-open .side { height: calc(100vh - 230px); }
+body.side-closed .side { display: none !important; }
 .side .label { display: block; padding: 0 6px 12px; }
-#tree { flex: 1; }
 .tn {
   display: flex; align-items: center; gap: 5px; padding: 2.5px 7px;
   border-radius: 6px; font-size: 13px; cursor: pointer; color: var(--ink);
@@ -121,26 +115,18 @@ body.side-closed .side { display: none; }
 @keyframes treeflash { 0% { background: rgba(var(--heat-rgb), .30); } 100% { background: transparent; } }
 .tkids { padding-left: 15px; }
 
-.side-focus { border-bottom: 1px solid var(--line); margin-bottom: 18px; padding: 0 6px 14px; }
-.sf-goal { font-size: 13px; font-weight: 500; padding: 1px 0; }
-.sf-goal .w { color: var(--faint); font-weight: 400; margin-left: 7px; font-size: 12px; }
-.sf-ws { font-size: 11px; color: var(--faint); letter-spacing: .5px; margin-top: 6px; }
-.sf-logic { font-size: 11.5px; color: var(--muted); padding: 1px 0 6px; }
-.sf-recent { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 8px; }
-.sf-line { font-size: 11px; color: var(--muted); padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sf-line .t { color: var(--faint); margin-right: 7px; }
-
 .wrap { flex: 1; min-width: 0; max-width: 1180px; margin: 0 auto; padding: 26px 32px 60px; }
 
 header { display: flex; align-items: center; gap: 13px; margin-bottom: 28px; }
-header img { width: 40px; height: auto; }
 header .name { font-size: 17px; font-weight: 500; letter-spacing: -0.2px; }
 header .spacer { flex: 1; }
-.ghost {
-  background: none; border: 1px solid var(--line-strong); color: var(--muted);
-  border-radius: 10px; padding: 6px 11px; font: inherit; font-size: 14px; cursor: pointer;
+.fork-toggle {
+  background: none; border: none; cursor: pointer; display: none;
+  color: var(--muted); font: 17px/1 inherit; padding: 4px 6px 4px 0;
 }
-.ghost:hover { color: var(--ink); border-color: var(--ink); }
+body.on-live .fork-toggle { display: block; }
+.fork-toggle:hover { color: var(--ink); }
+.fork-toggle span { display: inline-block; transform: scaleX(-1); }
 
 /* project multi-select */
 .msel { position: relative; }
@@ -181,6 +167,32 @@ header .spacer { flex: 1; }
   color: var(--muted);
 }
 
+/* resume */
+.res-block { border-top: 1px solid var(--line); padding: 20px 0 14px; }
+.res-block:first-child { border-top: none; padding-top: 0; }
+.res-ws { font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--faint); margin-bottom: 8px; }
+.res-focus { font-size: 15px; font-weight: 500; }
+.res-focus .w { color: var(--faint); font-weight: 400; font-size: 13px; margin-left: 8px; }
+.res-logic { font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+.res-sec { display: block; margin: 18px 0 4px; }
+.res-row {
+  display: flex; align-items: baseline; gap: 12px; padding: 9px 4px;
+  border-bottom: 1px solid var(--line); cursor: pointer;
+}
+.res-row:hover { background: var(--lane); }
+.res-row .t { font-size: 14px; font-weight: 500; }
+.res-row .sub { font-size: 12.5px; color: var(--muted); }
+.res-row .why { margin-left: auto; font-size: 12px; color: var(--muted); flex: none; }
+.parked { font-size: 12.5px; color: var(--muted); margin-top: 14px; }
+.pill {
+  font-size: 11px; letter-spacing: .3px; color: var(--muted); flex: none;
+  border: 1px solid var(--line-strong); border-radius: 999px; padding: 1.5px 9px;
+}
+.pill.p0 { color: var(--p0); border-color: var(--p0); }
+.pill.p1 { color: var(--p1); border-color: var(--p1); }
+.pill.q { color: var(--p1); border-color: var(--p1); }
+.pill.done { color: var(--stage-done); border-color: var(--stage-done); }
+
 /* board: swimlanes */
 .cols-head { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding-bottom: 10px; }
 .cols-head .label { padding-left: 4px; }
@@ -212,9 +224,9 @@ header .spacer { flex: 1; }
 }
 .card.dim { color: var(--muted); font-weight: 400; }
 
-/* backlog */
+/* backlog rows (resume bottom) */
 .blog-row {
-  display: flex; align-items: baseline; gap: 14px; padding: 13px 6px;
+  display: flex; align-items: baseline; gap: 14px; padding: 11px 4px;
   border-bottom: 1px solid var(--line); cursor: pointer;
 }
 .blog-row:hover { background: var(--lane); }
@@ -253,14 +265,14 @@ header .spacer { flex: 1; }
 @media (max-width: 880px) {
   .wrap { padding: 18px 16px 60px; }
   header { flex-wrap: wrap; }
-  .side { display: none; }
+  .side { display: none !important; }
   .cols-head { display: none; }
   .lane-grid { grid-template-columns: 1fr; }
   .cell:empty { display: none; }
   .cell-label { display: block; padding-left: 2px; }
   .lane-meta { gap: 8px; }
   .progress { width: 44px; }
-  .blog-row { flex-wrap: wrap; row-gap: 2px; }
+  .blog-row, .res-row { flex-wrap: wrap; row-gap: 2px; }
 }
 
 /* drawer */
@@ -276,12 +288,6 @@ header .spacer { flex: 1; }
 .drawer .path { font-size: 12px; color: var(--faint); font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-bottom: 10px; }
 .drawer h2 { font-size: 19px; font-weight: 500; letter-spacing: -0.2px; margin-bottom: 14px; }
 .drawer .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px; }
-.pill {
-  font-size: 11px; letter-spacing: .3px; color: var(--muted);
-  border: 1px solid var(--line-strong); border-radius: 999px; padding: 1.5px 9px;
-}
-.pill.p0 { color: var(--p0); border-color: var(--p0); }
-.pill.p1 { color: var(--p1); border-color: var(--p1); }
 .md { font-size: 14.5px; }
 .md h1, .md h2, .md h3 { font-size: 13px; font-weight: 500; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); margin: 26px 0 10px; }
 .md p { margin: 0 0 12px; }
@@ -297,12 +303,14 @@ header .spacer { flex: 1; }
 .md input[type=checkbox] { accent-color: var(--accent); margin-right: 6px; }
 .footnote { margin-top: 60px; text-align: center; font-size: 12px; color: var(--faint); }
 
-/* activity terminal */
+/* activity terminal — Live Look only */
 .term {
+  display: none;
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 4;
   background: var(--term-bg); color: var(--term-text); border-top: 1px solid var(--term-line);
   font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
 }
+body.on-live .term { display: block; }
 .term-bar {
   display: flex; align-items: center; gap: 10px; padding: 9px 20px; cursor: pointer;
   user-select: none;
@@ -328,11 +336,6 @@ body.term-open .term-body { display: block; }
 <body>
 <div class="app">
 <aside class="side" id="side">
-  <div class="side-focus">
-    <span class="label" style="padding-bottom:8px">Current focus</span>
-    <div id="focusInfo"></div>
-    <div class="sf-recent" id="focusRecent"></div>
-  </div>
   <span class="label">Files</span>
   <div id="tree"></div>
 </aside>
@@ -349,14 +352,16 @@ body.term-open .term-body { display: block; }
   </header>
 
   <nav class="tabs" role="tablist">
-    <button class="tab active" data-view="board" role="tab">Board</button>
-    <button class="tab" data-view="backlog" role="tab">Backlog</button>
-    <button class="tab" data-view="live" role="tab" id="liveTab">Live<span class="dotn"></span></button>
+    <button class="tab active" data-view="resume" role="tab">Resume</button>
+    <button class="tab" data-view="live" role="tab" id="liveTab">Live Look<span class="dotn"></span></button>
   </nav>
 
-  <section id="view-board"></section>
-  <section id="view-backlog" hidden></section>
-  <section id="view-live" hidden></section>
+  <section id="view-resume"></section>
+  <section id="view-live" hidden>
+    <div id="board"></div>
+    <span class="label section-gap" style="display:block;margin-bottom:12px">Recent changes</span>
+    <div id="liveFeed"></div>
+  </section>
 
   <div class="footnote">read-only — every change is a file edit · git is the database</div>
 </div>
@@ -442,6 +447,7 @@ function openDrawer(item) {
   const p = (meta.priority || '').toLowerCase();
   if (p) pills += `<span class="pill ${p}">${esc(p.toUpperCase())}</span>`;
   for (const k of ['type', 'size', 'status']) if (meta[k]) pills += `<span class="pill">${esc(String(meta[k]).replace('_',' '))}</span>`;
+  if (meta.origin) pills += `<span class="pill">from ${esc(meta.origin)}</span>`;
   if (item._ws) pills += `<span class="pill">${esc(item._ws)}</span>`;
   const body = (item.body || '').replace(/^\s*# .*\n+/, '');
   $('drawer').innerHTML = `
@@ -467,7 +473,142 @@ async function openFile(ws, rel) {
   });
 }
 
-// --- board (swimlanes) ---
+// --- resume ---
+function resRow(opts) {
+  const el = document.createElement('div');
+  el.className = 'res-row';
+  el.innerHTML = `<span class="t">${esc(opts.title)}</span>` +
+    (opts.pill ? `<span class="pill ${opts.pillClass || ''}">${esc(opts.pill)}</span>` : '') +
+    (opts.sub ? `<span class="sub">${esc(opts.sub)}</span>` : '') +
+    (opts.why ? `<span class="why">${esc(opts.why)}</span>` : '');
+  if (opts.onclick) el.onclick = opts.onclick;
+  return el;
+}
+
+function renderResume(wss) {
+  const root = $('view-resume');
+  root.innerHTML = '';
+  const multi = wss.length > 1;
+
+  for (const ws of wss) {
+    const block = document.createElement('div');
+    block.className = 'res-block';
+    if (multi) block.innerHTML = `<div class="res-ws">${esc(ws.name)}</div>`;
+
+    // focus
+    const goals = (ws.config && ws.config.goals) || [];
+    if (goals.length) {
+      const top = goals.slice().sort((a, b) => (b.weight || 0) - (a.weight || 0))[0];
+      const alloc = (ws.config && ws.config.allocation) || {};
+      const mix = ['bugs', 'features', 'tech_debt', 'research'].filter(k => alloc[k] != null)
+        .map(k => `${k.replace('tech_', '')} ${Math.round(alloc[k] * 100)}`).join(' · ');
+      block.innerHTML += `<div class="res-focus">◎ ${esc(top.description || top.id)}<span class="w">${(top.weight ?? 0).toFixed(2)}</span></div>
+        <div class="res-logic">${((ws.config && ws.config.rules) || []).length} rules · ${mix}</div>`;
+    }
+
+    const specs = ws.specs.map(s => ({ ...s, _ws: ws.name }));
+    const threads = (ws.threads || []).map(t => ({ ...t, _ws: ws.name }));
+    const inprog = specs.filter(s => s.stage === 'in-progress');
+    const ready = specs.filter(s => s.stage === 'ready')
+      .sort((a, b) => (PRIO[a.meta.priority] ?? 9) - (PRIO[b.meta.priority] ?? 9));
+    const openLoops = [
+      ...threads.filter(t => ['question', 'decision', 'risk'].includes(t.meta.type) && t.meta.status === 'open'),
+      ...specs.filter(s => s.meta.status === 'blocked').map(s => ({ ...s, _loop: 'blocked spec' })),
+      ...specs.filter(s => s.stage === 'done' && !s.feedback).map(s => ({ ...s, _loop: 'feedback missing' })),
+    ];
+
+    // recommended next (mirrors /tl resume rules)
+    let next = null, why = '';
+    const openQ = threads.find(t => t.meta.type === 'question' && t.meta.status === 'open');
+    if (inprog.length) { next = inprog.slice().sort((a, b) => a.mtime - b.mtime)[0]; why = 'finish what’s started'; }
+    else if (openQ) { next = openQ; why = 'open loop before new work'; }
+    else if (ready.length) { next = ready[0]; why = 'top of the priority stack'; }
+    if (next) {
+      block.innerHTML += `<span class="label res-sec">Recommended next</span>`;
+      block.appendChild(resRow({
+        title: next.title, why,
+        pill: next.meta.priority ? next.meta.priority.toUpperCase() : (next.meta.type || ''),
+        pillClass: (next.meta.priority || (next.meta.type === 'question' ? 'q' : '')).toLowerCase(),
+        onclick: () => openDrawer(next),
+      }));
+    }
+
+    // open loops
+    block.innerHTML += `<span class="label res-sec">Open loops</span>`;
+    if (!openLoops.length) block.innerHTML += '<div class="empty">none — nothing unresolved</div>';
+    openLoops.slice(0, 6).forEach(l => block.appendChild(resRow({
+      title: l.title,
+      pill: l._loop || l.meta.type, pillClass: l.meta.type === 'question' ? 'q' : '',
+      onclick: () => openDrawer(l),
+    })));
+
+    // recent: decisions + completions
+    const recent = [
+      ...threads.filter(t => t.meta.type === 'decision').map(t => ({ ...t, _kind: 'decision' })),
+      ...specs.filter(s => s.stage === 'done').map(s => ({ ...s, _kind: 'done' })),
+    ].sort((a, b) => b.mtime - a.mtime).slice(0, 5);
+    block.innerHTML += `<span class="label res-sec">Recent</span>`;
+    if (!recent.length) block.innerHTML += '<div class="empty">no activity yet</div>';
+    recent.forEach(r => block.appendChild(resRow({
+      title: r.title,
+      pill: r._kind, pillClass: r._kind === 'done' ? 'done' : '',
+      onclick: () => openDrawer(r),
+    })));
+
+    // parked
+    const parked = threads.filter(t => t.meta.status === 'parked');
+    if (parked.length) {
+      const byType = {};
+      parked.forEach(t => { byType[t.meta.type] = (byType[t.meta.type] || 0) + 1; });
+      const breakdown = Object.entries(byType).map(([k, n]) => `${n} ${k}${n > 1 ? 's' : ''}`).join(', ');
+      const p = document.createElement('div');
+      p.className = 'parked';
+      p.textContent = `${parked.length} parked thread${parked.length > 1 ? 's' : ''} (${breakdown})`;
+      p.style.cursor = 'pointer';
+      p.onclick = () => openDrawer({
+        title: 'Parked threads', path: ws.name + '/threads/', _ws: ws.name,
+        meta: {},
+        body: parked.map(t => `- **${t.title}** (${t.meta.type}) — ${t.path}`).join('\n'),
+      });
+      block.appendChild(p);
+    }
+
+    root.appendChild(block);
+  }
+
+  // combined backlog
+  const backlogWrap = document.createElement('div');
+  backlogWrap.innerHTML = `<span class="label section-gap" style="display:block;margin-bottom:6px">Backlog</span>`;
+  const all = [];
+  for (const ws of wss) for (const s of ws.specs) { s._ws = ws.name; all.push(s); }
+  const ranked = all.filter(s => s.stage === 'ready')
+    .sort((a, b) => (PRIO[a.meta.priority] ?? 9) - (PRIO[b.meta.priority] ?? 9) || a.title.localeCompare(b.title));
+  const untriaged = all.filter(s => s.stage === 'triage');
+  if (!ranked.length && !untriaged.length) backlogWrap.innerHTML += '<div class="empty">Backlog is empty.</div>';
+  const intentName = s => {
+    const ws = wss.find(w => w.name === s._ws);
+    const ip = (s.meta.intent || '').replace(/^\.\//, '').trim();
+    const it = ws && ws.intents.find(i => i.path === ip);
+    return it ? it.title : null;
+  };
+  const blogRow = (s, n) => {
+    const el = document.createElement('div');
+    el.className = 'blog-row';
+    const sub = [intentName(s), multi ? s._ws : null].filter(Boolean).join(' · ');
+    const p = (s.meta.priority || '').toLowerCase();
+    el.innerHTML = `<span class="rank">${n ?? ''}</span>
+      <span class="blog-title">${esc(s.title)}</span>
+      ${sub ? `<span class="blog-sub">${esc(sub)}</span>` : ''}
+      <span class="blog-p ${p}">${esc(p.toUpperCase())}</span>`;
+    el.onclick = () => openDrawer(s);
+    return el;
+  };
+  ranked.forEach((s, i) => backlogWrap.appendChild(blogRow(s, i + 1)));
+  untriaged.forEach(s => backlogWrap.appendChild(blogRow(s)));
+  root.appendChild(backlogWrap);
+}
+
+// --- board (swimlanes, Live Look) ---
 const STAGES = ['triage', 'ready', 'in-progress', 'done'];
 const STAGE_NAMES = { triage: 'Triage', ready: 'Ready', 'in-progress': 'In progress', done: 'Done' };
 
@@ -480,7 +621,7 @@ function specCard(s) {
 }
 
 function renderBoard(wss) {
-  const root = $('view-board');
+  const root = $('board');
   root.innerHTML = '';
   const multi = wss.length > 1;
 
@@ -490,11 +631,7 @@ function renderBoard(wss) {
   root.appendChild(head);
 
   const lanes = [];
-  for (const ws of wss) {
-    for (const intent of ws.intents) {
-      lanes.push({ ws: ws.name, intent, specs: [] });
-    }
-  }
+  for (const ws of wss) for (const intent of ws.intents) lanes.push({ ws: ws.name, intent, specs: [] });
   const unattached = { ws: null, intent: null, specs: [] };
   for (const ws of wss) {
     for (const s of ws.specs) {
@@ -517,7 +654,6 @@ function renderBoard(wss) {
   for (const lane of lanes) {
     const el = document.createElement('div');
     el.className = 'swimlane';
-
     const total = lane.specs.length;
     const done = lane.specs.filter(s => s.stage === 'done').length;
     const p0 = lane.specs.filter(s => s.meta.priority === 'p0' && s.stage !== 'done').length;
@@ -557,52 +693,6 @@ function renderBoard(wss) {
   }
 }
 
-// --- backlog ---
-function renderBacklog(wss) {
-  const root = $('view-backlog');
-  root.innerHTML = '';
-  const multi = wss.length > 1;
-  const all = [];
-  for (const ws of wss) for (const s of ws.specs) { s._ws = ws.name; all.push(s); }
-
-  const ranked = all.filter(s => s.stage === 'ready')
-    .sort((a, b) => (PRIO[a.meta.priority] ?? 9) - (PRIO[b.meta.priority] ?? 9) || a.title.localeCompare(b.title));
-  const untriaged = all.filter(s => s.stage === 'triage');
-
-  const intentName = s => {
-    const ws = wss.find(w => w.name === s._ws);
-    const ip = (s.meta.intent || '').replace(/^\.\//, '').trim();
-    const it = ws && ws.intents.find(i => i.path === ip);
-    return it ? it.title : null;
-  };
-  const row = (s, n) => {
-    const el = document.createElement('div');
-    el.className = 'blog-row';
-    const sub = [intentName(s), multi ? s._ws : null].filter(Boolean).join(' · ');
-    const p = (s.meta.priority || '').toLowerCase();
-    el.innerHTML = `<span class="rank">${n ?? ''}</span>
-      <span class="blog-title">${esc(s.title)}</span>
-      ${sub ? `<span class="blog-sub">${esc(sub)}</span>` : ''}
-      <span class="blog-p ${p}">${esc(p.toUpperCase())}</span>`;
-    el.onclick = () => openDrawer(s);
-    return el;
-  };
-
-  if (!ranked.length && !untriaged.length) {
-    root.innerHTML = '<div class="empty">Backlog is empty.</div>';
-    return;
-  }
-  ranked.forEach((s, i) => root.appendChild(row(s, i + 1)));
-  if (untriaged.length) {
-    const h = document.createElement('div');
-    h.className = 'label section-gap';
-    h.style.display = 'block';
-    h.textContent = 'Untriaged';
-    root.appendChild(h);
-    untriaged.forEach(s => root.appendChild(row(s)));
-  }
-}
-
 // --- live diff feed ---
 let liveDiffs = [];
 function diffCard(d, multi) {
@@ -624,7 +714,7 @@ function diffCard(d, multi) {
   return el;
 }
 function renderLive() {
-  const root = $('view-live');
+  const root = $('liveFeed');
   root.innerHTML = '';
   const mine = liveDiffs.filter(d => selected.includes(d.ws));
   if (!mine.length) {
@@ -632,7 +722,7 @@ function renderLive() {
     return;
   }
   const multi = selected.length > 1;
-  mine.slice(0, 30).forEach(d => root.appendChild(diffCard(d, multi)));
+  mine.slice(0, 20).forEach(d => root.appendChild(diffCard(d, multi)));
 }
 
 // --- file tree sidebar ---
@@ -642,8 +732,7 @@ let expandedInit = expanded.size > 0;
 const changedMap = new Map();
 let treeData = [];
 
-// heat map: files warm up on change, cool over time
-const heat = new Map(); // key -> 0..1
+const heat = new Map();
 const HEAT_RGB = getComputedStyle(document.documentElement).getPropertyValue('--heat-rgb').trim() || '201,163,92';
 function heatColor(h) { return `rgba(${HEAT_RGB},${(h * 0.30).toFixed(3)})`; }
 function applyHeat(key) {
@@ -733,13 +822,14 @@ if (localStorage.getItem('tl-side') === '0') document.body.classList.add('side-c
 // --- tabs ---
 function setView(view) {
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.view === view));
-  for (const v of ['board', 'backlog', 'live']) $('view-' + v).hidden = v !== view;
+  $('view-resume').hidden = view !== 'resume';
+  $('view-live').hidden = view !== 'live';
+  document.body.classList.toggle('on-live', view === 'live');
   localStorage.setItem('tl-view', view);
   if (view === 'live') { $('liveTab').classList.remove('unseen'); renderLive(); }
 }
 document.querySelectorAll('.tab').forEach(btn => { btn.onclick = () => setView(btn.dataset.view); });
-const savedView = localStorage.getItem('tl-view');
-if (savedView && savedView !== 'board') setView(savedView);
+if (localStorage.getItem('tl-view') === 'live') setView('live');
 
 // --- activity terminal ---
 const termBody = $('termBody');
@@ -763,41 +853,8 @@ $('termBar').onclick = () => {
 };
 if (localStorage.getItem('tl-term') !== '0') document.body.classList.add('term-open');
 
-// --- current focus (sidebar) ---
-function renderFocus(wss) {
-  const info = $('focusInfo');
-  info.innerHTML = '';
-  for (const ws of wss) {
-    const goals = (ws.config && ws.config.goals) || [];
-    if (!goals.length) continue;
-    const top = goals.slice().sort((a, b) => (b.weight || 0) - (a.weight || 0))[0];
-    const alloc = (ws.config && ws.config.allocation) || {};
-    const rules = (ws.config && ws.config.rules) || [];
-    const mix = ['bugs', 'features', 'tech_debt', 'research']
-      .filter(k => alloc[k] != null)
-      .map(k => `${k.replace('tech_', '')} ${Math.round(alloc[k] * 100)}`).join(' · ');
-    const block = document.createElement('div');
-    block.innerHTML =
-      (wss.length > 1 ? `<div class="sf-ws">${esc(ws.name)}</div>` : '') +
-      `<div class="sf-goal">◎ ${esc(top.description || top.id)}<span class="w">${(top.weight ?? 0).toFixed(2)}</span></div>` +
-      `<div class="sf-logic">${rules.length} rules · ${mix}</div>`;
-    info.appendChild(block);
-  }
-  if (!info.children.length) info.innerHTML = '<div class="sf-logic">no goals configured</div>';
-}
-let focusLines = 0;
-function focusLog(msg) {
-  const t = new Date().toLocaleTimeString('en-GB', { hour12: false });
-  const el = document.createElement('div');
-  el.className = 'sf-line';
-  el.innerHTML = `<span class="t">${t}</span>${esc(msg)}`;
-  const r = $('focusRecent');
-  r.insertBefore(el, r.firstChild);
-  if (++focusLines > 6) { r.removeChild(r.lastChild); focusLines--; }
-}
-
 // --- events ---
-const NOISE_DIRS = ['specs', 'in-progress', 'done', 'triage', 'intents', '_metrics', 'context', 'outcome'];
+const NOISE_DIRS = ['specs', 'in-progress', 'done', 'triage', 'intents', 'threads', '_metrics', 'context', 'outcome'];
 function describeEvent(e) {
   if (!e.log && e.exists && !/\.\w+$/.test(e.path)) {
     const segs = e.path.split('/');
@@ -811,8 +868,13 @@ function describeEvent(e) {
       case 'override-log': return `override: ${l.spec} ${l.from} → ${l.to}`;
       case 'capture-log': return `bug captured → ${l.spec} (${l.affected_users ?? '?'} users)`;
       case 'dedup-log': return `dedup — merged ${l.merged ?? 0}, auto-closed ${l.auto_closed ?? 0}, flagged ${(l.flagged_dupes ?? 0) + (l.flagged_stale ?? 0)}`;
+      case 'cycle-log': return `spec completed → ${l.spec}`;
       default: return `${e.log.file}.jsonl +1 line`;
     }
+  }
+  if (/^threads\//.test(e.path)) {
+    if (!e.exists) return `thread removed — ${e.path}`;
+    return (e.change && e.change.status === 'A' ? 'thread captured — ' : 'thread updated — ') + e.path;
   }
   if (/priorities\.md$/.test(e.path)) return e.exists ? 'priorities.md rewritten' : 'priorities.md removed';
   if (!e.exists) return `removed ${e.path}`;
@@ -821,10 +883,6 @@ function describeEvent(e) {
   if (/feedback\.md$/.test(e.path)) return `feedback written — ${e.path}`;
   if (/triage\.yml$/.test(e.path)) return 'triage.yml edited — logic changed';
   return `updated ${e.path}`;
-}
-function isFocusEvent(e) {
-  if (e.log && (e.log.file === 'override-log' || e.log.file === 'triage-log')) return true;
-  return /(^|\/)(triage\.yml|priorities\.md)$/.test(e.path || '');
 }
 
 let refreshTimer = null;
@@ -838,7 +896,7 @@ function connectEvents() {
     if (!e.path && !e.log) return;
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => { loadSelected(); loadTrees(); }, 600);
-    if (e.exists && /\.(md|yml|yaml|jsonl)$/.test(e.path || '') && !e.change) return; // duplicate event
+    if (e.exists && /\.(md|yml|yaml|jsonl)$/.test(e.path || '') && !e.change) return;
 
     if (e.change) {
       const key = e.ws + '|' + e.path;
@@ -866,7 +924,6 @@ function connectEvents() {
     if (sig === lastMsg && Date.now() - lastAt < 2500) return;
     lastMsg = sig; lastAt = Date.now();
     termLog(e.ws, msg, { gone: !e.exists });
-    if (isFocusEvent(e) && selected.includes(e.ws)) focusLog(msg);
   };
 }
 
@@ -879,9 +936,8 @@ function syncButton() {
 async function loadSelected() {
   const wss = await Promise.all(selected.map(n =>
     fetch('/api/ws/' + encodeURIComponent(n)).then(r => r.json())));
+  renderResume(wss);
   renderBoard(wss);
-  renderBacklog(wss);
-  renderFocus(wss);
   syncButton();
 }
 function buildPanel() {
@@ -909,7 +965,7 @@ addEventListener('click', e => { if (!e.target.closest('.msel')) $('msel').class
 async function boot() {
   connectEvents();
   available = await (await fetch('/api/workspaces')).json();
-  if (!available.length) { $('view-board').innerHTML = '<div class="empty">No workspaces found — run /tl:new</div>'; return; }
+  if (!available.length) { $('view-resume').innerHTML = '<div class="empty">No workspaces found — run /tl:new</div>'; return; }
   try { selected = JSON.parse(localStorage.getItem('tl-sel') || '[]').filter(n => available.some(w => w.name === n)); }
   catch { selected = []; }
   if (!selected.length) selected = [available[0].name];

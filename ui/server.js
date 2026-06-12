@@ -189,6 +189,16 @@ function readWorkspace(ws) {
     ...readStage(dir, 'done', 'done'),
   ];
 
+  const threads = [];
+  const threadsDir = path.join(dir, 'threads');
+  if (isDir(threadsDir)) {
+    for (const f of fs.readdirSync(threadsDir).sort()) {
+      if (!f.endsWith('.md')) continue;
+      const { meta, body } = parseFrontmatter(safeRead(path.join(threadsDir, f)) || '');
+      threads.push({ path: 'threads/' + f, title: meta.title || f, meta, body, mtime: mtime(path.join(threadsDir, f)) });
+    }
+  }
+
   const metrics = {};
   const metricsDir = path.join(dir, '_metrics');
   if (isDir(metricsDir)) {
@@ -205,7 +215,7 @@ function readWorkspace(ws) {
 
   return {
     name: ws.name, example: ws.example,
-    config, intents, specs, metrics,
+    config, intents, specs, threads, metrics,
     priorities: safeRead(path.join(dir, 'priorities.md')),
     project: parseFrontmatter(safeRead(path.join(dir, 'PROJECT.md')) || '').meta,
   };
