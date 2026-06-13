@@ -114,82 +114,91 @@ body.on-live .bar { position: fixed; left: 0; right: 0; }
   text-transform: uppercase; color: var(--dim);
 }
 
-/* ════ RESUME (journal) ════ */
+/* ════ RESUME (boarding pass) ════ */
 #view-resume { min-height: calc(100vh - 49px); }
 .datestrip { border-bottom: 1px solid var(--line); background: var(--surface); }
 .datestrip > div {
-  max-width: 64rem; margin: 0 auto; padding: 8px 24px;
+  max-width: 40rem; margin: 0 auto; padding: 8px 24px;
   display: flex; justify-content: space-between;
   font-family: var(--mono); font-size: .65rem; color: var(--dim);
 }
-.paper { max-width: 64rem; margin: 0 auto; padding: 40px 24px 80px; }
+.paper { max-width: 40rem; margin: 0 auto; padding: 32px 24px 70px; }
+.res-block + .res-block { margin-top: 2.6rem; padding-top: 2rem; border-top: 1px solid var(--line); }
+.res-ws { font-family: var(--mono); font-size: .6rem; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin: 0 0 12px; }
 
-.masthead { margin-bottom: 2.2rem; }
-.masthead .eyebrow { margin-bottom: .6rem; }
-.masthead h1 {
-  font-family: var(--serif); font-size: 1.65rem; line-height: 1.35;
-  font-weight: 500; margin-bottom: .75rem;
-}
-.masthead .okrs { display: flex; flex-wrap: wrap; gap: 4px 20px; }
-.masthead .okr { display: flex; align-items: center; gap: 7px; font-size: .8rem; color: var(--mid); }
-.masthead .okr::before { content: ''; width: 4px; height: 4px; border-radius: 50%; background: var(--dim); }
-.rule { border-top: 2px solid var(--ink); border-bottom: 1px solid var(--line2); height: 4px; margin-bottom: 2.2rem; }
+.bp-status { font-family: var(--mono); font-size: .72rem; color: var(--mid); margin: 0 0 7px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
+.bp-status:hover { color: var(--ink); }
+.bp-status .gl { color: var(--ok); }
+.bp-status .ar { color: var(--faint); transition: transform .12s; display: inline-block; }
+.bp-status.open .ar { transform: rotate(90deg); }
 
-.next-action {
-  background: var(--accent-bg); border: 1px solid var(--accent-line);
-  border-left: 3px solid var(--accent); border-radius: 2px;
-  padding: 1.2rem 1.5rem; margin-bottom: 2.4rem;
-}
-.next-action .head { display: flex; justify-content: space-between; gap: 16px; margin-bottom: .5rem; }
-.next-action .head .label { color: var(--accent); }
-.next-action .chip {
-  font-family: var(--mono); font-size: .62rem; color: var(--accent);
-  background: rgba(181,113,42,.1); padding: 2px 8px; border-radius: 2px; white-space: nowrap;
-}
-.next-action .summary { font-family: var(--serif); font-size: 1.05rem; line-height: 1.5; margin-bottom: .45rem; }
-.next-action .reason { font-size: .82rem; color: var(--mid); }
-.next-action .cta {
-  display: flex; justify-content: flex-end; margin-top: .9rem;
-}
-.next-action .cta button {
-  font-family: var(--mono); font-size: .65rem; letter-spacing: .06em; color: var(--accent);
-  background: rgba(181,113,42,.12); border: 1px solid var(--accent-line); border-radius: 2px;
-  padding: 5px 12px; cursor: pointer;
-}
-.next-action .cta button:hover { opacity: .7; }
+.bp-goal { font-family: var(--serif); font-size: .98rem; color: var(--ink); line-height: 1.4; margin: 0 0 26px; }
+.bp-goal .gtext { border-bottom: 1px dashed transparent; cursor: text; }
+.bp-goal .gtext:hover { border-bottom-color: var(--line2); }
+.bp-goal .gmeta { font-family: var(--mono); font-size: .68rem; color: var(--dim); white-space: nowrap; }
+.bp-goal .gmeta .wt { cursor: text; border-bottom: 1px dashed transparent; }
+.bp-goal .gmeta .wt:hover { border-bottom-color: var(--line2); }
+.bp-goal .gmeta .ed { color: var(--accent); cursor: pointer; }
+.bp-goal input { font-family: inherit; font-size: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--accent-line); border-radius: 3px; padding: 3px 7px; }
 
-.res-cols { display: grid; grid-template-columns: 1fr 1fr 280px; gap: 40px; }
-@media (max-width: 900px) { .res-cols { grid-template-columns: 1fr; gap: 24px; } body.on-live .bar { position: sticky; } }
+.hero { background: #1c1916; border: 1px solid rgba(181,113,42,.22); border-left: 3px solid #b5712a; border-radius: 2px; padding: 1.4rem 1.6rem; cursor: pointer; transition: background .12s; }
+.hero.flat { cursor: default; }
+.hero:not(.flat):hover { background: #211d19; }
+.hero .head { display: flex; justify-content: space-between; gap: 16px; margin-bottom: .6rem; }
+.hero .fl { font-family: var(--mono); font-size: .62rem; letter-spacing: .12em; text-transform: uppercase; color: #e2a55e; }
+.hero .chip { font-family: var(--mono); font-size: .62rem; color: #e2a55e; background: rgba(226,165,94,.12); padding: 2px 8px; border-radius: 2px; white-space: nowrap; }
+.hero .chip.clear { color: #8fc7a0; background: rgba(58,125,85,.2); }
+.hero .summary { font-family: var(--serif); font-size: 1.12rem; line-height: 1.45; color: #f5f1e8; margin: 0 0 .5rem; }
+.hero .reason { font-size: .8rem; color: #a89f8d; margin: 0; }
+.hero .hint { font-family: var(--mono); font-size: .56rem; letter-spacing: .04em; color: #6f655a; margin-top: .9rem; text-align: right; }
+.hero-body { margin-top: 1.2rem; padding-top: 1.1rem; border-top: 1px solid rgba(245,241,232,.12); display: none; }
+.hero.open .hero-body { display: block; }
+.hero-body .md { color: #cfc8bb; font-size: .8rem; }
+.hero-body .md h1, .hero-body .md h2, .hero-body .md h3 { color: #e2a55e; }
+.hero-body .md code { background: rgba(255,255,255,.08); color: #d8d2c6; }
+.hero-body .md pre { background: rgba(0,0,0,.3); }
+.hero-body .md a { color: #c4b59a; }
+.hero-body .md input[type=checkbox] { accent-color: #b5712a; }
 
-.loop-row { display: flex; align-items: flex-start; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.bp-loops { display: flex; align-items: center; gap: 10px; padding: 14px 2px 13px; border-bottom: 1px solid var(--line); margin-top: 8px; cursor: pointer; }
+.bp-loops svg { flex: none; }
+.bp-loops .lt { flex: 1; font-size: .82rem; color: var(--ink); }
+.bp-loops .lt .tag { font-family: var(--mono); font-size: .6rem; margin-right: 6px; }
+.bp-loops .ct { font-family: var(--mono); font-size: .62rem; color: var(--dim); white-space: nowrap; }
+
+.bp-counts { display: flex; align-items: center; gap: 18px; padding: 16px 2px 0; font-family: var(--mono); font-size: .62rem; }
+.bp-counts .ci { color: var(--dim); cursor: pointer; }
+.bp-counts .ci.open, .bp-counts .ci:hover { color: var(--ink); }
+.bp-counts .ci b { color: var(--mid); font-weight: 400; }
+.bp-counts .cap { margin-left: auto; color: var(--dim); cursor: pointer; }
+.bp-counts .cap:hover { color: var(--ink); }
+.bp-counts input { font-family: var(--sans); font-size: .8rem; background: var(--card); border: 1px solid var(--accent-line); border-radius: 3px; padding: 4px 9px; width: 260px; }
+
+.expand { display: none; padding: 2px 0 6px; }
+.expand.open { display: block; }
+.loop-row { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
 .loop-row:hover { background: var(--surface); }
-.loop-row svg { flex: none; margin-top: 3px; }
-.loop-row .txt { flex: 1; font-size: .84rem; line-height: 1.45; }
-.loop-row .age { font-family: var(--mono); font-size: .62rem; color: var(--dim); flex: none; }
-
-.dec-row { display: flex; align-items: flex-start; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
-.dec-row:hover { background: var(--surface); }
-.dec-row .txt { flex: 1; font-family: var(--serif); font-style: italic; font-size: .88rem; line-height: 1.5; }
-.dec-row .age { font-family: var(--mono); font-size: .62rem; color: var(--dim); flex: none; }
-
-.parked-pill {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-top: 20px; padding: 10px 12px; cursor: pointer;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 2px;
-}
-.parked-pill .n { font-family: var(--mono); font-size: .8rem; color: var(--mid); }
-
-.bl-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
-.bl-row:hover { background: var(--surface); }
+.loop-row svg, .loop-row .gly { flex: none; margin-top: 3px; }
+.loop-row .txt { flex: 1; }
+.loop-row .txt .t { font-size: .82rem; line-height: 1.4; color: var(--ink); }
+.loop-row .txt .sub { font-family: var(--mono); font-size: .58rem; color: var(--dim); margin-top: 1px; }
+.loop-row .age { font-family: var(--mono); font-size: .6rem; color: var(--dim); flex: none; }
+.bl-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .bl-row .rank { font-family: var(--mono); font-size: .6rem; color: var(--faint); min-width: 14px; text-align: right; }
-.bl-row .nm { flex: 1; font-family: var(--mono); font-size: .72rem; color: var(--mid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bl-row .st, .bl-row .pri { font-family: var(--mono); font-size: .6rem; flex: none; }
-.legend { display: flex; flex-direction: column; gap: 4px; margin-top: 16px; }
-.legend div { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: .6rem; color: var(--dim); }
-
-.res-block + .res-block { margin-top: 3.5rem; }
-.footnote { margin-top: 60px; text-align: center; font-family: var(--mono); font-size: .62rem; color: var(--faint); }
-.empty { font-size: .8rem; color: var(--dim); padding: 8px 0; }
+.bl-row .nm { flex: 1; min-width: 0; }
+.bl-row .nm .t { font-family: var(--mono); font-size: .7rem; color: var(--ink); cursor: pointer; }
+.bl-row .nm .t:hover { text-decoration: underline; }
+.bl-row .nm .d { font-size: .68rem; color: var(--dim); }
+.bl-row .st { font-family: var(--mono); font-size: .58rem; flex: none; }
+.bl-row .pri { font-family: var(--mono); font-size: .6rem; flex: none; cursor: pointer; border: 1px solid var(--line2); border-radius: 3px; padding: 1px 6px; }
+.bl-row .pri:hover { border-color: var(--accent); color: var(--accent); }
+.bl-row select { font-family: var(--mono); font-size: .62rem; padding: 1px; }
+.dec-row { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.dec-row:hover { background: var(--surface); }
+.dec-row .txt { flex: 1; font-family: var(--serif); font-style: italic; font-size: .86rem; line-height: 1.5; }
+.dec-row .age { font-family: var(--mono); font-size: .6rem; color: var(--dim); flex: none; }
+.footnote { margin-top: 46px; text-align: center; font-family: var(--mono); font-size: .62rem; color: var(--faint); }
+.empty { font-size: .78rem; color: var(--dim); padding: 8px 0; }
 
 /* ════ LIVE LOOK (mission control) ════ */
 #view-live {
@@ -464,6 +473,20 @@ function loopIcon(kind) {
   return IC.chat('#c0622a');
 }
 
+const LOOP = {
+  risk:     { c: '#a83232', sev: 0, ic: IC.risk },
+  question: { c: '#6b57c7', sev: 1, ic: IC.question },
+  blocked:  { c: '#c0622a', sev: 2, ic: IC.ban },
+  feedback: { c: '#c0622a', sev: 3, ic: IC.chat },
+  decision: { c: '#6b57c7', sev: 4, ic: IC.chat },
+};
+async function postJSON(p, body) {
+  const r = await fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) { let e = {}; try { e = await r.json(); } catch {} throw new Error(e.error || ('HTTP ' + r.status)); }
+  return r.json();
+}
+const specFileOf = item => { const p = item.path || ''; return p.endsWith('/') ? p + 'SPEC.md' : p; };
+
 function renderResume(wss) {
   $('dsProj').textContent = wss.map(w => w.name).join(' · ');
   $('dsDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -474,147 +497,224 @@ function renderResume(wss) {
   for (const ws of wss) {
     const block = document.createElement('div');
     block.className = 'res-block';
+    if (multi) block.innerHTML = `<div class="res-ws">${esc(ws.name)}</div>`;
+
     const specs = ws.specs.map(s => ({ ...s, _ws: ws.name }));
     const threads = (ws.threads || []).map(t => ({ ...t, _ws: ws.name }));
     const goals = (ws.config && ws.config.goals) || [];
     const top = goals.slice().sort((a, b) => (b.weight || 0) - (a.weight || 0))[0];
-
-    // masthead
-    const mast = document.createElement('section');
-    mast.className = 'masthead';
-    mast.innerHTML = `
-      <p class="label eyebrow">${multi ? esc(ws.name) + ' · ' : ''}GOAL IN FOCUS${top ? ' · weight ' + (top.weight ?? 0).toFixed(1) : ''}</p>
-      <h1>${esc(top ? (top.description || top.id) : 'No goals configured — edit TRIAGE.yml')}</h1>
-      <div class="okrs">${(top && top.key_results || []).map(k => `<span class="okr">${esc(k)}</span>`).join('')}</div>`;
-    block.appendChild(mast);
-    block.insertAdjacentHTML('beforeend', '<div class="rule"></div>');
-
-    // recommended next
+    const done = specs.filter(s => s.stage === 'done').sort((a, b) => b.mtime - a.mtime);
     const inprog = specs.filter(s => s.stage === 'in-progress');
     const ready = specs.filter(s => s.stage === 'ready').sort((a, b) => (PRIO[a.meta.priority] ?? 9) - (PRIO[b.meta.priority] ?? 9));
-    const openQ = threads.find(t => t.meta.type === 'question' && t.meta.status === 'open');
-    let next = null, why = '';
-    if (inprog.length) { next = inprog.slice().sort((a, b) => a.mtime - b.mtime)[0]; why = 'Finish what’s started — work is already in progress.'; }
-    else if (openQ) { next = openQ; why = 'An open question is upstream of new work.'; }
-    else if (ready.length) { next = ready[0]; why = 'Top of the priority stack.'; }
-    const na = document.createElement('section');
-    na.className = 'next-action';
-    if (next) {
-      const slug = (next.path || '').replace(/\/$/, '').split('/').pop();
-      na.innerHTML = `
-        <div class="head"><span class="label">NEXT ACTION</span><span class="chip">${esc(slug)}</span></div>
-        <p class="summary">${esc(next.title)}</p>
-        <p class="reason">${esc(why)}</p>
-        <div class="cta"><button>open spec ${IC.arrow('#b5712a')}</button></div>`;
-      na.querySelector('.cta button').onclick = () => openDrawer(next);
+    const triage = specs.filter(s => s.stage === 'triage');
+
+    // ── status line (expand → completions + in-progress) ──
+    const status = document.createElement('p');
+    status.className = 'bp-status';
+    const lastDone = done[0];
+    status.innerHTML = `<span class="gl">✓</span> ${done.length} done${inprog.length ? ' · ' + inprog.length + ' in progress' : ''}${lastDone ? ' · last ' + rel(lastDone.mtime) : ''} <span class="ar">›</span>`;
+    const statusEx = document.createElement('div'); statusEx.className = 'expand';
+    [...inprog.map(s => ({ s, k: '▸', c: '#6b57c7' })), ...done.slice(0, 10).map(s => ({ s, k: '✓', c: '#3a7d55' }))].forEach(({ s, k, c }) => {
+      const r = document.createElement('div'); r.className = 'loop-row';
+      r.innerHTML = `<span class="gly mono" style="font-size:.62rem;color:${c}">${k}</span><div class="txt"><div class="t">${esc(s.title)}</div></div><span class="age">${rel(s.mtime)}</span>`;
+      r.onclick = () => openDrawer(s); statusEx.appendChild(r);
+    });
+    if (!inprog.length && !done.length) statusEx.innerHTML = '<div class="empty">nothing completed yet</div>';
+    status.onclick = () => { status.classList.toggle('open'); statusEx.classList.toggle('open'); };
+    block.appendChild(status); block.appendChild(statusEx);
+
+    // ── goal line (inline editable) ──
+    const goalEl = document.createElement('p');
+    goalEl.className = 'bp-goal';
+    if (top) {
+      const desc = top.description || top.id;
+      const wRaw = String(top.weight ?? 0);
+      goalEl.innerHTML = `<span class="gtext">${esc(desc)}</span><span class="gmeta">&nbsp; <span class="wt">${(top.weight ?? 0).toFixed(2)}</span> · ${(top.key_results || []).length} KRs · <span class="ed">edit ›</span></span>`;
+      const editDesc = () => {
+        const span = goalEl.querySelector('.gtext');
+        const inp = document.createElement('input'); inp.value = desc; inp.style.width = '440px'; inp.style.maxWidth = '100%';
+        span.replaceWith(inp); inp.focus(); inp.select();
+        const commit = async () => {
+          const v = inp.value.trim();
+          if (v && v !== desc) { try { await postJSON('/api/goal', { ws: ws.name, field: 'description', old: desc, new: v }); loadSelected(); return; } catch (e) { alert(e.message); } }
+          loadSelected();
+        };
+        inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } if (e.key === 'Escape') loadSelected(); };
+        inp.onblur = commit;
+      };
+      goalEl.querySelector('.gtext').onclick = editDesc;
+      goalEl.querySelector('.ed').onclick = editDesc;
+      const wtEl = goalEl.querySelector('.wt');
+      wtEl.onclick = () => {
+        const inp = document.createElement('input'); inp.value = wRaw; inp.style.width = '54px';
+        wtEl.replaceWith(inp); inp.focus(); inp.select();
+        const commit = async () => {
+          const v = inp.value.trim();
+          if (v && v !== wRaw) { try { await postJSON('/api/goal', { ws: ws.name, field: 'weight', old: wRaw, new: v }); loadSelected(); return; } catch (e) { alert(e.message); } }
+          loadSelected();
+        };
+        inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } if (e.key === 'Escape') loadSelected(); };
+        inp.onblur = commit;
+      };
     } else {
-      na.innerHTML = `
-        <div class="head"><span class="label">NEXT ACTION</span></div>
-        <p class="summary">The queue is empty — decompose the next slice of an intent into a spec.</p>
-        <p class="reason">No specs in progress, no open questions, nothing ready. The intent → spec handoff is yours.</p>`;
+      goalEl.innerHTML = `<span class="gmeta">No goal configured · edit TRIAGE.yml</span>`;
     }
-    block.appendChild(na);
+    block.appendChild(goalEl);
 
-    // three columns
-    const cols = document.createElement('div');
-    cols.className = 'res-cols';
+    // ── hero (in focus) ──
+    const openQ = threads.find(t => t.meta.type === 'question' && t.meta.status === 'open');
+    let next = null, kind = '';
+    if (ready.length) { next = ready[0]; kind = 'spec'; }
+    else if (openQ) { next = openQ; kind = 'question'; }
 
-    // open loops
+    const hero = document.createElement('div');
+    hero.className = 'hero';
+    if (next) {
+      const slug = (next.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
+      const p = (next.meta.priority || '').toUpperCase();
+      const chip = kind === 'spec' ? `${esc(slug)}${p ? ' · ' + esc(p) : ''}` : `${esc(slug)} · question`;
+      const reason = kind === 'spec'
+        ? `Needs you: top of the stack${next.meta.status === 'blocked' ? ', but blocked' : ', unblocked'} — read it, then delegate.`
+        : `Needs you: an open question, upstream of new work.`;
+      hero.innerHTML = `
+        <div class="head"><span class="fl">In focus</span><span class="chip">${chip}</span></div>
+        <p class="summary">${esc(next.title)}</p>
+        <p class="reason">${reason}</p>
+        <p class="hint">click to ${kind === 'spec' ? 'read the spec' : 'read the thread'} ↓</p>
+        <div class="hero-body"><div class="md">loading…</div></div>`;
+      let loaded = false;
+      hero.onclick = async () => {
+        hero.classList.toggle('open');
+        hero.querySelector('.hint').textContent = hero.classList.contains('open') ? 'click to collapse ↑' : 'click to read ↓';
+        if (hero.classList.contains('open') && !loaded) {
+          loaded = true;
+          try {
+            const f = await (await fetch(`/api/file?ws=${encodeURIComponent(ws.name)}&path=${encodeURIComponent(specFileOf(next))}`)).json();
+            const body = (f.content || '').replace(/^---\n[\s\S]*?\n---\n/, '').replace(/^\s*# .*\n+/, '');
+            hero.querySelector('.hero-body .md').innerHTML = md(body);
+          } catch { hero.querySelector('.hero-body .md').textContent = 'could not load file'; }
+        }
+      };
+    } else if (inprog.length) {
+      hero.className = 'hero flat';
+      hero.innerHTML = `
+        <div class="head"><span class="fl">In focus</span><span class="chip clear">all clear</span></div>
+        <p class="summary">${inprog.length} ${inprog.length > 1 ? 'agents are' : 'agent is'} working. Nothing needs you right now.</p>
+        <p class="reason">${inprog.map(s => esc((s.path || '').replace(/\/$/, '').split('/').pop())).join(' · ')} in progress · no open questions blocking.</p>
+        <p class="hint" style="cursor:pointer">watch in live look →</p>`;
+      hero.querySelector('.hint').onclick = () => setView('live');
+    } else {
+      hero.className = 'hero flat';
+      hero.innerHTML = `
+        <div class="head"><span class="fl">In focus</span></div>
+        <p class="summary">Queue is empty — decompose the next slice of an intent into a spec.</p>
+        <p class="reason">Nothing ready, in progress, or unresolved. The intent → spec handoff is yours.</p>`;
+    }
+    block.appendChild(hero);
+
+    // ── loops line (expand → all loops) ──
     const loops = [
-      ...threads.filter(t => ['question', 'decision', 'risk'].includes(t.meta.type) && t.meta.status === 'open')
-        .map(t => ({ ...t, _kind: t.meta.type })),
-      ...specs.filter(s => s.meta.status === 'blocked').map(s => ({ ...s, _kind: 'blocked' })),
-      ...specs.filter(s => s.stage === 'done' && !s.feedback)
-        .map(s => ({ ...s, _kind: 'feedback', title: s.title + ' — FEEDBACK.md not yet written' })),
-    ];
-    const c1 = document.createElement('section');
-    c1.innerHTML = `<p class="label" style="margin-bottom:.75rem">Open loops (${loops.length})</p>`;
-    if (!loops.length) c1.innerHTML += '<div class="empty">nothing unresolved</div>';
-    loops.slice(0, 8).forEach(l => {
-      const r = document.createElement('div');
-      r.className = 'loop-row';
-      r.innerHTML = `${loopIcon(l._kind)}<p class="txt">${esc(l.title)}</p><span class="age">${rel(l.mtime)}</span>`;
-      r.onclick = () => openDrawer(l);
-      c1.appendChild(r);
-    });
-    const parked = threads.filter(t => t.meta.status === 'parked');
-    if (parked.length) {
-      const pp = document.createElement('div');
-      pp.className = 'parked-pill';
-      pp.innerHTML = `<span style="display:flex;align-items:center;gap:8px">${IC.archive('#8a8070')}<span class="label" style="letter-spacing:.06em">PARKED THREADS</span></span><span class="n">${parked.length}</span>`;
-      pp.onclick = () => openDrawer({
-        title: 'Parked threads', path: ws.name + '/threads/', _ws: ws.name, meta: {},
-        body: parked.map(t => `- **${t.title}** (${t.meta.type}) — ${t.path}`).join('\n'),
+      ...threads.filter(t => ['question', 'risk', 'decision'].includes(t.meta.type) && t.meta.status === 'open').map(t => ({ ...t, _k: t.meta.type })),
+      ...specs.filter(s => s.meta.status === 'blocked').map(s => ({ ...s, _k: 'blocked' })),
+      ...specs.filter(s => s.stage === 'done' && !s.feedback).map(s => ({ ...s, _k: 'feedback', title: s.title + ' — FEEDBACK.md not written' })),
+    ].sort((a, b) => LOOP[a._k].sev - LOOP[b._k].sev);
+    const loopsLine = document.createElement('div');
+    loopsLine.className = 'bp-loops';
+    const loopsEx = document.createElement('div'); loopsEx.className = 'expand';
+    if (loops.length) {
+      const t0 = loops[0], lm = LOOP[t0._k];
+      loopsLine.innerHTML = `${lm.ic(lm.c)}<span class="lt"><span class="tag" style="color:${lm.c}">${t0._k.toUpperCase()}</span>${esc(t0.title)}</span><span class="ct">${loops.length} open loop${loops.length > 1 ? 's' : ''} ›</span>`;
+      loops.forEach(l => {
+        const m = LOOP[l._k];
+        const r = document.createElement('div'); r.className = 'loop-row';
+        const origin = l.meta && l.meta.origin ? ' · ' + l.meta.origin : '';
+        r.innerHTML = `${m.ic(m.c)}<div class="txt"><div class="t">${esc(l.title)}</div><div class="sub">${l._k.toUpperCase()}${esc(origin)} · ${rel(l.mtime)}</div></div>`;
+        r.onclick = () => openDrawer(l);
+        loopsEx.appendChild(r);
       });
-      c1.appendChild(pp);
+      loopsLine.onclick = () => loopsEx.classList.toggle('open');
+    } else {
+      loopsLine.innerHTML = `${IC.check('#3a7d55')}<span class="lt" style="color:var(--dim)">No open loops — nothing unresolved.</span>`;
+      loopsLine.style.cursor = 'default';
     }
-    cols.appendChild(c1);
+    block.appendChild(loopsLine); block.appendChild(loopsEx);
 
-    // decisions
+    // ── counts row (backlog / decisions / parked / capture) ──
+    const stCol = { ready: '#3a7d55', blocked: '#c0622a', triage: '#8a8070' };
+    const prCol = { p0: '#a83232', p1: '#c0622a', p2: '#6b57c7', p3: '#8a8070', '': '#8a8070' };
     const decs = threads.filter(t => t.meta.type === 'decision').sort((a, b) => b.mtime - a.mtime);
-    const c2 = document.createElement('section');
-    c2.innerHTML = `<p class="label" style="margin-bottom:.75rem">Recent decisions</p>`;
-    if (!decs.length) c2.innerHTML += '<div class="empty">no decisions recorded yet</div>';
-    decs.slice(0, 5).forEach(d => {
-      const r = document.createElement('div');
-      r.className = 'dec-row';
-      r.innerHTML = `${IC.check('#3a7d55')}<p class="txt">${esc(d.title)}</p><span class="age">${rel(d.mtime)}</span>`;
-      r.onclick = () => openDrawer(d);
-      c2.appendChild(r);
-    });
-    // last activity — mirrors /tl resume section 2
-    const acts = [
-      ...specs.filter(s => s.stage === 'done').map(s => ({ t: 'completed', it: s })),
-      ...inprog.map(s => ({ t: 'started', it: s })),
-    ].sort((a, b) => b.it.mtime - a.it.mtime).slice(0, 3);
-    const tlog = (ws.metrics && ws.metrics['triage-log']) || [];
-    c2.insertAdjacentHTML('beforeend', `<p class="label" style="margin:1.6rem 0 .75rem">Last activity</p>`);
-    if (!acts.length && !tlog.length) c2.innerHTML += '<div class="empty">no activity yet</div>';
-    acts.forEach(a => {
-      const r = document.createElement('div');
-      r.className = 'loop-row';
-      r.innerHTML = `<span class="mono" style="font-size:.6rem;color:${a.t === 'completed' ? '#3a7d55' : '#6b57c7'};margin-top:3px;flex:none">${a.t === 'completed' ? '✓' : '▸'}</span>
-        <p class="txt">${esc(a.it.title)}</p><span class="age">${rel(a.it.mtime)}</span>`;
-      r.onclick = () => openDrawer(a.it);
-      c2.appendChild(r);
-    });
-    if (tlog.length) c2.insertAdjacentHTML('beforeend',
-      `<div class="empty" style="padding-top:10px">last triage ${esc(tlog[tlog.length - 1].date)} · ${tlog[tlog.length - 1].overrides_detected ?? 0} overrides</div>`);
-    cols.appendChild(c2);
+    const parked = threads.filter(t => t.meta.status === 'parked');
+    const backlog = [...ready.map(s => ({ s, st: s.meta.status === 'blocked' ? 'blocked' : 'ready' })), ...triage.map(s => ({ s, st: 'triage' }))];
+    const intentName = s => {
+      const ip = (s.meta.intent || '').replace(/^\.\//, '').trim();
+      const it = ws.intents.find(i => i.path === ip);
+      return it ? it.title : '';
+    };
 
-    // ranked backlog
-    const stCol = { ready: '#3a7d55', blocked: '#c0622a', feedback: '#6b57c7', triage: '#8a8070' };
-    const prCol = { p0: '#a83232', p1: '#c0622a', p2: '#6b57c7', p3: '#8a8070' };
-    const bl = [
-      ...ready.map(s => ({ s, st: s.meta.status === 'blocked' ? 'blocked' : 'ready' })),
-      ...specs.filter(s => s.stage === 'done' && !s.feedback).map(s => ({ s, st: 'feedback' })),
-      ...specs.filter(s => s.stage === 'triage').map(s => ({ s, st: 'triage' })),
-    ];
-    const c3 = document.createElement('section');
-    c3.innerHTML = `<p class="label" style="margin-bottom:.75rem">Ranked backlog</p>`;
-    if (!bl.length) c3.innerHTML += '<div class="empty">backlog is empty</div>';
-    bl.slice(0, 10).forEach((b, i) => {
-      const slug = (b.s.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
-      const p = (b.s.meta.priority || '').toLowerCase();
-      const r = document.createElement('div');
-      r.className = 'bl-row';
-      r.innerHTML = `<span class="rank">${i + 1}</span><span class="nm">${esc(slug)}</span>
-        <span class="st" style="color:${stCol[b.st]}">●</span>
-        <span class="pri" style="color:${prCol[p] || '#8a8070'};min-width:18px">${esc(p.toUpperCase())}</span>`;
-      r.onclick = () => openDrawer(b.s);
-      c3.appendChild(r);
-    });
-    c3.insertAdjacentHTML('beforeend', `<div class="legend">
-      <div><span style="color:#3a7d55">●</span> ready</div>
-      <div><span style="color:#c0622a">●</span> blocked</div>
-      <div><span style="color:#6b57c7">●</span> needs feedback</div>
-      <div><span style="color:#8a8070">●</span> triage</div></div>`);
-    cols.appendChild(c3);
+    const counts = document.createElement('div'); counts.className = 'bp-counts';
+    counts.innerHTML = `<span class="ci" data-x="bl">backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">parked <b>${parked.length}</b></span><span class="cap">+ park a thought</span>`;
+    const countsEx = document.createElement('div'); countsEx.className = 'expand';
 
-    block.appendChild(cols);
+    const builders = {
+      bl: () => {
+        countsEx.innerHTML = '';
+        if (!backlog.length) { countsEx.innerHTML = '<div class="empty">backlog is empty</div>'; return; }
+        backlog.forEach((b, i) => {
+          const slug = (b.s.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
+          const p = (b.s.meta.priority || '').toLowerCase();
+          const row = document.createElement('div'); row.className = 'bl-row';
+          row.innerHTML = `<span class="rank">${i + 1}</span><div class="nm"><span class="t">${esc(slug)}</span>${intentName(b.s) ? ` <span class="d">— ${esc(intentName(b.s))}</span>` : ''}</div><span class="st" style="color:${stCol[b.st]}">●</span><span class="pri" style="color:${prCol[p]}">${p ? p.toUpperCase() : '—'}</span>`;
+          row.querySelector('.t').onclick = () => openDrawer(b.s);
+          const pri = row.querySelector('.pri');
+          pri.onclick = () => {
+            const sel = document.createElement('select');
+            ['p0', 'p1', 'p2', 'p3'].forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o.toUpperCase(); if (o === p) op.selected = true; sel.appendChild(op); });
+            pri.replaceWith(sel); sel.focus();
+            sel.onchange = async () => { try { await postJSON('/api/priority', { ws: ws.name, spec: b.s.path, priority: sel.value }); } catch (e) { alert(e.message); } loadSelected(); };
+            sel.onblur = () => loadSelected();
+          };
+          countsEx.appendChild(row);
+        });
+        countsEx.insertAdjacentHTML('beforeend', `<div style="display:flex;gap:14px;margin-top:10px;font-family:var(--mono);font-size:.58rem;color:var(--dim)"><span><span style="color:#3a7d55">●</span> ready</span><span><span style="color:#c0622a">●</span> blocked</span><span><span style="color:#8a8070">●</span> triage</span><span style="margin-left:auto">click a priority to override</span></div>`);
+      },
+      dc: () => {
+        countsEx.innerHTML = '';
+        if (!decs.length) { countsEx.innerHTML = '<div class="empty">no decisions recorded</div>'; return; }
+        decs.forEach(d => { const r = document.createElement('div'); r.className = 'dec-row'; r.innerHTML = `${IC.check('#3a7d55')}<p class="txt">${esc(d.title)}</p><span class="age">${rel(d.mtime)}</span>`; r.onclick = () => openDrawer(d); countsEx.appendChild(r); });
+      },
+      pk: () => {
+        countsEx.innerHTML = '';
+        if (!parked.length) { countsEx.innerHTML = '<div class="empty">nothing parked</div>'; return; }
+        parked.forEach(t => { const r = document.createElement('div'); r.className = 'loop-row'; r.innerHTML = `${IC.archive('#8a8070')}<div class="txt"><div class="t">${esc(t.title)}</div><div class="sub">${(t.meta.type || '').toUpperCase()} · ${rel(t.mtime)}</div></div>`; r.onclick = () => openDrawer(t); countsEx.appendChild(r); });
+      },
+    };
+    let openCount = null;
+    counts.querySelectorAll('.ci').forEach(ci => {
+      ci.onclick = () => {
+        const x = ci.dataset.x;
+        if (openCount === x) { countsEx.classList.remove('open'); ci.classList.remove('open'); openCount = null; return; }
+        openCount = x;
+        counts.querySelectorAll('.ci').forEach(c => c.classList.toggle('open', c === ci));
+        builders[x](); countsEx.classList.add('open');
+      };
+    });
+    counts.querySelector('.cap').onclick = () => {
+      const cap = counts.querySelector('.cap');
+      const inp = document.createElement('input'); inp.placeholder = 'park a thought to explore — ⏎ saves';
+      cap.replaceWith(inp); inp.focus();
+      const commit = async () => {
+        const v = inp.value.trim();
+        if (v) { try { await postJSON('/api/capture', { ws: ws.name, text: v }); loadSelected(); return; } catch (e) { alert(e.message); } }
+        loadSelected();
+      };
+      inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } if (e.key === 'Escape') loadSelected(); };
+      inp.onblur = commit;
+    };
+    block.appendChild(counts); block.appendChild(countsEx);
+
     paper.appendChild(block);
   }
-  paper.insertAdjacentHTML('beforeend', '<div class="footnote">read-only — every change is a file edit · git is the database</div>');
+  paper.insertAdjacentHTML('beforeend', '<div class="footnote">every change is a file edit — including the ones you make here · git is the database</div>');
 }
 
 /* ════ LIVE LOOK ════ */
@@ -842,7 +942,11 @@ function connectEvents() {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     if (!e.path && !e.log) return;
     clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => { loadSelected(); loadTrees(); }, 600);
+    refreshTimer = setTimeout(() => {
+      const editing = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT');
+      if (!editing) loadSelected();
+      loadTrees();
+    }, 600);
     if (e.exists && /\.(md|yml|yaml|jsonl)$/.test(e.path || '') && !e.change) return;
 
     if (e.change) {

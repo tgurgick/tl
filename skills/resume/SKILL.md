@@ -13,19 +13,22 @@ Same as `/tl triage`: argument or context names a workspace under `projects/`; e
 
 ## Steps
 
-Read specs (all stages), `threads/`, `PRIORITIES.md`, `TRIAGE.yml`, and `_metrics/*.jsonl` (last lines). Then report exactly these sections, in this order — they mirror the UI's Resume tab, so CLI and UI never drift:
+Read specs (all stages), `threads/`, `PRIORITIES.md`, `TRIAGE.yml`, and `_metrics/*.jsonl` (last lines). Then report exactly these sections, in this order — they mirror the UI's Resume tab top to bottom, so CLI and UI never drift:
 
-**1. Focus** — the top-weighted goal from `TRIAGE.yml`, one line.
+**1. Status** — what changed while away: completed specs (count + the most recent, from `done/` mtimes or `cycle-log.jsonl`) and anything in-progress. One or two lines.
 
-**2. Last activity** — the most recent meaningful events: latest completed spec (from `done/` mtimes or `cycle-log.jsonl`), latest spec moved to in-progress, latest triage run and whether it detected overrides. Two or three lines, newest first.
+**2. Goal in focus** — the top-weighted goal from `TRIAGE.yml`, one line, with its weight and key-result count.
 
-**3. Open loops** — threads where `type` is `question`, `decision`, or `risk` AND `status: open`, plus blocked specs with what blocks them, plus done specs missing `outcome/FEEDBACK.md`. These are the unresolved items a human forgets; surface them before anything else.
+**3. In focus** — the single thing that needs a human, with the reason:
+   - a top-ranked `ready` spec to delegate, or
+   - an open `question` thread to answer (upstream of new work), or
+   - if neither and specs are in-progress: "all clear — agents working, nothing needs you," point at Live Look, or
+   - if nothing at all: "queue empty — decompose the next slice of an intent."
+   Say which case fired. This is the page's one hero; keep it to the recommendation plus one line of why.
 
-**4. Recent decisions** — the last few `type: decision` threads (any status), title + one-line why.
+**4. Open loops** — threads where `type` is `question`, `risk`, or `decision` AND `status: open`, plus blocked specs, plus done specs missing `outcome/FEEDBACK.md` — sharpest first (risk > question > blocked > feedback). The unresolved items a human forgets.
 
-**5. Parked** — one line: "N parked threads (M ideas, K followups…)" — visibility without noise.
-
-**6. Recommended next** — one concrete action with a reason. Default: the top item of `PRIORITIES.md` Next up. Override the default when something upstream matters more: an open `question` thread blocking the top spec, a goal with zero active specs, or work in `in-progress/` that's been idle longest. Say which rule fired.
+**5. Backlog · decisions · parked** — counts, with detail only if asked: the ranked `ready`+`triage` backlog, recent `decision` threads, and the parked-thread count by type. These are reference, not headline.
 
 ## Guardrails
 

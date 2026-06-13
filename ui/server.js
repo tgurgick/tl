@@ -398,9 +398,49 @@ function json(res, code, data) {
   res.end(JSON.stringify(data));
 }
 
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    req.on('data', c => { buf += c; if (buf.length > 1e6) req.destroy(); });
+    req.on('end', () => { try { resolve(buf ? JSON.parse(buf) : {}); } catch (e) { reject(e); } });
+    req.on('error', reject);
+  });
+}
+
+// resolve a workspace-relative path, refusing anything that escapes the workspace
+function safePath(ws, rel) {
+  const full = path.resolve(ws.dir, rel);
+  if (full !== path.resolve(ws.dir) && !full.startsWith(path.resolve(ws.dir) + path.sep)) return null;
+  return full;
+}
+
+function slugify(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'note';
+}
+
+// classify a free-text capture into a thread type/status (mirrors /tl capture)
+function inferThread(text) {
+  const t = text.trim();
+  if (/\?$/.test(t) || /^(does|can|should|is|are|how|why|what|when|will|could|would)\b/i.test(t)) return { type: 'question', status: 'open' };
+  if (/\b(decid|chose|chosen|will use|going with|adopt)\b/i.test(t)) return { type: 'decision', status: 'closed' };
+  if (/\b(risk|might break|could fail|may not|unsafe|vulnerab)\b/i.test(t)) return { type: 'risk', status: 'open' };
+  if (/\b(clean ?up|refactor|tech debt|tidy)\b/i.test(t)) return { type: 'cleanup', status: 'parked' };
+  if (/\b(follow ?up|later|revisit|then)\b/i.test(t)) return { type: 'followup', status: 'parked' };
+  return { type: 'idea', status: 'parked' };
+}
+
+function isoDate() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://localhost');
   try {
+    if (req.method === 'POST' && u.pathname.startsWith('/api/')) {
+      readBody(req).then(body => handlePost(u.pathname, body, res)).catch(() => json(res, 400, { error: 'bad body' }));
+      return;
+    }
     if (u.pathname === '/') {
       res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
       res.end(safeRead(INDEX) || 'index.html missing');
@@ -458,6 +498,64 @@ const server = http.createServer((req, res) => {
     json(res, 500, { error: String(e && e.message || e) });
   }
 });
+
+function handlePost(pathname, body, res) {
+  const ws = listWorkspaces().find(w => w.name === body.ws);
+  if (!ws) return json(res, 404, { error: 'unknown workspace' });
+
+  if (pathname === '/api/capture') {
+    const text = String(body.text || '').trim();
+    if (!text) return json(res, 400, { error: 'empty thought' });
+    const { type, status } = inferThread(text);
+    const file = `threads/${isoDate()}-${slugify(text)}.md`;
+    const full = safePath(ws, file);
+    if (!full) return json(res, 400, { error: 'bad path' });
+    if (fs.existsSync(full)) return json(res, 409, { error: 'thread already exists' });
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    const fm = `---\ntitle: "${text.replace(/"/g, "'")}"\ncreated: ${isoDate()}\ntype: "${type}"\nstatus: "${status}"\norigin: "captured in Resume"\nlinked_intent: ""\nlinked_spec: ""\n---\n\n# ${text}\n`;
+    fs.writeFileSync(full, fm);
+    return json(res, 200, { ok: true, path: file, type, status });
+  }
+
+  if (pathname === '/api/goal') {
+    const full = safePath(ws, 'TRIAGE.yml');
+    let yml = readFirst(full, safePath(ws, 'triage.yml'));
+    const target = fs.existsSync(full) ? full : safePath(ws, 'triage.yml');
+    if (yml == null) return json(res, 404, { error: 'no TRIAGE.yml' });
+    const oldV = String(body.old ?? ''), newV = String(body.new ?? '');
+    const key = body.field === 'weight' ? 'weight' : 'description';
+    let replaced = false;
+    if (key === 'description') {
+      const needle = `description: "${oldV}"`;
+      if (yml.includes(needle)) { yml = yml.replace(needle, `description: "${newV.replace(/"/g, "'")}"`); replaced = true; }
+    } else {
+      const re = new RegExp(`weight:\\s*${oldV.replace(/[.]/g, '\\.')}(\\s|$)`, 'm');
+      if (re.test(yml)) { yml = yml.replace(re, `weight: ${newV}$1`); replaced = true; }
+    }
+    if (!replaced) return json(res, 409, { error: 'value not found — may have changed' });
+    fs.writeFileSync(target, yml);
+    return json(res, 200, { ok: true });
+  }
+
+  if (pathname === '/api/priority') {
+    const rel = String(body.spec || '');
+    const full = safePath(ws, rel.endsWith('.md') ? rel : rel.replace(/\/$/, '') + '/SPEC.md');
+    if (!full || !fs.existsSync(full)) return json(res, 404, { error: 'spec not found' });
+    const p = String(body.priority || '').toLowerCase();
+    if (!/^p[0-3]$/.test(p)) return json(res, 400, { error: 'bad priority' });
+    let text = safeRead(full);
+    text = /^priority:.*$/m.test(text)
+      ? text.replace(/^priority:.*$/m, `priority: "${p}"`)
+      : text.replace(/^---\n/, `---\npriority: "${p}"\n`);
+    text = /^priority_set_by:.*$/m.test(text)
+      ? text.replace(/^priority_set_by:.*$/m, 'priority_set_by: "human"')
+      : text.replace(/^(priority:.*\n)/m, '$1priority_set_by: "human"\n');
+    fs.writeFileSync(full, text);
+    return json(res, 200, { ok: true });
+  }
+
+  return json(res, 404, { error: 'unknown endpoint' });
+}
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`tl ui → http://localhost:${PORT}  (root: ${ROOT})`);
