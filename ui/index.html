@@ -140,6 +140,16 @@ body.on-live .bar { position: fixed; left: 0; right: 0; }
 .bp-goal .gmeta .wt:hover { border-bottom-color: var(--line2); }
 .bp-goal .gmeta .ed { color: var(--accent); cursor: pointer; }
 .bp-goal input { font-family: inherit; font-size: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--accent-line); border-radius: 3px; padding: 3px 7px; }
+.scope-ex { margin-bottom: 22px; }
+.scope { padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; }
+.scope .sl { display: block; font-family: var(--mono); font-size: .58rem; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin: 12px 0 5px; }
+.scope .sl:first-of-type { margin-top: 4px; }
+.scope input { width: 100%; font-family: var(--sans); font-size: .82rem; background: var(--card); border: 1px solid var(--line2); border-radius: 3px; padding: 6px 9px; color: var(--ink); margin-bottom: 5px; }
+.scope input.s-wt { width: 80px; }
+.scope-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.scope-actions button { font-family: var(--mono); font-size: .62rem; border-radius: 3px; padding: 5px 13px; cursor: pointer; }
+.scope-actions .s-cancel { background: transparent; border: 1px solid var(--line2); color: var(--dim); }
+.scope-actions .s-save { background: var(--accent); border: 1px solid var(--accent); color: #fffefb; }
 
 .hero { background: #1c1916; border: 1px solid rgba(181,113,42,.22); border-left: 3px solid #b5712a; border-radius: 2px; padding: 1.4rem 1.6rem; cursor: pointer; transition: background .12s; }
 .hero.flat { cursor: default; }
@@ -523,43 +533,44 @@ function renderResume(wss) {
     status.onclick = () => { status.classList.toggle('open'); statusEx.classList.toggle('open'); };
     block.appendChild(status); block.appendChild(statusEx);
 
-    // ── goal line (inline editable) ──
+    // ── goal line + scope editor (description, weight, key results) ──
     const goalEl = document.createElement('p');
     goalEl.className = 'bp-goal';
+    const scopeEx = document.createElement('div'); scopeEx.className = 'expand scope-ex';
     if (top) {
       const desc = top.description || top.id;
       const wRaw = String(top.weight ?? 0);
-      goalEl.innerHTML = `<span class="gtext">${esc(desc)}</span><span class="gmeta">&nbsp; <span class="wt">${(top.weight ?? 0).toFixed(2)}</span> · ${(top.key_results || []).length} KRs · <span class="ed">edit ›</span></span>`;
-      const editDesc = () => {
-        const span = goalEl.querySelector('.gtext');
-        const inp = document.createElement('input'); inp.value = desc; inp.style.width = '440px'; inp.style.maxWidth = '100%';
-        span.replaceWith(inp); inp.focus(); inp.select();
-        const commit = async () => {
-          const v = inp.value.trim();
-          if (v && v !== desc) { try { await postJSON('/api/goal', { ws: ws.name, field: 'description', old: desc, new: v }); loadSelected(); return; } catch (e) { alert(e.message); } }
-          loadSelected();
+      const krs = top.key_results || [];
+      const at = s => esc(s).replace(/"/g, '&quot;');
+      goalEl.innerHTML = `<span class="gtext">${esc(desc)}</span><span class="gmeta">&nbsp; ${(top.weight ?? 0).toFixed(2)} · ${krs.length} KRs · <span class="ed">edit ›</span></span>`;
+      const buildScope = () => {
+        scopeEx.innerHTML = `<div class="scope">
+            <p class="label" style="margin-bottom:4px">Edit scope → TRIAGE.yml</p>
+            <span class="sl">Goal</span><input class="s-desc" value="${at(desc)}">
+            <span class="sl">Weight</span><input class="s-wt" value="${at(wRaw)}">
+            <span class="sl">Key results</span>${krs.map((k, i) => `<input class="s-kr" data-i="${i}" value="${at(k)}">`).join('') || '<div class="empty">none</div>'}
+            <div class="scope-actions"><button class="s-cancel">cancel</button><button class="s-save">save →</button></div>
+          </div>`;
+        scopeEx.querySelector('.s-cancel').onclick = () => scopeEx.classList.remove('open');
+        scopeEx.querySelector('.s-save').onclick = async () => {
+          const nd = scopeEx.querySelector('.s-desc').value.trim();
+          const nw = scopeEx.querySelector('.s-wt').value.trim();
+          const nkr = [...scopeEx.querySelectorAll('.s-kr')].map(i => ({ i: +i.dataset.i, v: i.value.trim() }));
+          try {
+            if (nd && nd !== desc) await postJSON('/api/goal', { ws: ws.name, field: 'description', old: desc, new: nd });
+            if (nw && nw !== wRaw) await postJSON('/api/goal', { ws: ws.name, field: 'weight', old: wRaw, new: nw });
+            for (const k of nkr) { const ov = krs[k.i]; if (k.v && k.v !== ov) await postJSON('/api/goal', { ws: ws.name, field: 'kr', old: ov, new: k.v }); }
+            loadSelected();
+          } catch (e) { alert(e.message); loadSelected(); }
         };
-        inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } if (e.key === 'Escape') loadSelected(); };
-        inp.onblur = commit;
       };
-      goalEl.querySelector('.gtext').onclick = editDesc;
-      goalEl.querySelector('.ed').onclick = editDesc;
-      const wtEl = goalEl.querySelector('.wt');
-      wtEl.onclick = () => {
-        const inp = document.createElement('input'); inp.value = wRaw; inp.style.width = '54px';
-        wtEl.replaceWith(inp); inp.focus(); inp.select();
-        const commit = async () => {
-          const v = inp.value.trim();
-          if (v && v !== wRaw) { try { await postJSON('/api/goal', { ws: ws.name, field: 'weight', old: wRaw, new: v }); loadSelected(); return; } catch (e) { alert(e.message); } }
-          loadSelected();
-        };
-        inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } if (e.key === 'Escape') loadSelected(); };
-        inp.onblur = commit;
-      };
+      const toggle = () => { if (!scopeEx.classList.contains('open')) buildScope(); scopeEx.classList.toggle('open'); };
+      goalEl.querySelector('.gtext').onclick = toggle;
+      goalEl.querySelector('.ed').onclick = toggle;
     } else {
       goalEl.innerHTML = `<span class="gmeta">No goal configured · edit TRIAGE.yml</span>`;
     }
-    block.appendChild(goalEl);
+    block.appendChild(goalEl); block.appendChild(scopeEx);
 
     // ── hero (in focus) ──
     const openQ = threads.find(t => t.meta.type === 'question' && t.meta.status === 'open');

@@ -523,14 +523,16 @@ function handlePost(pathname, body, res) {
     const target = fs.existsSync(full) ? full : safePath(ws, 'triage.yml');
     if (yml == null) return json(res, 404, { error: 'no TRIAGE.yml' });
     const oldV = String(body.old ?? ''), newV = String(body.new ?? '');
-    const key = body.field === 'weight' ? 'weight' : 'description';
     let replaced = false;
-    if (key === 'description') {
+    if (body.field === 'description') {
       const needle = `description: "${oldV}"`;
       if (yml.includes(needle)) { yml = yml.replace(needle, `description: "${newV.replace(/"/g, "'")}"`); replaced = true; }
-    } else {
+    } else if (body.field === 'weight') {
       const re = new RegExp(`weight:\\s*${oldV.replace(/[.]/g, '\\.')}(\\s|$)`, 'm');
       if (re.test(yml)) { yml = yml.replace(re, `weight: ${newV}$1`); replaced = true; }
+    } else if (body.field === 'kr') {
+      const needle = `- "${oldV}"`;
+      if (yml.includes(needle)) { yml = yml.replace(needle, `- "${newV.replace(/"/g, "'")}"`); replaced = true; }
     }
     if (!replaced) return json(res, 409, { error: 'value not found — may have changed' });
     fs.writeFileSync(target, yml);
