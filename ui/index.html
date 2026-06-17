@@ -29,22 +29,22 @@
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 .agent {
-  --bg: #0c0c0f;
-  --surface: #111115;
-  --surface2: #0e0e12;
+  --bg: #1c1916;
+  --surface: #26211c;
+  --surface2: #211d18;
   --line: rgba(255,255,255,.07);
-  --line2: rgba(255,255,255,.12);
-  --ink: #e6e6ea;
-  --mid: #9a9aaa;
-  --dim: #6a6a77;
-  --faint: #3a3a45;
-  --accent: #8b7cf8;
-  --accent-bg: rgba(139,124,248,.10);
-  --accent-line: rgba(139,124,248,.25);
-  --ok: #34d399;
-  --warn: #f59e0b;
-  --bad: #f87171;
-  --info: #8b7cf8;
+  --line2: rgba(255,255,255,.13);
+  --ink: #e8e3d8;
+  --mid: #a89f8d;
+  --dim: #8a8070;
+  --faint: #5c554a;
+  --accent: #e2a55e;
+  --accent-bg: rgba(226,165,94,.12);
+  --accent-line: rgba(226,165,94,.30);
+  --ok: #6fae84;
+  --warn: #d4895f;
+  --bad: #d96a5a;
+  --info: #9b8cf0;
   background: var(--bg); color: var(--ink);
 }
 * { box-sizing: border-box; margin: 0; }
@@ -66,6 +66,7 @@ body.m-human .human, body.m-agent .agent { flex: 1 1 100%; }
 body.m-split .human { flex: 0 0 384px; border-right: 1px solid var(--line2); }
 body.m-split .agent { flex: 1 1 auto; }
 body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
+body.m-split .hero { margin-right: -22px; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 @media (max-width: 1000px) { body.m-split .human { flex-basis: 320px; } }
 .mono { font-family: var(--mono); }
 
@@ -269,10 +270,10 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lcard .meta { display: flex; justify-content: space-between; margin-top: 7px; font-family: var(--mono); font-size: .58rem; }
 .lcard .agent { color: var(--accent); display: flex; align-items: center; gap: 4px; }
 .lcard .elapsed { color: var(--dim); }
-.lcard .done-tag { color: rgba(52,211,153,.55); font-family: var(--mono); font-size: .58rem; display: block; margin-top: 6px; }
+.lcard .done-tag { color: rgba(111,174,132,.6); font-family: var(--mono); font-size: .58rem; display: block; margin-top: 6px; }
 .lcard .pbar { height: 2px; background: rgba(255,255,255,.06); border-radius: 2px; overflow: hidden; margin-top: 8px; }
 .lcard .pbar i { display: block; height: 100%; width: 40%; border-radius: 2px;
-  background: linear-gradient(90deg, #8b7cf8, #60a5fa); animation: tl-slide 2.2s ease-in-out infinite; }
+  background: linear-gradient(90deg, rgba(226,165,94,.4), var(--accent)); animation: tl-slide 2.2s ease-in-out infinite; }
 @keyframes tl-slide { 0% { margin-left: -40% } 100% { margin-left: 100% } }
 
 .deck { display: flex; flex: 1; min-height: 0; }
@@ -296,11 +297,11 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .tn.dirn { color: var(--dim); }
 .tn.rootn { color: var(--mid); }
 .tn .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tn.active { background: rgba(139,124,248,.18); }
-.tn.active .nm { color: #c4c4d0; }
-.tn.h1 { background: rgba(245,158,11,.06); }
-.tn.h2 { background: rgba(139,124,248,.12); }
-.tn.h3 { background: rgba(139,124,248,.22); }
+.tn.active { background: rgba(226,165,94,.20); }
+.tn.active .nm { color: #f3eee3; }
+.tn.h1 { background: rgba(226,165,94,.07); }
+.tn.h2 { background: rgba(226,165,94,.14); }
+.tn.h3 { background: rgba(226,165,94,.24); }
 .tn .delta { font-size: .58rem; flex: none; color: var(--accent); }
 .tn .delta.new { color: var(--ok); }
 .tn.flash { animation: tl-flash 1.2s ease-out; }
@@ -320,14 +321,14 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 /* file viewer */
 .vpane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .vpane .crumb { font-family: var(--mono); font-size: .62rem; color: var(--faint); letter-spacing: 0; text-transform: none; }
-.vpane .crumb b { color: #c4c4d0; font-weight: 400; }
+.vpane .crumb b { color: #cfc8ba; font-weight: 400; }
 .vpane .writing { margin-left: auto; display: flex; align-items: center; gap: 5px; color: var(--ok); font-size: .58rem; letter-spacing: 0; }
 .vpane .body { flex: 1; overflow: auto; scrollbar-width: thin; }
 .code { border-collapse: collapse; width: 100%; }
 .code td { font-family: var(--mono); font-size: .68rem; line-height: 1.6; vertical-align: top; }
 .code .ln { width: 38px; text-align: right; padding: 0 14px 0 10px; color: var(--faint); user-select: none; }
-.code .cl { white-space: pre; padding-right: 24px; color: #c4c4d0; }
-.code tr.added { background: rgba(52,211,153,.05); }
+.code .cl { white-space: pre; padding-right: 24px; color: #cfc8ba; }
+.code tr.added { background: rgba(111,174,132,.07); }
 .code tr.added .ln { color: var(--ok); }
 .kw { color: var(--accent); }
 .str { color: var(--ok); }
@@ -853,10 +854,10 @@ function renderResume(wss) {
 
 /* ════ LIVE LOOK ════ */
 const STAGES = [
-  ['triage', 'TRIAGE', '#6a6a77'],
-  ['ready', 'READY', '#60a5fa'],
-  ['in-progress', 'IN PROGRESS', '#8b7cf8'],
-  ['done', 'DONE', '#34d399'],
+  ['triage', 'TRIAGE', '#8a8070'],
+  ['ready', 'READY', '#c9c2b4'],
+  ['in-progress', 'IN PROGRESS', '#e2a55e'],
+  ['done', 'DONE', '#6fae84'],
 ];
 
 function renderLanes(wss) {
@@ -990,7 +991,7 @@ function logLine(time, verb, vColor, msg, detail) {
 const NOISE_DIRS = ['specs', 'in-progress', 'done', 'triage', 'intents', 'threads', '_metrics', 'context', 'outcome'];
 function classify(e) {
   const C = getComputedStyle(document.body);
-  const ok = '#34d399', info = '#8b7cf8', warn = '#f59e0b', bad = '#f87171', dim = '#6a6a77';
+  const ok = '#6fae84', info = '#9b8cf0', warn = '#e2a55e', bad = '#d96a5a', dim = '#8a8070';
   if (e.log) {
     const l = e.log.line || {};
     switch (e.log.file) {
@@ -1069,7 +1070,7 @@ async function showFile(ws, path, addedSet) {
 let refreshTimer = null;
 function connectEvents() {
   const es = new EventSource('/api/events');
-  es.onopen = () => { $('termDot').classList.remove('off'); logLine(new Date().toLocaleTimeString('en-GB', { hour12: false }), 'WATCH', '#6a6a77', 'watching for changes…', ''); };
+  es.onopen = () => { $('termDot').classList.remove('off'); logLine(new Date().toLocaleTimeString('en-GB', { hour12: false }), 'WATCH', '#8a8070', 'watching for changes…', ''); };
   es.onerror = () => $('termDot').classList.add('off');
   let lastSig = '', lastAt = 0;
   es.onmessage = ev => {
