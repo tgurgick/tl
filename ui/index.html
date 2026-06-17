@@ -28,7 +28,7 @@
   --sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
-body.on-live {
+.agent {
   --bg: #0c0c0f;
   --surface: #111115;
   --surface2: #0e0e12;
@@ -45,17 +45,26 @@ body.on-live {
   --warn: #f59e0b;
   --bad: #f87171;
   --info: #8b7cf8;
+  background: var(--bg); color: var(--ink);
 }
 * { box-sizing: border-box; margin: 0; }
-html, body { height: 100%; }
+html, body { height: 100%; overflow: hidden; }
 body {
   background: var(--bg); color: var(--ink);
   font: 15px/1.5 var(--sans);
   -webkit-font-smoothing: antialiased;
-  transition: background .25s;
 }
-body.on-live { overflow: hidden; }
 a { color: inherit; }
+
+/* three modes: human · split · agent */
+.stage { display: flex; height: calc(100vh - 49px); }
+.pane { min-width: 0; }
+.human { overflow-y: auto; }
+.agent { display: flex; flex-direction: column; overflow: hidden; }
+body.m-human .agent, body.m-agent .human { display: none; }
+body.m-human .human, body.m-agent .agent { flex: 1 1 100%; }
+body.m-split .human, body.m-split .agent { flex: 1 1 50%; }
+body.m-split .agent { border-left: 1px solid rgba(0,0,0,.14); }
 .mono { font-family: var(--mono); }
 
 @keyframes tl-pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
@@ -70,7 +79,7 @@ a { color: inherit; }
   background: color-mix(in srgb, var(--bg) 94%, transparent);
   backdrop-filter: blur(8px);
 }
-body.on-live .bar { position: fixed; left: 0; right: 0; }
+.bar .tab[data-view="split"] .live-dot { display: none; }
 .bar .word { display: flex; align-items: center; gap: 10px; font-family: var(--mono); }
 .bar .tlmark { font-size: .78rem; color: var(--ink); letter-spacing: -.01em; }
 .bar .sep { color: var(--faint); }
@@ -211,11 +220,7 @@ body.on-live .bar { position: fixed; left: 0; right: 0; }
 .empty { font-size: .78rem; color: var(--dim); padding: 8px 0; }
 
 /* ════ LIVE LOOK (mission control) ════ */
-#view-live {
-  position: fixed; inset: 49px 0 0 0; display: flex; flex-direction: column;
-  background: var(--bg);
-}
-#view-live[hidden], #view-resume[hidden] { display: none; }
+#view-live { background: var(--bg); }
 .lanes { display: flex; height: 42%; border-bottom: 1px solid var(--line); overflow-x: auto; flex: none; }
 .lane { flex: 1; min-width: 170px; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 .lane:last-child { border-right: none; }
@@ -293,7 +298,6 @@ body.on-live .bar { position: fixed; left: 0; right: 0; }
 .code td { font-family: var(--mono); font-size: .68rem; line-height: 1.6; vertical-align: top; }
 .code .ln { width: 38px; text-align: right; padding: 0 14px 0 10px; color: var(--faint); user-select: none; }
 .code .cl { white-space: pre; padding-right: 24px; color: #c4c4d0; }
-body:not(.on-live) .code .cl { color: var(--mid); }
 .code tr.added { background: rgba(52,211,153,.05); }
 .code tr.added .ln { color: var(--ok); }
 .kw { color: var(--accent); }
@@ -336,7 +340,7 @@ body:not(.on-live) .code .cl { color: var(--mid); }
 .md input[type=checkbox] { accent-color: var(--accent); margin-right: 6px; }
 </style>
 </head>
-<body>
+<body class="m-human">
 <header class="bar">
   <div class="word">
     <span class="tlmark">tl</span>
@@ -347,17 +351,19 @@ body:not(.on-live) .code .cl { color: var(--mid); }
     </div>
   </div>
   <nav>
-    <button class="tab active" data-view="resume">Resume</button>
-    <button class="tab" data-view="live" id="liveTab"><span class="live-dot"></span>Live Look<span class="dotn"></span></button>
+    <button class="tab active" data-view="human">Human</button>
+    <button class="tab" data-view="split">Split</button>
+    <button class="tab" data-view="agent" id="liveTab"><span class="live-dot"></span>Agent<span class="dotn"></span></button>
   </nav>
 </header>
 
-<section id="view-resume">
+<div class="stage">
+<section id="view-resume" class="pane human">
   <div class="datestrip"><div><span id="dsProj"></span><span id="dsDate"></span></div></div>
   <div class="paper" id="paper"></div>
 </section>
 
-<section id="view-live" hidden>
+<section id="view-live" class="pane agent">
   <div class="lanes" id="lanes"></div>
   <div class="deck">
     <div class="fpane">
@@ -374,6 +380,7 @@ body:not(.on-live) .code .cl { color: var(--mid); }
     </div>
   </div>
 </section>
+</div>
 
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer" aria-label="Detail"></aside>
@@ -613,7 +620,7 @@ function renderResume(wss) {
         <p class="summary">${inprog.length} ${inprog.length > 1 ? 'agents are' : 'agent is'} working. Nothing needs you right now.</p>
         <p class="reason">${inprog.map(s => esc((s.path || '').replace(/\/$/, '').split('/').pop())).join(' · ')} in progress · no open questions blocking.</p>
         <p class="hint" style="cursor:pointer">watch in live look →</p>`;
-      hero.querySelector('.hint').onclick = () => setView('live');
+      hero.querySelector('.hint').onclick = () => setMode('agent');
     } else {
       hero.className = 'hero flat';
       hero.innerHTML = `
@@ -787,7 +794,7 @@ setInterval(() => {
     if (n < 0.05) heat.delete(k); else heat.set(k, n);
     changed = true;
   }
-  if (changed && document.body.classList.contains('on-live')) renderTree();
+  if (changed && agentVisible()) renderTree();
 }, 4000);
 
 function saveExpanded() { localStorage.setItem('tl-tree-x', JSON.stringify([...expanded])); }
@@ -971,7 +978,7 @@ function connectEvents() {
     // live file viewer follows writes to markdown/yaml (skip logs)
     if (e.diff && selected.includes(e.ws) && !/\.jsonl$/.test(e.path)) {
       const addedSet = new Set((e.diff.hunks || []).filter(h => h.t === '+').map(h => h.s));
-      if (document.body.classList.contains('on-live')) showFile(e.ws, e.path, addedSet);
+      if (agentVisible()) showFile(e.ws, e.path, addedSet);
       else $('liveTab').classList.add('unseen');
     }
 
@@ -986,16 +993,17 @@ function connectEvents() {
   };
 }
 
-/* ── tabs ── */
-function setView(view) {
-  document.querySelectorAll('.bar .tab').forEach(b => b.classList.toggle('active', b.dataset.view === view));
-  $('view-resume').hidden = view === 'live';
-  $('view-live').hidden = view !== 'live';
-  document.body.classList.toggle('on-live', view === 'live');
-  localStorage.setItem('tl-view', view);
-  if (view === 'live') { $('liveTab').classList.remove('unseen'); renderTree(); }
+/* ── modes: human · split · agent ── */
+const agentVisible = () => !document.body.classList.contains('m-human');
+function setMode(mode) {
+  if (!['human', 'split', 'agent'].includes(mode)) mode = 'human';
+  document.body.classList.remove('m-human', 'm-split', 'm-agent');
+  document.body.classList.add('m-' + mode);
+  document.querySelectorAll('.bar .tab').forEach(b => b.classList.toggle('active', b.dataset.view === mode));
+  localStorage.setItem('tl-view', mode);
+  if (mode !== 'human') { $('liveTab').classList.remove('unseen'); renderTree(); }
 }
-document.querySelectorAll('.bar .tab').forEach(btn => { btn.onclick = () => setView(btn.dataset.view); });
+document.querySelectorAll('.bar .tab').forEach(btn => { btn.onclick = () => setMode(btn.dataset.view); });
 
 /* ── selection + boot ── */
 let available = [], selected = [];
@@ -1047,7 +1055,8 @@ async function boot() {
   await seedChanges();
   await loadSelected();
   await loadTrees();
-  if (localStorage.getItem('tl-view') === 'live') setView('live');
+  const saved = localStorage.getItem('tl-view');
+  setMode(saved === 'live' ? 'agent' : saved === 'resume' ? 'human' : saved || 'human');
 }
 boot();
 </script>
