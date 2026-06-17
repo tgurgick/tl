@@ -572,11 +572,11 @@ function handlePost(pathname, body, res) {
 
   if (pathname === '/api/thread-status') {
     const rel = String(body.path || '');
-    if (!/^threads\//.test(rel) || !rel.endsWith('.md')) return json(res, 400, { error: 'not a thread' });
+    if (!/^(threads|intents)\//.test(rel) || !rel.endsWith('.md')) return json(res, 400, { error: 'not a thread or intent' });
     const full = safePath(ws, rel);
-    if (!full || !fs.existsSync(full)) return json(res, 404, { error: 'thread not found' });
+    if (!full || !fs.existsSync(full)) return json(res, 404, { error: 'file not found' });
     const st = String(body.status || '');
-    if (!['open', 'parked', 'promoted', 'closed'].includes(st)) return json(res, 400, { error: 'bad status' });
+    if (!['open', 'parked', 'promoted', 'closed', 'draft', 'approved', 'decomposed', 'done'].includes(st)) return json(res, 400, { error: 'bad status' });
     let text = safeRead(full);
     text = /^status:.*$/m.test(text) ? text.replace(/^status:.*$/m, `status: "${st}"`) : text.replace(/^---\n/, `---\nstatus: "${st}"\n`);
     fs.writeFileSync(full, text);

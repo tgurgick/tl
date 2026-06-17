@@ -720,7 +720,11 @@ function renderResume(wss) {
       .forEach(s => loops.push({ kind: 'research', item: s, title: s.title.replace(/^Research:\s*/i, '') + ' — recommendation ready', sub: 'RESEARCH · ' + rel(s.mtime), age: s.mtime }));
     ws.intents.filter(it => (it.meta.status === 'decomposed' || it.meta.status === 'approved') &&
       !specs.some(s => (s.meta.intent || '').replace(/^\.\//, '').trim() === it.path && (s.stage === 'ready' || s.stage === 'in-progress')))
-      .forEach(it => loops.push({ kind: 'starving', item: { ...it, _ws: ws.name }, title: it.title + ' — no active work', sub: 'INTENT · decompose next or close', age: 0 }));
+      .forEach(it => {
+        const its = specs.filter(s => (s.meta.intent || '').replace(/^\.\//, '').trim() === it.path);
+        const doneN = its.filter(s => s.stage === 'done').length;
+        loops.push({ kind: 'starving', item: { ...it, _ws: ws.name }, title: it.title + ' — no active work', sub: its.length ? `INTENT · ${doneN}/${its.length} specs done` : 'INTENT · not yet decomposed', age: 0 });
+      });
 
     const SEV = { research: 0, risk: 1, starving: 2, question: 3, blocked: 4, idle: 5, feedback: 6, decision: 7, triage: 8 };
     loops.sort((a, b) => (SEV[a.kind] - SEV[b.kind]) || (a.age - b.age));
@@ -733,12 +737,18 @@ function renderResume(wss) {
       r.querySelector('.txt').onclick = () => openDrawer(l.item);
       const acts = r.querySelector('.acts');
       const topic = l.title.replace(/\s+—.*$/, '');
-      const mk = (label, cls, fn) => { const b = document.createElement('button'); if (cls) b.className = cls; b.textContent = label; b.onclick = e => { e.stopPropagation(); fn(); }; acts.appendChild(b); };
+      const mk = (label, cls, fn) => { const b = document.createElement('button'); if (cls) b.className = cls; b.textContent = label; b.onclick = e => { e.stopPropagation(); fn(b); }; acts.appendChild(b); };
       const post = (p, body) => (async () => { try { await postJSON(p, { ws: ws.name, ...body }); } catch (e) { alert(e.message); } loadSelected(); })();
       if (l.thread) {
         mk('resolve', 'resolve', () => post('/api/thread-status', { path: l.item.path, status: 'closed' }));
         mk('park', '', () => post('/api/thread-status', { path: l.item.path, status: 'parked' }));
         mk('research', 'research', () => post('/api/research', { title: topic, source: l.item.path }));
+      } else if (l.kind === 'starving') {
+        mk('decompose next', '', async b => {
+          try { await navigator.clipboard.writeText(`In project ${ws.name}, decompose ${l.item.path} into its next ready spec.`); b.textContent = 'copied ✓'; }
+          catch { b.textContent = 'copy failed'; }
+        });
+        mk('close', '', () => post('/api/thread-status', { path: l.item.path, status: 'done' }));
       } else {
         mk(l.kind === 'research' ? 'decide' : 'open', '', () => openDrawer(l.item));
         if (l.kind === 'blocked' || l.kind === 'triage') mk('research', 'research', () => post('/api/research', { title: topic }));
