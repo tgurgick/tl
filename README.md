@@ -52,7 +52,7 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, triage, dedup, bug-capture, ui
+├── skills/                     # /tl new, resume, capture, triage, reflect, dedup, bug-capture, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
@@ -140,6 +140,10 @@ Guided workspace setup. Interviews you for goals (with observable key results), 
 
 Ranks the backlog. Scores every spec against the weighted goals in `TRIAGE.yml`, applies the priority rules (first match wins), checks allocation drift, and rewrites `PRIORITIES.md`. Detects priorities a human changed by hand since the last run and records them in `override-log.jsonl`. Never creates, executes, or deletes specs, and never re-scores a human-set priority — only an explicit rule can change one.
 
+### /tl reflect
+
+The learning loop. Reads the override reasons and outcome feedback a workspace has accumulated and proposes evidence-cited changes to `TRIAGE.yml` — weights and rules — never auto-applying them. Also scans the dependency graph for parallel tracks (independent ready specs touching disjoint files) and flags collisions that must serialize. Run occasionally, once cycles have accumulated.
+
 ### /tl dedup
 
 Sweeps bug specs before triage ranks them. With error tracking connected it auto-closes provider-resolved bugs and merges provider-confirmed duplicates; offline it still flags likely duplicates (never auto-merging a heuristic match) and marks stale bugs.
@@ -155,7 +159,7 @@ Auto-triage gets smarter from signals the system records as a side effect of nor
 - **Overrides with the why** — change a priority by hand (in the UI or by editing the file) and it's logged to `_metrics/override-log.jsonl` with `from`, `to`, and your *reason*, and the spec is marked `priority_set_by: human` so triage stops fighting you. The reason turns a bare diff into a "this, not that" labeled example.
 - **Outcomes** — `FEEDBACK.md` frontmatter carries 1–5 scores and a `priority_was_right` flag for every completed spec.
 
-A future `/tl reflect` skill reads both and proposes diffs to `TRIAGE.yml` — weights and rules, reviewed by you — rather than tuning an opaque model. Prioritization policy stays a diffable config file.
+`/tl reflect` reads both and proposes diffs to `TRIAGE.yml` — weights and rules, each backed by the overrides or outcomes that justify it, reviewed by you before anything is written — rather than tuning an opaque model. It also scans the dependency graph for **parallel tracks**: independent ready specs that touch disjoint files and can run concurrently. Prioritization policy stays a diffable config file.
 
 ---
 
