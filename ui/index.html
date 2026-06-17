@@ -195,6 +195,23 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .bp-counts .cap:hover { color: var(--ink); }
 .bp-counts input { font-family: var(--sans); font-size: .8rem; background: var(--card); border: 1px solid var(--accent-line); border-radius: 3px; padding: 4px 9px; width: 260px; }
 
+/* horizon — forward timeline */
+.horizon { padding: 4px 0 2px; }
+.hz-lane { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.hz-label { flex: 0 0 116px; font-size: .72rem; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hz-label .pri { font-family: var(--mono); font-size: .56rem; color: var(--dim); margin-left: 5px; }
+.hz-track { flex: 1; display: flex; align-items: stretch; gap: 3px; min-width: 0; }
+.hz-now { flex: 0 0 0; align-self: stretch; border-left: 1px dashed var(--accent); margin: 1px 3px; }
+.hz-block { flex: 1 1 0; min-width: 0; border-radius: 3px; padding: 5px 8px; font-family: var(--mono); font-size: .58rem; line-height: 1; display: flex; align-items: center; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hz-block.s-done { background: #3a7d55; color: #eafff2; }
+.hz-block.s-progress { background: var(--accent); color: #fffefb; }
+.hz-block.s-ready { border: 1px solid var(--accent); color: var(--accent); }
+.hz-block.s-blocked { border: 1px dashed #c0622a; color: #c0622a; }
+.hz-block.s-triage { border: 1px dashed var(--line2); color: var(--dim); }
+.hz-legend { display: flex; gap: 14px; margin-top: 10px; font-family: var(--mono); font-size: .56rem; color: var(--dim); }
+.hz-legend i { font-style: normal; }
+.hz-empty { font-size: .78rem; color: var(--dim); padding: 8px 0; }
+
 .expand { display: none; padding: 2px 0 6px; }
 .expand.open { display: block; }
 .loop-row { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
@@ -672,10 +689,52 @@ function renderResume(wss) {
     };
 
     const counts = document.createElement('div'); counts.className = 'bp-counts';
-    counts.innerHTML = `<span class="ci" data-x="bl">backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">parked <b>${parked.length}</b></span><span class="cap">+ park a thought</span>`;
+    counts.innerHTML = `<span class="ci" data-x="hz">horizon</span><span class="ci" data-x="bl">backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">parked <b>${parked.length}</b></span><span class="cap">+ park a thought</span>`;
     const countsEx = document.createElement('div'); countsEx.className = 'expand';
 
     const builders = {
+      hz: () => {
+        countsEx.innerHTML = '';
+        const unit = s => ({ small: 1, medium: 2, large: 3 }[s.meta.size] || 2);
+        const stageCls = s => s.stage === 'done' ? 's-done'
+          : s.stage === 'in-progress' ? 's-progress'
+          : s.meta.status === 'blocked' ? 's-blocked'
+          : s.stage === 'triage' ? 's-triage' : 's-ready';
+        const ord = s => ({ done: 0, 'in-progress': 1, ready: 2, triage: 3 }[s.stage] ?? 2);
+        const lanes = ws.intents.slice()
+          .sort((a, b) => (PRIO[a.meta.priority] ?? 9) - (PRIO[b.meta.priority] ?? 9))
+          .map(it => ({ label: it.title, pri: it.meta.priority, it, specs: specs.filter(s => (s.meta.intent || '').replace(/^\.\//, '').trim() === it.path) }));
+        const attached = new Set(lanes.flatMap(l => l.specs.map(s => s.path)));
+        const orphan = specs.filter(s => !attached.has(s.path));
+        if (orphan.length) lanes.push({ label: 'Unattached', pri: '', it: null, specs: orphan });
+        const active = lanes.filter(l => l.specs.length);
+        if (!active.length) { countsEx.innerHTML = '<div class="hz-empty">no specs to chart yet</div>'; return; }
+        const wrap = document.createElement('div'); wrap.className = 'horizon';
+        active.forEach(l => {
+          const lane = document.createElement('div'); lane.className = 'hz-lane';
+          const lab = document.createElement('div'); lab.className = 'hz-label';
+          lab.innerHTML = `${esc(l.label)}${l.pri ? ` <span class="pri">${esc(l.pri.toUpperCase())}</span>` : ''}`;
+          if (l.it) { lab.style.cursor = 'pointer'; lab.onclick = () => openDrawer({ ...l.it, _ws: ws.name }); }
+          const track = document.createElement('div'); track.className = 'hz-track';
+          const sorted = l.specs.slice().sort((a, b) => ord(a) - ord(b) || (PRIO[a.meta.priority] ?? 9) - (PRIO[b.meta.priority] ?? 9));
+          let nowMark = false;
+          sorted.forEach(s => {
+            if (!nowMark && ord(s) > 0) { const n = document.createElement('div'); n.className = 'hz-now'; track.appendChild(n); nowMark = true; }
+            const b = document.createElement('div');
+            b.className = 'hz-block ' + stageCls(s);
+            b.style.flexGrow = unit(s);
+            const slug = (s.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
+            b.textContent = slug;
+            b.title = `${slug} · ${s.stage}${s.meta.size ? ' · ' + s.meta.size : ''}${s.meta.priority ? ' · ' + s.meta.priority.toUpperCase() : ''}`;
+            b.onclick = () => openDrawer(s);
+            track.appendChild(b);
+          });
+          lane.appendChild(lab); lane.appendChild(track);
+          wrap.appendChild(lane);
+        });
+        wrap.insertAdjacentHTML('beforeend', `<div class="hz-legend"><i><span style="color:#3a7d55">█</span> done</i><i><span style="color:var(--accent)">█</span> in progress</i><i><span style="color:var(--accent)">▢</span> ready</i><i><span style="color:var(--dim)">▢</span> triage</i><i>‖ now</i><i style="margin-left:auto">width = effort</i></div>`);
+        countsEx.appendChild(wrap);
+      },
       bl: () => {
         countsEx.innerHTML = '';
         if (!backlog.length) { countsEx.innerHTML = '<div class="empty">backlog is empty</div>'; return; }
