@@ -63,8 +63,10 @@ a { color: inherit; }
 .agent { display: flex; flex-direction: column; overflow: hidden; }
 body.m-human .agent, body.m-agent .human { display: none; }
 body.m-human .human, body.m-agent .agent { flex: 1 1 100%; }
-body.m-split .human, body.m-split .agent { flex: 1 1 50%; }
-body.m-split .agent { border-left: 1px solid rgba(0,0,0,.14); }
+body.m-split .human { flex: 0 0 384px; border-right: 1px solid var(--line2); }
+body.m-split .agent { flex: 1 1 auto; }
+body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
+@media (max-width: 1000px) { body.m-split .human { flex-basis: 320px; } }
 .mono { font-family: var(--mono); }
 
 @keyframes tl-pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
