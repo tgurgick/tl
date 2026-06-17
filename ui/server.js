@@ -570,6 +570,72 @@ function handlePost(pathname, body, res) {
     return json(res, 200, { ok: true, from });
   }
 
+  if (pathname === '/api/thread-status') {
+    const rel = String(body.path || '');
+    if (!/^threads\//.test(rel) || !rel.endsWith('.md')) return json(res, 400, { error: 'not a thread' });
+    const full = safePath(ws, rel);
+    if (!full || !fs.existsSync(full)) return json(res, 404, { error: 'thread not found' });
+    const st = String(body.status || '');
+    if (!['open', 'parked', 'promoted', 'closed'].includes(st)) return json(res, 400, { error: 'bad status' });
+    let text = safeRead(full);
+    text = /^status:.*$/m.test(text) ? text.replace(/^status:.*$/m, `status: "${st}"`) : text.replace(/^---\n/, `---\nstatus: "${st}"\n`);
+    fs.writeFileSync(full, text);
+    return json(res, 200, { ok: true });
+  }
+
+  if (pathname === '/api/research') {
+    const title = String(body.title || '').trim();
+    if (!title) return json(res, 400, { error: 'empty topic' });
+    const slug = 'research-' + slugify(title);
+    const dir = safePath(ws, 'specs/' + slug);
+    if (!dir) return json(res, 400, { error: 'bad path' });
+    if (fs.existsSync(dir)) return json(res, 409, { error: 'research spec already exists' });
+    fs.mkdirSync(dir, { recursive: true });
+    const q = s => String(s).replace(/"/g, "'");
+    const src = body.source ? String(body.source) : '';
+    const spec = `---
+title: "Research: ${q(title)}"
+created: ${isoDate()}
+project: "${ws.name}"
+intent: ""
+type: "research"
+status: "ready"
+priority: ""
+priority_set_by: ""
+size: "small"
+depends_on: []
+blocks: []
+tags: [research]
+origin: "${q(src || 'dispatched from resume')}"
+---
+
+# Research: ${title}
+
+## Objective
+
+Investigate this question and recommend a direction — do not implement. Produce a recommendation the human can decide on.
+
+## Question
+
+${title}
+
+## Deliverable
+
+- A short recommendation ("this, not that") with the reasoning
+- Options considered and why the recommended one wins
+- Anything that would change the recommendation
+`;
+    fs.writeFileSync(path.join(dir, 'SPEC.md'), spec);
+    if (src && /^threads\//.test(src)) {
+      const tf = safePath(ws, src);
+      if (tf && fs.existsSync(tf)) {
+        let t = safeRead(tf);
+        if (/^status:.*$/m.test(t)) { t = t.replace(/^status:.*$/m, 'status: "promoted"'); fs.writeFileSync(tf, t); }
+      }
+    }
+    return json(res, 200, { ok: true, path: 'specs/' + slug + '/' });
+  }
+
   return json(res, 404, { error: 'unknown endpoint' });
 }
 

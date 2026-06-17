@@ -197,6 +197,22 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .bp-loops .lt .tag { font-family: var(--mono); font-size: .6rem; margin-right: 6px; }
 .bp-loops .ct { font-family: var(--mono); font-size: .62rem; color: var(--dim); white-space: nowrap; }
 
+/* decay inbox — capped asks with inline actions */
+.asks { margin-top: 8px; border-top: 1px solid var(--line); }
+.asks-none { display: flex; align-items: center; gap: 10px; padding: 13px 2px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--dim); font-size: .82rem; margin-top: 8px; }
+.ask { display: flex; align-items: flex-start; gap: 10px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
+.ask > svg { flex: none; margin-top: 2px; }
+.ask .txt { flex: 1; min-width: 0; cursor: pointer; }
+.ask .txt .t { font-size: .84rem; line-height: 1.4; color: var(--ink); }
+.ask .txt .sub { font-family: var(--mono); font-size: .58rem; color: var(--dim); margin-top: 2px; }
+.ask .acts { display: flex; gap: 5px; flex: none; }
+.ask .acts button { font-family: var(--mono); font-size: .58rem; border-radius: 3px; padding: 2px 8px; cursor: pointer; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
+.ask .acts button:hover { color: var(--ink); border-color: var(--ink); }
+.ask .acts .resolve:hover { color: var(--ok); border-color: var(--ok); }
+.ask .acts .research:hover { color: var(--info); border-color: var(--info); }
+.asks-more { font-family: var(--mono); font-size: .62rem; color: var(--dim); padding: 10px 2px; cursor: pointer; }
+.asks-more:hover { color: var(--ink); }
+
 .bp-counts { display: flex; align-items: center; gap: 18px; padding: 16px 2px 0; font-family: var(--mono); font-size: .62rem; }
 .bp-counts .ci { color: var(--dim); cursor: pointer; }
 .bp-counts .ci.open, .bp-counts .ci:hover { color: var(--ink); }
@@ -687,32 +703,67 @@ function renderResume(wss) {
     }
     block.appendChild(hero);
 
-    // ── loops line (expand → all loops) ──
-    const loops = [
-      ...threads.filter(t => ['question', 'risk', 'decision'].includes(t.meta.type) && t.meta.status === 'open').map(t => ({ ...t, _k: t.meta.type })),
-      ...specs.filter(s => s.meta.status === 'blocked').map(s => ({ ...s, _k: 'blocked' })),
-      ...specs.filter(s => s.stage === 'done' && !s.feedback).map(s => ({ ...s, _k: 'feedback', title: s.title + ' — FEEDBACK.md not written' })),
-    ].sort((a, b) => LOOP[a._k].sev - LOOP[b._k].sev);
-    const loopsLine = document.createElement('div');
-    loopsLine.className = 'bp-loops';
-    const loopsEx = document.createElement('div'); loopsEx.className = 'expand';
-    if (loops.length) {
-      const t0 = loops[0], lm = LOOP[t0._k];
-      loopsLine.innerHTML = `${lm.ic(lm.c)}<span class="lt"><span class="tag" style="color:${lm.c}">${t0._k.toUpperCase()}</span>${esc(t0.title)}</span><span class="ct">${loops.length} open loop${loops.length > 1 ? 's' : ''} ›</span>`;
-      loops.forEach(l => {
-        const m = LOOP[l._k];
-        const r = document.createElement('div'); r.className = 'loop-row';
-        const origin = l.meta && l.meta.origin ? ' · ' + l.meta.origin : '';
-        r.innerHTML = `${m.ic(m.c)}<div class="txt"><div class="t">${esc(l.title)}</div><div class="sub">${l._k.toUpperCase()}${esc(origin)} · ${rel(l.mtime)}</div></div>`;
-        r.onclick = () => openDrawer(l);
-        loopsEx.appendChild(r);
-      });
-      loopsLine.onclick = () => loopsEx.classList.toggle('open');
+    // ── decay inbox (capped to 3 asks; research is a first-class response) ──
+    const now = Date.now(), DAY = 86400000;
+    const loops = [];
+    threads.filter(t => ['question', 'risk', 'decision'].includes(t.meta.type) && t.meta.status === 'open')
+      .forEach(t => loops.push({ kind: t.meta.type, item: t, thread: true, title: t.title, sub: t.meta.type.toUpperCase() + (t.meta.origin ? ' · ' + t.meta.origin : '') + ' · ' + rel(t.mtime), age: t.mtime }));
+    specs.filter(s => s.meta.status === 'blocked')
+      .forEach(s => loops.push({ kind: 'blocked', item: s, title: s.title, sub: 'BLOCKED · ' + rel(s.mtime), age: s.mtime }));
+    specs.filter(s => s.stage === 'done' && !s.feedback && s.meta.type !== 'research')
+      .forEach(s => loops.push({ kind: 'feedback', item: s, title: s.title + ' — FEEDBACK not written', sub: 'FEEDBACK · ' + rel(s.mtime), age: s.mtime }));
+    specs.filter(s => s.stage === 'in-progress' && now - s.mtime > 10 * DAY)
+      .forEach(s => loops.push({ kind: 'idle', item: s, title: s.title + ' — stalled?', sub: 'IDLE · ' + rel(s.mtime), age: s.mtime }));
+    specs.filter(s => s.stage === 'triage' && now - s.mtime > 14 * DAY)
+      .forEach(s => loops.push({ kind: 'triage', item: s, title: s.title + ' — promote or kill?', sub: 'TRIAGE · ' + rel(s.mtime), age: s.mtime }));
+    specs.filter(s => s.stage === 'done' && s.meta.type === 'research')
+      .forEach(s => loops.push({ kind: 'research', item: s, title: s.title.replace(/^Research:\s*/i, '') + ' — recommendation ready', sub: 'RESEARCH · ' + rel(s.mtime), age: s.mtime }));
+    ws.intents.filter(it => (it.meta.status === 'decomposed' || it.meta.status === 'approved') &&
+      !specs.some(s => (s.meta.intent || '').replace(/^\.\//, '').trim() === it.path && (s.stage === 'ready' || s.stage === 'in-progress')))
+      .forEach(it => loops.push({ kind: 'starving', item: { ...it, _ws: ws.name }, title: it.title + ' — no active work', sub: 'INTENT · decompose next or close', age: 0 }));
+
+    const SEV = { research: 0, risk: 1, starving: 2, question: 3, blocked: 4, idle: 5, feedback: 6, decision: 7, triage: 8 };
+    loops.sort((a, b) => (SEV[a.kind] - SEV[b.kind]) || (a.age - b.age));
+    const LCOL = { research: '#6b57c7', risk: '#a83232', starving: '#b5712a', question: '#6b57c7', blocked: '#c0622a', idle: '#c0622a', feedback: '#c0622a', decision: '#6b57c7', triage: '#8a8070' };
+    const LIC = { research: IC.question, risk: IC.risk, starving: IC.risk, question: IC.question, blocked: IC.ban, idle: IC.ban, feedback: IC.chat, decision: IC.chat, triage: IC.archive };
+
+    const askRow = l => {
+      const r = document.createElement('div'); r.className = 'ask';
+      r.innerHTML = `${LIC[l.kind](LCOL[l.kind])}<div class="txt"><div class="t">${esc(l.title)}</div><div class="sub">${esc(l.sub)}</div></div><div class="acts"></div>`;
+      r.querySelector('.txt').onclick = () => openDrawer(l.item);
+      const acts = r.querySelector('.acts');
+      const topic = l.title.replace(/\s+—.*$/, '');
+      const mk = (label, cls, fn) => { const b = document.createElement('button'); if (cls) b.className = cls; b.textContent = label; b.onclick = e => { e.stopPropagation(); fn(); }; acts.appendChild(b); };
+      const post = (p, body) => (async () => { try { await postJSON(p, { ws: ws.name, ...body }); } catch (e) { alert(e.message); } loadSelected(); })();
+      if (l.thread) {
+        mk('resolve', 'resolve', () => post('/api/thread-status', { path: l.item.path, status: 'closed' }));
+        mk('park', '', () => post('/api/thread-status', { path: l.item.path, status: 'parked' }));
+        mk('research', 'research', () => post('/api/research', { title: topic, source: l.item.path }));
+      } else {
+        mk(l.kind === 'research' ? 'decide' : 'open', '', () => openDrawer(l.item));
+        if (l.kind === 'blocked' || l.kind === 'triage') mk('research', 'research', () => post('/api/research', { title: topic }));
+      }
+      return r;
+    };
+
+    if (!loops.length) {
+      const none = document.createElement('div'); none.className = 'asks-none';
+      none.innerHTML = `${IC.check('#3a7d55')}<span>No open loops — nothing unresolved.</span>`;
+      block.appendChild(none);
     } else {
-      loopsLine.innerHTML = `${IC.check('#3a7d55')}<span class="lt" style="color:var(--dim)">No open loops — nothing unresolved.</span>`;
-      loopsLine.style.cursor = 'default';
+      const inbox = document.createElement('div'); inbox.className = 'asks';
+      loops.slice(0, 3).forEach(l => inbox.appendChild(askRow(l)));
+      const rest = loops.slice(3);
+      if (rest.length) {
+        const more = document.createElement('div'); more.className = 'asks-more';
+        more.textContent = `+ ${rest.length} more loose end${rest.length > 1 ? 's' : ''} ›`;
+        const moreEx = document.createElement('div'); moreEx.className = 'expand';
+        rest.forEach(l => moreEx.appendChild(askRow(l)));
+        more.onclick = () => moreEx.classList.toggle('open');
+        inbox.appendChild(more); inbox.appendChild(moreEx);
+      }
+      block.appendChild(inbox);
     }
-    block.appendChild(loopsLine); block.appendChild(loopsEx);
 
     // ── counts row (backlog / decisions / parked / capture) ──
     const stCol = { ready: '#3a7d55', blocked: '#c0622a', triage: '#8a8070' };
