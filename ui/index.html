@@ -180,6 +180,16 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .hero-body .md pre { background: rgba(0,0,0,.3); }
 .hero-body .md a { color: #c4b59a; }
 .hero-body .md input[type=checkbox] { accent-color: #b5712a; }
+.hero-fb { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(245,241,232,.1); }
+.hero-fb .fb-flag { font-family: var(--mono); font-size: .6rem; color: #c8916f; background: transparent; border: 1px solid rgba(192,98,42,.45); border-radius: 3px; padding: 4px 11px; cursor: pointer; }
+.hero-fb .fb-flag:hover { color: #e2a55e; border-color: rgba(226,165,94,.55); }
+.hero-fb textarea { width: 100%; background: rgba(0,0,0,.28); border: 1px solid rgba(245,241,232,.15); border-radius: 4px; color: #e6e6ea; font-family: var(--sans); font-size: .82rem; line-height: 1.45; padding: 8px 11px; min-height: 58px; resize: vertical; }
+.hero-fb .fb-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.hero-fb .fb-hint { flex: 1; font-family: var(--mono); font-size: .56rem; color: #8a7f70; }
+.hero-fb .fb-actions button { font-family: var(--mono); font-size: .6rem; border-radius: 3px; padding: 5px 12px; cursor: pointer; }
+.hero-fb .fb-cancel { background: transparent; border: 1px solid rgba(245,241,232,.18); color: #a89f8d; }
+.hero-fb .fb-save { background: #e2a55e; border: none; color: #1c1916; }
+.hero-fb .fb-done { font-family: var(--mono); font-size: .62rem; color: #8fc7a0; padding: 6px 0; line-height: 1.5; }
 
 .bp-loops { display: flex; align-items: center; gap: 10px; padding: 14px 2px 13px; border-bottom: 1px solid var(--line); margin-top: 8px; cursor: pointer; }
 .bp-loops svg { flex: none; }
@@ -523,6 +533,32 @@ async function postJSON(p, body) {
 }
 const specFileOf = item => { const p = item.path || ''; return p.endsWith('/') ? p + 'SPEC.md' : p; };
 
+function addHeroFeedback(hb, wsName, item) {
+  let fb = hb.querySelector('.hero-fb');
+  if (!fb) { fb = document.createElement('div'); fb.className = 'hero-fb'; hb.appendChild(fb); }
+  const showFlag = () => {
+    fb.innerHTML = `<button class="fb-flag">⚑ something’s wrong — revise this</button>`;
+    fb.querySelector('.fb-flag').onclick = showForm;
+  };
+  const showForm = () => {
+    fb.innerHTML = `<textarea class="fb-text" placeholder="what's wrong here, or what should change?"></textarea>
+      <div class="fb-actions"><span class="fb-hint">captured as an open loop · copied as a Claude handoff</span><button class="fb-cancel">cancel</button><button class="fb-save">capture + copy handoff →</button></div>`;
+    const ta = fb.querySelector('.fb-text'); ta.focus();
+    fb.querySelector('.fb-cancel').onclick = showFlag;
+    fb.querySelector('.fb-save').onclick = async () => {
+      const t = ta.value.trim(); if (!t) { ta.focus(); return; }
+      const slug = (item.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
+      try { await postJSON('/api/capture', { ws: wsName, text: t, type: 'risk', status: 'open', linked_spec: item.path, origin: 'feedback on in-focus: ' + slug }); }
+      catch (e) { alert(e.message); return; }
+      let copied = false;
+      try { await navigator.clipboard.writeText(`In project ${wsName}, revise ${specFileOf(item)} — feedback: ${t}`); copied = true; } catch {}
+      fb.innerHTML = `<div class="fb-done">✓ captured as an open loop${copied ? ' · handoff copied — paste into Claude to revise' : ''}</div>`;
+      setTimeout(loadSelected, 1700);
+    };
+  };
+  showFlag();
+}
+
 function renderResume(wss) {
   $('dsProj').textContent = wss.map(w => w.name).join(' · ');
   $('dsDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -620,6 +656,8 @@ function renderResume(wss) {
         <p class="hint">click to ${kind === 'spec' ? 'read the spec' : 'read the thread'} ↓</p>
         <div class="hero-body"><div class="md">loading…</div></div>`;
       let loaded = false;
+      const hb = hero.querySelector('.hero-body');
+      hb.onclick = e => e.stopPropagation();
       hero.onclick = async () => {
         hero.classList.toggle('open');
         hero.querySelector('.hint').textContent = hero.classList.contains('open') ? 'click to collapse ↑' : 'click to read ↓';
@@ -628,8 +666,9 @@ function renderResume(wss) {
           try {
             const f = await (await fetch(`/api/file?ws=${encodeURIComponent(ws.name)}&path=${encodeURIComponent(specFileOf(next))}`)).json();
             const body = (f.content || '').replace(/^---\n[\s\S]*?\n---\n/, '').replace(/^\s*# .*\n+/, '');
-            hero.querySelector('.hero-body .md').innerHTML = md(body);
-          } catch { hero.querySelector('.hero-body .md').textContent = 'could not load file'; }
+            hb.querySelector('.md').innerHTML = md(body);
+            addHeroFeedback(hb, ws.name, next);
+          } catch { hb.querySelector('.md').textContent = 'could not load file'; }
         }
       };
     } else if (inprog.length) {
@@ -746,11 +785,27 @@ function renderResume(wss) {
           row.querySelector('.t').onclick = () => openDrawer(b.s);
           const pri = row.querySelector('.pri');
           pri.onclick = () => {
+            const cur = p;
             const sel = document.createElement('select');
-            ['p0', 'p1', 'p2', 'p3'].forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o.toUpperCase(); if (o === p) op.selected = true; sel.appendChild(op); });
+            ['p0', 'p1', 'p2', 'p3'].forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o.toUpperCase(); if (o === cur) op.selected = true; sel.appendChild(op); });
             pri.replaceWith(sel); sel.focus();
-            sel.onchange = async () => { try { await postJSON('/api/priority', { ws: ws.name, spec: b.s.path, priority: sel.value }); } catch (e) { alert(e.message); } loadSelected(); };
-            sel.onblur = () => loadSelected();
+            let changed = false;
+            sel.onchange = () => {
+              changed = true;
+              const np = sel.value;
+              if (np === cur) { loadSelected(); return; }
+              const inp = document.createElement('input');
+              inp.placeholder = `${cur.toUpperCase()}→${np.toUpperCase()} · why? (⏎ save · esc skip)`;
+              inp.style.cssText = 'font-family:var(--mono);font-size:.62rem;width:236px;border:1px solid var(--accent);border-radius:3px;padding:1px 6px;background:var(--card);color:var(--ink)';
+              sel.replaceWith(inp); inp.focus();
+              const save = async reason => {
+                try { await postJSON('/api/priority', { ws: ws.name, spec: b.s.path, priority: np, from: cur, reason }); } catch (e) { alert(e.message); }
+                loadSelected();
+              };
+              inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); save(inp.value.trim()); } if (e.key === 'Escape') save(''); };
+              inp.onblur = () => save(inp.value.trim());
+            };
+            sel.onblur = () => { if (!changed) loadSelected(); };
           };
           countsEx.appendChild(row);
         });

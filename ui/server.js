@@ -506,13 +506,16 @@ function handlePost(pathname, body, res) {
   if (pathname === '/api/capture') {
     const text = String(body.text || '').trim();
     if (!text) return json(res, 400, { error: 'empty thought' });
-    const { type, status } = inferThread(text);
+    const inf = inferThread(text);
+    const type = body.type || inf.type;
+    const status = body.status || inf.status;
     const file = `threads/${isoDate()}-${slugify(text)}.md`;
     const full = safePath(ws, file);
     if (!full) return json(res, 400, { error: 'bad path' });
     if (fs.existsSync(full)) return json(res, 409, { error: 'thread already exists' });
     fs.mkdirSync(path.dirname(full), { recursive: true });
-    const fm = `---\ntitle: "${text.replace(/"/g, "'")}"\ncreated: ${isoDate()}\ntype: "${type}"\nstatus: "${status}"\norigin: "captured in Resume"\nlinked_intent: ""\nlinked_spec: ""\n---\n\n# ${text}\n`;
+    const q = s => String(s).replace(/"/g, "'");
+    const fm = `---\ntitle: "${q(text)}"\ncreated: ${isoDate()}\ntype: "${type}"\nstatus: "${status}"\norigin: "${q(body.origin || 'captured in Resume')}"\nlinked_intent: "${q(body.linked_intent || '')}"\nlinked_spec: "${q(body.linked_spec || '')}"\n---\n\n# ${text}\n`;
     fs.writeFileSync(full, fm);
     return json(res, 200, { ok: true, path: file, type, status });
   }
@@ -546,6 +549,8 @@ function handlePost(pathname, body, res) {
     const p = String(body.priority || '').toLowerCase();
     if (!/^p[0-3]$/.test(p)) return json(res, 400, { error: 'bad priority' });
     let text = safeRead(full);
+    const fm0 = text.match(/^priority:\s*"?(p[0-3])"?/m);
+    const from = fm0 ? fm0[1] : String(body.from || '').toLowerCase();
     text = /^priority:.*$/m.test(text)
       ? text.replace(/^priority:.*$/m, `priority: "${p}"`)
       : text.replace(/^---\n/, `---\npriority: "${p}"\n`);
@@ -553,7 +558,16 @@ function handlePost(pathname, body, res) {
       ? text.replace(/^priority_set_by:.*$/m, 'priority_set_by: "human"')
       : text.replace(/^(priority:.*\n)/m, '$1priority_set_by: "human"\n');
     fs.writeFileSync(full, text);
-    return json(res, 200, { ok: true });
+    // contrast memory: a human override is a 'this, not that' training example
+    if (from && from !== p) {
+      try {
+        const md = path.join(ws.dir, '_metrics');
+        fs.mkdirSync(md, { recursive: true });
+        fs.appendFileSync(path.join(md, 'override-log.jsonl'),
+          JSON.stringify({ date: isoDate(), spec: rel, from, to: p, reason: String(body.reason || ''), source: 'resume-ui' }) + '\n');
+      } catch {}
+    }
+    return json(res, 200, { ok: true, from });
   }
 
   return json(res, 404, { error: 'unknown endpoint' });
