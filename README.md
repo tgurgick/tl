@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" width="110" alt="tl">
+  <img src="assets/logo.svg" width="92" alt="tl">
 </p>
 
 <h1 align="center">Throughline</h1>
@@ -22,24 +22,26 @@ Throughline (`tl`) is markdown-native project management for agent-driven develo
 
 /tl:new          # guided setup — goals, rules, first intents
 /tl:resume       # where did I leave off? what's unresolved? what's next?
+/tl:capture      # park a thought as a thread, zero ceremony
 /tl:triage       # rank the backlog (then schedule it daily)
-/tl:ui           # pop out the UI — Resume view + live agent monitoring
+/tl:ui           # pop out the UI — Human / Split / Agent
 ```
 
 Prefer to clone? Work inside the repo — your workspaces live in the gitignored `projects/`, and the skill files in `skills/` are self-contained (`/plugin marketplace add .` also works from the repo root).
 
 ## UI
 
-Two tabs, two jobs:
+A local web view of your workspaces — zero dependencies, no build step. Three modes:
 
-- **Resume** (default) — where the project is at: the goal in focus, one recommended next action with its reason, open loops (unresolved questions, decisions, risks, blocked work, missing feedback), recent decisions and completions, parked-thread count, and the ranked backlog. Calm by design.
-- **Live Look** — watching agents work: intent swimlanes by stage, a live diff feed, the file tree with change badges and heat, and a terminal-style activity feed narrating every file event as it happens.
+- **Human** (default) — the desk you return to. The goal in focus (inline-editable: statement, weight, key results), the one recommended next action with its reason, the sharpest open loop, and a counts row that expands into **Horizon** (a forward timeline of upcoming work, sized by effort), the ranked backlog, decisions, and parked threads. Warm paper, calm by design. The three edits a human makes live here — capture a thought, edit scope, change a priority — and each writes the markdown directly.
+- **Agent** — mission control for watching agents work: intent swimlanes by stage, the file tree with change badges and heat, a terminal-style activity feed narrating every file event, and a live file viewer that follows each write and highlights the added lines. Warm charcoal.
+- **Split** — Human as a narrow sidebar beside the full Agent board, so you can steer and watch at once.
 
 ```
 node ui/server.js --open    # → http://localhost:4400  (or just run /tl:ui)
 ```
 
-Zero dependencies, no build step, read-only by design: it renders the markdown and JSONL directly and never writes. Changing anything is still a file edit — that's the point.
+It renders the markdown and JSONL directly — there's no database and no hidden state. When you edit on the Human side, it writes the same files you would by hand: a captured thought becomes a `threads/` file, a priority change sets `priority_set_by: human` and logs the *why* to `override-log.jsonl`, flagging the in-focus spec captures an open loop and copies a Claude handoff. Every change is a file edit — including the ones you make here.
 
 ## Tool vs. workspace
 
@@ -54,7 +56,7 @@ throughline/                    # the tool (this repo, public)
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
-├── ui/                         # local read-only web UI (zero-dep node)
+├── ui/                         # local web UI — Human / Split / Agent (zero-dep node)
 ├── docs/                       # design process docs
 │
 └── projects/                   # your workspaces (gitignored, private)
@@ -124,7 +126,7 @@ Run them on demand from any Claude Code session, or schedule them as routines �
 
 ### /tl resume
 
-The continuity answer. Reconstructs context after time away: focus, last activity, open loops (unresolved questions/decisions/risks + blocked work + missing feedback), recent decisions, parked count, and one recommended next action with the reason. Read-only; its sections mirror the UI's Resume tab exactly.
+The continuity answer. Reconstructs context after time away: status, the goal in focus, the one thing that needs you next (or "all clear"), open loops (unresolved questions/decisions/risks + blocked work + missing feedback), and the backlog. Read-only; its sections mirror the UI's Human tab top to bottom, so CLI and UI never drift.
 
 ### /tl capture
 
@@ -148,9 +150,9 @@ The one skill that needs network. Polls the provider configured in `TRIAGE.yml` 
 
 ## The learning loop
 
-Auto-triage gets smarter from two signals the system records as a side effect of normal use:
+Auto-triage gets smarter from signals the system records as a side effect of normal use:
 
-- **Overrides** — every time you hand-change a priority the triage skill set, the next run logs it to `_metrics/override-log.jsonl` and marks the spec `priority_set_by: human` so it stops fighting you.
+- **Overrides with the why** — change a priority by hand (in the UI or by editing the file) and it's logged to `_metrics/override-log.jsonl` with `from`, `to`, and your *reason*, and the spec is marked `priority_set_by: human` so triage stops fighting you. The reason turns a bare diff into a "this, not that" labeled example.
 - **Outcomes** — `FEEDBACK.md` frontmatter carries 1–5 scores and a `priority_was_right` flag for every completed spec.
 
 A future `/tl reflect` skill reads both and proposes diffs to `TRIAGE.yml` — weights and rules, reviewed by you — rather than tuning an opaque model. Prioritization policy stays a diffable config file.
