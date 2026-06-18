@@ -860,18 +860,29 @@ function renderResume(wss) {
         const bands = reachGoals.map(g => g.id).concat(hasOrphans ? ['__orphan'] : []);
         const bandSpecs = {}; bands.forEach(b => bandSpecs[b] = []);
         specs.forEach(s => { const g = goalOf(s); bandSpecs[reachGoals.some(rg => rg.id === g) ? g : '__orphan'].push(s); });
+        const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
         const BANDGAP = 50;
         const pos = {}, gpos = {}; let cursorX = PAD;
         bands.forEach(b => {
+          const mem = bandSpecs[b].map(s => slugOf(s.path));               // slugs in this band
+          const dn = sl => deps(bySlug[sl]).filter(d => mem.includes(d));  // prerequisites below, in band
+          const up = sl => mem.filter(m => deps(bySlug[m]).includes(sl));  // dependents above, in band
           const byLayer = {};
-          bandSpecs[b].forEach(s => { const l = layerOf(s); (byLayer[l] = byLayer[l] || []).push(s); });
+          mem.forEach(sl => { const l = layerOf(bySlug[sl]); (byLayer[l] = byLayer[l] || []).push(sl); });
+          const layers = Object.keys(byLayer).map(Number).sort((a, c) => a - c);
+          const ord = {}; layers.forEach(l => ord[l] = byLayer[l].slice().sort());  // seed alphabetical
+          const idx = (l, sl) => { const a = ord[l]; return a ? a.indexOf(sl) : -1; };
+          // barycenter sweeps: order siblings by the average position of their neighbours, to uncross edges
+          const sweep = (l, nl, nf) => { ord[l] = ord[l].map((sl, i) => { const ns = nf(sl).map(n => idx(nl, n)).filter(v => v >= 0); return { sl, k: ns.length ? mean(ns) : i }; }).sort((a, c) => a.k - c.k).map(o => o.sl); };
+          for (let it = 0; it < 4; it++) {
+            layers.forEach(l => { if (ord[l - 1]) sweep(l, l - 1, dn); });               // align to prerequisites below
+            layers.slice().reverse().forEach(l => { if (ord[l + 1]) sweep(l, l + 1, up); }); // align to dependents above
+          }
           let bw = GW;  // a band is at least as wide as its goal pill
-          Object.values(byLayer).forEach(arr => { bw = Math.max(bw, arr.length * NW + (arr.length - 1) * GX); });
-          Object.keys(byLayer).map(Number).forEach(l => {
-            const arr = byLayer[l].sort((a, b) => slugOf(a.path).localeCompare(slugOf(b.path)));
-            const lw = arr.length * NW + (arr.length - 1) * GX;
-            const startX = cursorX + (bw - lw) / 2;
-            arr.forEach((s, i) => { pos[slugOf(s.path)] = { x: startX + i * (NW + GX), y: PAD + tierShift + (maxLayer - l) * (NH + GYv), s }; });
+          layers.forEach(l => { bw = Math.max(bw, ord[l].length * NW + (ord[l].length - 1) * GX); });
+          layers.forEach(l => {
+            const arr = ord[l], lw = arr.length * NW + (arr.length - 1) * GX, startX = cursorX + (bw - lw) / 2;
+            arr.forEach((sl, i) => { pos[sl] = { x: startX + i * (NW + GX), y: PAD + tierShift + (maxLayer - l) * (NH + GYv), s: bySlug[sl] }; });
           });
           if (b !== '__orphan') gpos[b] = { x: cursorX + (bw - GW) / 2, y: PAD };
           cursorX += bw + BANDGAP;
