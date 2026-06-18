@@ -264,6 +264,33 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .footnote { margin-top: 46px; text-align: center; font-family: var(--mono); font-size: .62rem; color: var(--faint); }
 .empty { font-size: .78rem; color: var(--dim); padding: 8px 0; }
 
+/* map — the contribution ladder (goal → intent → spec) */
+.map { padding: 6px 0 2px; }
+.mg { border-left: 3px solid var(--accent); padding: 2px 0 12px 14px; margin-bottom: 14px; }
+.mg-head { font-family: var(--serif); font-size: 1.05rem; color: var(--ink); margin-bottom: 10px; }
+.mg-head .wt { font-family: var(--mono); font-size: .68rem; color: var(--dim); margin-left: 8px; }
+.mi { border-left: 1px solid var(--line2); margin-left: 2px; padding: 5px 0 9px 16px; }
+.mi-head { font-size: .9rem; color: var(--ink); cursor: pointer; margin-bottom: 7px; }
+.mi-head:hover { text-decoration: underline; }
+.mi-head .ist { font-family: var(--mono); font-size: .54rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin-left: 8px; }
+.mi-head .ist.done { color: var(--ok); }
+.ms-row { display: flex; flex-wrap: wrap; gap: 7px; }
+.ms { font-family: var(--mono); font-size: .64rem; padding: 4px 9px; border-radius: 4px; cursor: pointer; border: 1px solid var(--line2); color: var(--ink); white-space: nowrap; }
+.ms:hover { border-color: var(--ink); }
+.ms.s-done { background: rgba(58,125,85,.1); border-color: rgba(58,125,85,.4); color: #2e6b47; }
+.ms.s-in-progress { background: rgba(181,113,42,.12); border-color: rgba(181,113,42,.5); color: #8a4a17; }
+.ms.s-ready { border-color: var(--accent); color: var(--accent); }
+.ms.s-blocked { border-color: #c0622a; color: #c0622a; border-style: dashed; }
+.ms.s-triage { border-style: dashed; color: var(--dim); }
+.ms .mp { opacity: .65; margin-left: 2px; }
+.ms .dep { color: var(--dim); margin-left: 2px; }
+.ms-none { font-size: .76rem; color: var(--dim); }
+.map-breaks { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; }
+.mb-head { font-family: var(--mono); font-size: .62rem; letter-spacing: .12em; text-transform: uppercase; color: var(--bad); margin-bottom: 8px; }
+.break-row { font-size: .82rem; color: var(--mid); padding: 7px 0; cursor: pointer; border-bottom: 1px solid var(--line); }
+.break-row:hover { color: var(--ink); }
+.break-row b { font-weight: 500; color: var(--ink); }
+
 /* ════ LIVE LOOK (mission control) ════ */
 #view-live { background: var(--bg); }
 .lanes { display: flex; height: 42%; border-bottom: 1px solid var(--line); overflow-x: auto; flex: none; }
@@ -788,10 +815,56 @@ function renderResume(wss) {
     };
 
     const counts = document.createElement('div'); counts.className = 'bp-counts';
-    counts.innerHTML = `<span class="ci" data-x="hz">horizon</span><span class="ci" data-x="bl">backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">parked <b>${parked.length}</b></span><span class="cap">+ park a thought</span>`;
+    counts.innerHTML = `<span class="ci" data-x="hz">horizon</span><span class="ci" data-x="mp">map</span><span class="ci" data-x="bl">backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">parked <b>${parked.length}</b></span><span class="cap">+ park a thought</span>`;
     const countsEx = document.createElement('div'); countsEx.className = 'expand';
 
     const builders = {
+      mp: () => {
+        countsEx.innerHTML = '';
+        const goals = (ws.config && ws.config.goals) || [];
+        const order = s => ({ done: 0, 'in-progress': 1, ready: 2, triage: 3 }[s.stage] ?? 2);
+        const specsOfIntent = ip => specs.filter(s => (s.meta.intent || '').replace(/^\.\//, '').trim() === ip);
+        const intentsOfGoal = gid => ws.intents.filter(it => (it.meta.goals || []).map(String).includes(gid));
+        const chip = s => {
+          const slug = (s.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
+          const dep = (s.meta.depends_on || []).length;
+          const c = document.createElement('div'); c.className = 'ms s-' + (s.meta.status === 'blocked' ? 'blocked' : s.stage);
+          c.innerHTML = `${esc(slug)}${s.meta.priority ? ` <span class="mp">${esc(s.meta.priority.toUpperCase())}</span>` : ''}${dep ? ` <span class="dep">⇠${dep}</span>` : ''}`;
+          c.title = `${slug} · ${s.stage}${s.meta.size ? ' · ' + s.meta.size : ''}`;
+          c.onclick = () => openDrawer({ ...s, _ws: ws.name });
+          return c;
+        };
+        const wrap = document.createElement('div'); wrap.className = 'map';
+        goals.slice().sort((a, b) => (b.weight || 0) - (a.weight || 0)).forEach(g => {
+          const gEl = document.createElement('div'); gEl.className = 'mg';
+          gEl.innerHTML = `<div class="mg-head">◎ <span class="nm">${esc(g.description || g.id)}</span><span class="wt">${(g.weight ?? 0).toFixed(2)}</span></div>`;
+          const gints = intentsOfGoal(g.id);
+          if (!gints.length) gEl.insertAdjacentHTML('beforeend', `<div class="break-row">⚠ nothing laddering up to this goal</div>`);
+          else gints.forEach(it => {
+            const its = specsOfIntent(it.path);
+            const allDone = its.length && its.every(s => s.stage === 'done');
+            const iEl = document.createElement('div'); iEl.className = 'mi';
+            iEl.innerHTML = `<div class="mi-head"><span class="nm">${esc(it.title)}</span><span class="ist ${it.meta.status === 'done' || allDone ? 'done' : ''}">${esc(it.meta.status || 'intent')}</span></div>`;
+            iEl.querySelector('.mi-head').onclick = () => openDrawer({ ...it, _ws: ws.name });
+            const mrow = document.createElement('div'); mrow.className = 'ms-row';
+            if (!its.length) mrow.innerHTML = '<span class="ms-none">no specs yet</span>';
+            its.slice().sort((a, b) => order(a) - order(b)).forEach(s => mrow.appendChild(chip(s)));
+            iEl.appendChild(mrow); gEl.appendChild(iEl);
+          });
+          wrap.appendChild(gEl);
+        });
+        const orphanSpecs = specs.filter(s => !(s.meta.intent || '').trim());
+        const goalless = ws.intents.filter(it => !(it.meta.goals || []).length);
+        if (orphanSpecs.length || goalless.length) {
+          const bk = document.createElement('div'); bk.className = 'map-breaks';
+          bk.innerHTML = `<div class="mb-head">Throughline breaks</div>`;
+          goalless.forEach(it => { const r = document.createElement('div'); r.className = 'break-row'; r.innerHTML = `intent <b>${esc(it.title)}</b> serves no goal`; r.onclick = () => openDrawer({ ...it, _ws: ws.name }); bk.appendChild(r); });
+          orphanSpecs.forEach(s => { const r = document.createElement('div'); r.className = 'break-row'; const slug = (s.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, ''); r.innerHTML = `spec <b>${esc(slug)}</b> has no intent`; r.onclick = () => openDrawer({ ...s, _ws: ws.name }); bk.appendChild(r); });
+          wrap.appendChild(bk);
+        }
+        if (!wrap.children.length) wrap.innerHTML = '<div class="empty">no goals or intents yet</div>';
+        countsEx.appendChild(wrap);
+      },
       hz: () => {
         countsEx.innerHTML = '';
         const unit = s => ({ small: 1, medium: 2, large: 3 }[s.meta.size] || 2);

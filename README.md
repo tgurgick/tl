@@ -33,9 +33,8 @@ Prefer to clone? Work inside the repo — your workspaces live in the gitignored
 
 A local web view of your workspaces — zero dependencies, no build step. The tabs:
 
-- **Human** (default) — the desk you return to. The goal in focus (inline-editable: statement, weight, key results), the one recommended next action with its reason, the sharpest open loop, and a counts row that expands into **Horizon** (a forward timeline of upcoming work, sized by effort), the ranked backlog, decisions, and parked threads. Warm paper, calm by design. The three edits a human makes live here — capture a thought, edit scope, change a priority — and each writes the markdown directly.
+- **Human** (default) — the desk you return to. The goal in focus (inline-editable: statement, weight, key results), the one recommended next action with its reason, the capped decay inbox (≤3 asks, each with resolve / park / research), and a counts row that expands into the two roadmap lenses — **Horizon** (a forward timeline of upcoming work, sized by effort) and **Map** (the throughline itself: the contribution ladder goal → intent → spec, with dependency counts and every break flagged) — plus the ranked backlog, decisions, and parked threads. Warm paper, calm by design. The edits a human makes live here — capture, edit scope, change a priority, resolve a loop — and each writes the markdown directly.
 - **Agent** — mission control for watching agents work: intent swimlanes by stage, the file tree with change badges and heat, a terminal-style activity feed narrating every file event, and a live file viewer that follows each write and highlights the added lines. Warm charcoal.
-- **Map** — the throughline itself: the contribution ladder, goal → intent → spec, with dependency counts and every break (orphan specs, goal-less intents, goals with nothing delivering them) flagged.
 - **Split** — Human as a narrow sidebar beside the full Agent board, so you can steer and watch at once.
 
 ```
