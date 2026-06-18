@@ -46,10 +46,13 @@ Bug specs add: `source` (`sentry` `datadog` `manual`), `source_id`, `source_url`
 | `title` | string | required |
 | `created` | date | required |
 | `project` | string | workspace name |
-| `status` | enum | `draft` `approved` `decomposed` |
+| `status` | enum | `draft` `approved` `decomposed` `done` |
+| `goals` | list of goal ids | which `TRIAGE.yml` goal(s) this intent serves — the top rung of the throughline |
 | `priority` | enum | `p0`–`p3` or `""` |
 | `tags` | list | |
 | `specs` | list of paths | specs derived from this intent |
+
+The full traceability chain is `goals → intents → specs → code`: a spec names its `intent`, an intent names its `goals`, and `TRIAGE.yml` defines the goals. `/tl map` walks this chain; a missing link (a spec with no intent, an intent with no goal, a goal with nothing under it) is a break in the throughline.
 
 ## Thread (`threads/*.md`)
 

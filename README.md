@@ -31,10 +31,11 @@ Prefer to clone? Work inside the repo — your workspaces live in the gitignored
 
 ## UI
 
-A local web view of your workspaces — zero dependencies, no build step. Three modes:
+A local web view of your workspaces — zero dependencies, no build step. The tabs:
 
 - **Human** (default) — the desk you return to. The goal in focus (inline-editable: statement, weight, key results), the one recommended next action with its reason, the sharpest open loop, and a counts row that expands into **Horizon** (a forward timeline of upcoming work, sized by effort), the ranked backlog, decisions, and parked threads. Warm paper, calm by design. The three edits a human makes live here — capture a thought, edit scope, change a priority — and each writes the markdown directly.
 - **Agent** — mission control for watching agents work: intent swimlanes by stage, the file tree with change badges and heat, a terminal-style activity feed narrating every file event, and a live file viewer that follows each write and highlights the added lines. Warm charcoal.
+- **Map** — the throughline itself: the contribution ladder, goal → intent → spec, with dependency counts and every break (orphan specs, goal-less intents, goals with nothing delivering them) flagged.
 - **Split** — Human as a narrow sidebar beside the full Agent board, so you can steer and watch at once.
 
 ```
@@ -52,7 +53,7 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, triage, reflect, dedup, bug-capture, ui
+├── skills/                     # /tl new, resume, capture, map, triage, reflect, dedup, bug-capture, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
@@ -81,7 +82,7 @@ To start a new workspace, run `/tl:new` for a guided setup — or copy `examples
 
 Spec-driven development assumes you start with a spec. Throughline goes one step further: specs are derived from human intents, not written in isolation. The intent captures the outcome a person cares about. The spec translates that into a contract an agent can deliver against. The throughline between them is traceability — every line of code traces back through a spec to a human intent.
 
-**Intents** are written in outcome language: "users can sign up with one tap and their session persists." They define success metrics, scope, and constraints. They don't specify implementation. A human writes and owns intents.
+**Intents** are written in outcome language: "users can sign up with one tap and their session persists." They define success metrics, scope, and constraints. They don't specify implementation. A human writes and owns intents, and each declares the `goals` it serves — completing the chain `goals → intents → specs → code` that `/tl map` walks.
 
 **Specs** are written in execution language: "create `auth-stack.ts` with Cognito user pool, ensure `cdk synth` passes." They have acceptance criteria with test commands, file scope boundaries, context folders with crash reports or code excerpts, and implementation hints. An intent decomposes into one or more specs. Each spec is a folder — the self-contained context package an agent receives.
 
@@ -139,6 +140,10 @@ Guided workspace setup. Interviews you for goals (with observable key results), 
 ### /tl triage
 
 Ranks the backlog. Scores every spec against the weighted goals in `TRIAGE.yml`, applies the priority rules (first match wins), checks allocation drift, and rewrites `PRIORITIES.md`. Detects priorities a human changed by hand since the last run and records them in `override-log.jsonl`. Never creates, executes, or deletes specs, and never re-scores a human-set priority — only an explicit rule can change one.
+
+### /tl map
+
+Paints the throughline — the contribution ladder `goal → intent → spec → code` that is the product's whole premise. Renders what every spec ladders up to, overlays dependencies, and flags the breaks: orphan specs (no intent), goal-less intents, and goals with nothing delivering them. Read-only. Needs intents to declare their `goals` (the top rung of the chain).
 
 ### /tl reflect
 

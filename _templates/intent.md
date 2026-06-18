@@ -2,7 +2,8 @@
 title: ""
 created: YYYY-MM-DD
 project: ""
-status: "draft"                 # draft | approved | decomposed
+status: "draft"                 # draft | approved | decomposed | done
+goals: []                       # TRIAGE.yml goal id(s) this intent serves — the top of the throughline
 priority: ""                    # p0 | p1 | p2 | p3
 tags: []
 specs: []                       # paths to specs derived from this intent

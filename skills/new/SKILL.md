@@ -25,7 +25,7 @@ One group of questions at a time. Offer concrete defaults with every question so
 
 **4. Error tracking.** Sentry, Datadog, or Bugsnag project to poll? Write the `error_tracking` block either way; default `enabled: false`.
 
-**5. First intents (1–3).** "What outcomes do you want first?" Draft each from `_templates/intent.md` — outcome language, why it matters, one or two success metrics, in/out scope. Show each draft and revise from feedback before writing the file.
+**5. First intents (1–3).** "What outcomes do you want first?" Draft each from `_templates/intent.md` — outcome language, why it matters, one or two success metrics, in/out scope. For each intent, set its `goals` to the goal id(s) from step 2 that it serves — this is the top of the throughline, and `/tl map` flags any intent left without one. Show each draft and revise from feedback before writing the file.
 
 **6. First spec (optional).** Offer to decompose the highest-priority intent into one spec from `_templates/spec/` — objective, testable acceptance criteria, file scope. Fine to skip; say specs can be written when the work starts.
 

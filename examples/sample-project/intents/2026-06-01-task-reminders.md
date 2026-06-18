@@ -3,6 +3,7 @@ title: "Task reminders"
 created: 2026-06-01
 project: "todo-app"
 status: "decomposed"
+goals: [v1-launch]
 priority: "p1"
 tags: [notifications, retention]
 specs:
