@@ -264,6 +264,15 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .footnote { margin-top: 46px; text-align: center; font-family: var(--mono); font-size: .62rem; color: var(--faint); }
 .empty { font-size: .78rem; color: var(--dim); padding: 8px 0; }
 
+/* map — dependency DAG + breaks */
+.dag-wrap { overflow-x: auto; padding: 8px 0 4px; }
+.dag-wrap svg { display: block; }
+.dn { cursor: pointer; }
+.dn rect:first-child { transition: stroke-width .1s; }
+.dn:hover rect:first-child { stroke-width: 2; }
+.dag-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 2px; font-family: var(--mono); font-size: .58rem; color: var(--dim); }
+.dag-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
 /* map — the contribution ladder (goal → intent → spec) */
 .map { padding: 6px 0 2px; }
 .mg { border-left: 3px solid var(--accent); padding: 2px 0 12px 14px; margin-bottom: 14px; }
@@ -821,49 +830,75 @@ function renderResume(wss) {
     const builders = {
       mp: () => {
         countsEx.innerHTML = '';
-        const goals = (ws.config && ws.config.goals) || [];
-        const order = s => ({ done: 0, 'in-progress': 1, ready: 2, triage: 3 }[s.stage] ?? 2);
-        const specsOfIntent = ip => specs.filter(s => (s.meta.intent || '').replace(/^\.\//, '').trim() === ip);
-        const intentsOfGoal = gid => ws.intents.filter(it => (it.meta.goals || []).map(String).includes(gid));
-        const chip = s => {
-          const slug = (s.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
-          const dep = (s.meta.depends_on || []).length;
-          const c = document.createElement('div'); c.className = 'ms s-' + (s.meta.status === 'blocked' ? 'blocked' : s.stage);
-          c.innerHTML = `${esc(slug)}${s.meta.priority ? ` <span class="mp">${esc(s.meta.priority.toUpperCase())}</span>` : ''}${dep ? ` <span class="dep">⇠${dep}</span>` : ''}`;
-          c.title = `${slug} · ${s.stage}${s.meta.size ? ' · ' + s.meta.size : ''}`;
-          c.onclick = () => openDrawer({ ...s, _ws: ws.name });
-          return c;
+        if (!specs.length) { countsEx.innerHTML = '<div class="empty">no specs to map yet</div>'; return; }
+        const slugOf = p => (p || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
+        const bySlug = {}; specs.forEach(s => { bySlug[slugOf(s.path)] = s; });
+        const deps = s => (s.meta.depends_on || []).map(slugOf).filter(sl => bySlug[sl] && sl !== slugOf(s.path));
+        // longest-path layering, cycle-guarded
+        const lm = {};
+        const layerOf = (s, seen) => {
+          const k = slugOf(s.path); if (k in lm) return lm[k];
+          seen = seen || new Set(); if (seen.has(k)) return 0; seen.add(k);
+          const d = deps(s); const l = d.length ? 1 + Math.max(...d.map(x => layerOf(bySlug[x], seen))) : 0;
+          return (lm[k] = l);
         };
-        const wrap = document.createElement('div'); wrap.className = 'map';
-        goals.slice().sort((a, b) => (b.weight || 0) - (a.weight || 0)).forEach(g => {
-          const gEl = document.createElement('div'); gEl.className = 'mg';
-          gEl.innerHTML = `<div class="mg-head">◎ <span class="nm">${esc(g.description || g.id)}</span><span class="wt">${(g.weight ?? 0).toFixed(2)}</span></div>`;
-          const gints = intentsOfGoal(g.id);
-          if (!gints.length) gEl.insertAdjacentHTML('beforeend', `<div class="break-row">⚠ nothing laddering up to this goal</div>`);
-          else gints.forEach(it => {
-            const its = specsOfIntent(it.path);
-            const allDone = its.length && its.every(s => s.stage === 'done');
-            const iEl = document.createElement('div'); iEl.className = 'mi';
-            iEl.innerHTML = `<div class="mi-head"><span class="nm">${esc(it.title)}</span><span class="ist ${it.meta.status === 'done' || allDone ? 'done' : ''}">${esc(it.meta.status || 'intent')}</span></div>`;
-            iEl.querySelector('.mi-head').onclick = () => openDrawer({ ...it, _ws: ws.name });
-            const mrow = document.createElement('div'); mrow.className = 'ms-row';
-            if (!its.length) mrow.innerHTML = '<span class="ms-none">no specs yet</span>';
-            its.slice().sort((a, b) => order(a) - order(b)).forEach(s => mrow.appendChild(chip(s)));
-            iEl.appendChild(mrow); gEl.appendChild(iEl);
-          });
-          wrap.appendChild(gEl);
+        // goal colour per spec, via its intent's first goal
+        const goals = (ws.config && ws.config.goals) || [];
+        const GPAL = ['#6b57c7', '#3a7d55', '#c0622a', '#b5712a', '#a83232', '#1d7a8c'];
+        const goalColor = {}; goals.forEach((g, i) => goalColor[g.id] = GPAL[i % GPAL.length]);
+        const intentByPath = {}; ws.intents.forEach(it => intentByPath[it.path] = it);
+        const goalOf = s => { const it = intentByPath[(s.meta.intent || '').replace(/^\.\//, '').trim()]; return it && (it.meta.goals || [])[0]; };
+        // positions
+        const NW = 132, NH = 30, GX = 56, GY = 12, PAD = 12;
+        const cols = {};
+        specs.forEach(s => { const l = layerOf(s); (cols[l] = cols[l] || []).push(s); });
+        const pos = {}; let maxRows = 0;
+        const maxLayer = Math.max(0, ...Object.keys(cols).map(Number));
+        Object.keys(cols).map(Number).sort((a, b) => a - b).forEach(l => {
+          cols[l].sort((a, b) => ({ done: 0, 'in-progress': 1, ready: 2, triage: 3 }[a.stage] ?? 2) - ({ done: 0, 'in-progress': 1, ready: 2, triage: 3 }[b.stage] ?? 2));
+          cols[l].forEach((s, i) => { pos[slugOf(s.path)] = { x: PAD + l * (NW + GX), y: PAD + i * (NH + GY), s }; });
+          maxRows = Math.max(maxRows, cols[l].length);
         });
+        const W = PAD * 2 + (maxLayer + 1) * NW + maxLayer * GX;
+        const Hsvg = PAD * 2 + maxRows * NH + (maxRows - 1) * GY;
+        const stroke = s => s.meta.status === 'blocked' ? '#c0622a' : ({ done: '#3a7d55', 'in-progress': '#b5712a', ready: '#b5712a', triage: '#8a8070' }[s.stage] || '#8a8070');
+        const fill = s => ({ done: 'rgba(58,125,85,.10)', 'in-progress': 'rgba(181,113,42,.12)' }[s.stage] || '#fffefb');
+        let edges = '', nodes = '';
+        specs.forEach(s => {
+          const p = pos[slugOf(s.path)]; if (!p) return;
+          deps(s).forEach(d => {
+            const q = pos[d]; if (!q) return;
+            const x1 = q.x + NW, y1 = q.y + NH / 2, x2 = p.x, y2 = p.y + NH / 2, mx = (x1 + x2) / 2;
+            edges += `<path d="M${x1} ${y1} C ${mx} ${y1} ${mx} ${y2} ${x2} ${y2}" fill="none" stroke="#c2bcab" stroke-width="1.25"/>`;
+          });
+        });
+        specs.forEach(s => {
+          const p = pos[slugOf(s.path)]; if (!p) return;
+          const slug = slugOf(s.path), lbl = slug.length > 17 ? slug.slice(0, 16) + '…' : slug;
+          const gc = goalColor[goalOf(s)] || '#c9c2b4';
+          const dash = (s.stage === 'triage' || s.meta.status === 'blocked') ? ' stroke-dasharray="3 2"' : '';
+          nodes += `<g class="dn" data-slug="${esc(slug)}">
+            <rect x="${p.x}" y="${p.y}" width="${NW}" height="${NH}" rx="5" fill="${fill(s)}" stroke="${stroke(s)}"${dash}/>
+            <rect x="${p.x}" y="${p.y}" width="3.5" height="${NH}" fill="${gc}"/>
+            <text x="${p.x + 13}" y="${p.y + NH / 2 + 0.5}" font-family="ui-monospace,monospace" font-size="10.5" fill="#1c1916" dominant-baseline="middle">${esc(lbl)}</text>
+            ${s.meta.priority ? `<text x="${p.x + NW - 8}" y="${p.y + NH / 2 + 0.5}" text-anchor="end" font-family="ui-monospace,monospace" font-size="8.5" fill="${stroke(s)}" dominant-baseline="middle">${esc(s.meta.priority.toUpperCase())}</text>` : ''}
+          </g>`;
+        });
+        const legend = goals.length ? `<div class="dag-legend">${goals.map(g => `<span><i style="background:${goalColor[g.id]}"></i>${esc(g.description || g.id)}</span>`).join('')}</div>` : '';
+        countsEx.innerHTML = `<div class="dag-wrap"><svg width="${W}" height="${Hsvg}" viewBox="0 0 ${W} ${Hsvg}">${edges}${nodes}</svg></div>${legend}`;
+        countsEx.querySelectorAll('.dn').forEach(g => { g.onclick = () => { const s = bySlug[g.dataset.slug]; if (s) openDrawer({ ...s, _ws: ws.name }); }; });
+        // throughline breaks
         const orphanSpecs = specs.filter(s => !(s.meta.intent || '').trim());
         const goalless = ws.intents.filter(it => !(it.meta.goals || []).length);
-        if (orphanSpecs.length || goalless.length) {
+        const starving = goals.filter(g => !ws.intents.some(it => (it.meta.goals || []).map(String).includes(g.id)));
+        if (orphanSpecs.length || goalless.length || starving.length) {
           const bk = document.createElement('div'); bk.className = 'map-breaks';
           bk.innerHTML = `<div class="mb-head">Throughline breaks</div>`;
+          starving.forEach(g => bk.insertAdjacentHTML('beforeend', `<div class="break-row">goal <b>${esc(g.description || g.id)}</b> has nothing laddering up</div>`));
           goalless.forEach(it => { const r = document.createElement('div'); r.className = 'break-row'; r.innerHTML = `intent <b>${esc(it.title)}</b> serves no goal`; r.onclick = () => openDrawer({ ...it, _ws: ws.name }); bk.appendChild(r); });
-          orphanSpecs.forEach(s => { const r = document.createElement('div'); r.className = 'break-row'; const slug = (s.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, ''); r.innerHTML = `spec <b>${esc(slug)}</b> has no intent`; r.onclick = () => openDrawer({ ...s, _ws: ws.name }); bk.appendChild(r); });
-          wrap.appendChild(bk);
+          orphanSpecs.forEach(s => { const r = document.createElement('div'); r.className = 'break-row'; r.innerHTML = `spec <b>${esc(slugOf(s.path))}</b> has no intent`; r.onclick = () => openDrawer({ ...s, _ws: ws.name }); bk.appendChild(r); });
+          countsEx.appendChild(bk);
         }
-        if (!wrap.children.length) wrap.innerHTML = '<div class="empty">no goals or intents yet</div>';
-        countsEx.appendChild(wrap);
       },
       hz: () => {
         countsEx.innerHTML = '';
