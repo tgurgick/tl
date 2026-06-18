@@ -842,26 +842,41 @@ function renderResume(wss) {
           return (lm[k] = l);
         };
         const goals = (ws.config && ws.config.goals) || [];
-        // vertical layout: foundations at the bottom, work laddering up toward goals
-        const NW = 150, NH = 30, GX = 22, GYv = 46, PAD = 14;
+        // each spec ladders to a goal via its intent
+        const intentByPath = {}; (ws.intents || []).forEach(it => intentByPath[it.path] = it);
+        const goalOf = s => { const it = intentByPath[(s.meta.intent || '').replace(/^\.\//, '').trim()]; return it && (it.meta.goals || [])[0]; };
+        // the "in focus" spec — what the IN FOCUS card points at: active work, top priority first
+        const PR = p => ({ p0: 0, p1: 1, p2: 2, p3: 3 }[(p || '').toLowerCase()] ?? 9);
+        const focus = specs.filter(s => s.stage === 'in-progress').sort((a, b) => PR(a.meta.priority) - PR(b.meta.priority))[0];
+        const focusSlug = focus && slugOf(focus.path);
+        // vertical layout: foundations at the bottom, work laddering up toward goals at the top
+        const NW = 150, NH = 30, GX = 22, GYv = 46, PAD = 14, GW = 168;
         const cols = {};
         specs.forEach(s => { const l = layerOf(s); (cols[l] = cols[l] || []).push(s); });
         const maxLayer = Math.max(0, ...Object.keys(cols).map(Number));
+        const reachGoals = goals.filter(g => specs.some(s => goalOf(s) === g.id));
+        const hasGoalRow = reachGoals.length > 0;
+        const goalRowW = hasGoalRow ? reachGoals.length * GW + (reachGoals.length - 1) * GX : 0;
         const rowW = {}; Object.keys(cols).forEach(l => { rowW[l] = cols[l].length * NW + (cols[l].length - 1) * GX; });
-        const totalW = Math.max(...Object.values(rowW)) + PAD * 2;
+        const totalW = Math.max(goalRowW, ...Object.values(rowW)) + PAD * 2;
+        const tierShift = hasGoalRow ? NH + GYv : 0;  // push specs down to make room for the goal row
         const pos = {};
         Object.keys(cols).map(Number).forEach(l => {
           cols[l].sort((a, b) => slugOf(a.path).localeCompare(slugOf(b.path)));
           const startX = (totalW - rowW[l]) / 2;
-          cols[l].forEach((s, i) => { pos[slugOf(s.path)] = { x: startX + i * (NW + GX), y: PAD + (maxLayer - l) * (NH + GYv), s }; });
+          cols[l].forEach((s, i) => { pos[slugOf(s.path)] = { x: startX + i * (NW + GX), y: PAD + tierShift + (maxLayer - l) * (NH + GYv), s }; });
         });
+        const gpos = {};
+        if (hasGoalRow) { const startX = (totalW - goalRowW) / 2; reachGoals.forEach((g, i) => { gpos[g.id] = { x: startX + i * (GW + GX), y: PAD }; }); }
         const W = totalW;
-        const Hsvg = PAD * 2 + (maxLayer + 1) * NH + maxLayer * GYv;
-        // near-monochrome: amber is the only accent (active work); everything else is ink/grey
-        const stroke = s => s.stage === 'in-progress' ? '#b5712a' : s.stage === 'done' ? '#cbc6b8' : s.meta.status === 'blocked' ? '#9a948a' : s.stage === 'triage' ? '#cbc6b8' : '#1c1916';
-        const textFill = s => s.stage === 'done' || s.stage === 'triage' ? '#9a948a' : '#1c1916';
-        const fill = s => s.stage === 'in-progress' ? 'rgba(181,113,42,.07)' : '#fffefb';
-        let edges = '', nodes = '';
+        const Hsvg = PAD * 2 + (maxLayer + 1 + (hasGoalRow ? 1 : 0)) * NH + (maxLayer + (hasGoalRow ? 1 : 0)) * GYv;
+        // near-monochrome: ink/grey everywhere; the in-focus node is the one charged surface (dark, amber)
+        const stroke = s => slugOf(s.path) === focusSlug ? '#b5712a' : s.stage === 'in-progress' ? '#b5712a' : s.stage === 'done' ? '#cbc6b8' : s.meta.status === 'blocked' ? '#9a948a' : s.stage === 'triage' ? '#cbc6b8' : '#1c1916';
+        const textFill = s => slugOf(s.path) === focusSlug ? '#f5f1e8' : (s.stage === 'done' || s.stage === 'triage') ? '#9a948a' : '#1c1916';
+        const fill = s => slugOf(s.path) === focusSlug ? '#1c1916' : s.stage === 'in-progress' ? 'rgba(181,113,42,.07)' : '#fffefb';
+        // sinks = specs nothing else depends on; these are what deliver up to a goal
+        const dependedOn = new Set(); specs.forEach(s => deps(s).forEach(d => dependedOn.add(d)));
+        let edges = '', goalEdges = '', nodes = '', goalNodes = '';
         specs.forEach(s => {
           const p = pos[slugOf(s.path)]; if (!p) return;
           deps(s).forEach(d => {
@@ -869,19 +884,37 @@ function renderResume(wss) {
             const x1 = q.x + NW / 2, y1 = q.y, x2 = p.x + NW / 2, y2 = p.y + NH, my = (y1 + y2) / 2;
             edges += `<path d="M${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}" fill="none" stroke="#cbc6b8" stroke-width="1.25"/>`;
           });
+          // contribution edge: a sink spec ladders up to its goal
+          if (hasGoalRow && !dependedOn.has(slugOf(s.path))) {
+            const g = gpos[goalOf(s)]; if (g) {
+              const x1 = p.x + NW / 2, y1 = p.y, x2 = g.x + GW / 2, y2 = g.y + NH, my = (y1 + y2) / 2;
+              goalEdges += `<path d="M${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}" fill="none" stroke="#d8d2c4" stroke-width="1.25" stroke-dasharray="1 4" stroke-linecap="round"/>`;
+            }
+          }
+        });
+        reachGoals.forEach(g => {
+          const gp = gpos[g.id]; const lbl0 = g.description || g.id; const lbl = lbl0.length > 22 ? lbl0.slice(0, 21) + '…' : lbl0;
+          goalNodes += `<g class="dn dn-goal" data-goal="${esc(g.id)}">
+            <rect x="${gp.x}" y="${gp.y}" width="${GW}" height="${NH}" rx="15" fill="#efe9dc" stroke="#b9b2a1"/>
+            <text x="${gp.x + GW / 2}" y="${gp.y + NH / 2 + 0.5}" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9.5" letter-spacing=".03em" fill="#5a5347" dominant-baseline="middle">${esc(lbl.toUpperCase())}</text>
+          </g>`;
         });
         specs.forEach(s => {
           const p = pos[slugOf(s.path)]; if (!p) return;
           const slug = slugOf(s.path), lbl = slug.length > 19 ? slug.slice(0, 18) + '…' : slug;
-          const dash = (s.stage === 'triage' || s.meta.status === 'blocked') ? ' stroke-dasharray="3 2"' : '';
-          nodes += `<g class="dn" data-slug="${esc(slug)}">
-            <rect x="${p.x}" y="${p.y}" width="${NW}" height="${NH}" rx="5" fill="${fill(s)}" stroke="${stroke(s)}"${dash}/>
-            <text x="${p.x + 12}" y="${p.y + NH / 2 + 0.5}" font-family="ui-monospace,monospace" font-size="10.5" fill="${textFill(s)}" dominant-baseline="middle">${esc(lbl)}</text>
-            ${s.meta.priority ? `<text x="${p.x + NW - 8}" y="${p.y + NH / 2 + 0.5}" text-anchor="end" font-family="ui-monospace,monospace" font-size="8.5" fill="#9a948a" dominant-baseline="middle">${esc(s.meta.priority.toUpperCase())}</text>` : ''}
+          const isFocus = slug === focusSlug;
+          const dash = (!isFocus && (s.stage === 'triage' || s.meta.status === 'blocked')) ? ' stroke-dasharray="3 2"' : '';
+          const sw = isFocus ? ' stroke-width="1.75"' : '';
+          const prFill = isFocus ? '#d98a3d' : '#9a948a';
+          nodes += `<g class="dn${isFocus ? ' dn-focus' : ''}" data-slug="${esc(slug)}">
+            <rect x="${p.x}" y="${p.y}" width="${NW}" height="${NH}" rx="5" fill="${fill(s)}" stroke="${stroke(s)}"${sw}${dash}/>
+            ${isFocus ? `<text x="${p.x + 12}" y="${p.y + 9}" font-family="ui-monospace,monospace" font-size="6" letter-spacing=".12em" fill="#d98a3d">IN FOCUS</text>` : ''}
+            <text x="${p.x + 12}" y="${p.y + NH / 2 + (isFocus ? 5.5 : 0.5)}" font-family="ui-monospace,monospace" font-size="10.5" fill="${textFill(s)}" dominant-baseline="middle">${esc(lbl)}</text>
+            ${s.meta.priority ? `<text x="${p.x + NW - 8}" y="${p.y + NH / 2 + 0.5}" text-anchor="end" font-family="ui-monospace,monospace" font-size="8.5" fill="${prFill}" dominant-baseline="middle">${esc(s.meta.priority.toUpperCase())}</text>` : ''}
           </g>`;
         });
-        countsEx.innerHTML = `<div class="dag-cap">↑ laddering up to goals</div><div class="dag-wrap"><svg width="${W}" height="${Hsvg}" viewBox="0 0 ${W} ${Hsvg}">${edges}${nodes}</svg></div>`;
-        countsEx.querySelectorAll('.dn').forEach(g => { g.onclick = () => { const s = bySlug[g.dataset.slug]; if (s) openDrawer({ ...s, _ws: ws.name }); }; });
+        countsEx.innerHTML = `<div class="dag-cap">↑ laddering up to goals</div><div class="dag-wrap"><svg width="${W}" height="${Hsvg}" viewBox="0 0 ${W} ${Hsvg}">${goalEdges}${edges}${goalNodes}${nodes}</svg></div>`;
+        countsEx.querySelectorAll('.dn[data-slug]').forEach(g => { g.onclick = () => { const s = bySlug[g.dataset.slug]; if (s) openDrawer({ ...s, _ws: ws.name }); }; });
         // throughline breaks
         const orphanSpecs = specs.filter(s => !(s.meta.intent || '').trim());
         const goalless = ws.intents.filter(it => !(it.meta.goals || []).length);
