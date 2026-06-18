@@ -265,13 +265,12 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .empty { font-size: .78rem; color: var(--dim); padding: 8px 0; }
 
 /* map — dependency DAG + breaks */
-.dag-wrap { overflow-x: auto; padding: 8px 0 4px; }
+.dag-cap { font-family: var(--mono); font-size: .58rem; color: var(--faint); text-align: center; margin: 2px 0 -2px; letter-spacing: .04em; }
+.dag-wrap { overflow-x: auto; padding: 8px 0 4px; display: flex; justify-content: center; }
 .dag-wrap svg { display: block; }
 .dn { cursor: pointer; }
 .dn rect:first-child { transition: stroke-width .1s; }
 .dn:hover rect:first-child { stroke-width: 2; }
-.dag-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 2px; font-family: var(--mono); font-size: .58rem; color: var(--dim); }
-.dag-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
 
 /* map — the contribution ladder (goal → intent → spec) */
 .map { padding: 6px 0 2px; }
@@ -842,50 +841,46 @@ function renderResume(wss) {
           const d = deps(s); const l = d.length ? 1 + Math.max(...d.map(x => layerOf(bySlug[x], seen))) : 0;
           return (lm[k] = l);
         };
-        // goal colour per spec, via its intent's first goal
         const goals = (ws.config && ws.config.goals) || [];
-        const GPAL = ['#6b57c7', '#3a7d55', '#c0622a', '#b5712a', '#a83232', '#1d7a8c'];
-        const goalColor = {}; goals.forEach((g, i) => goalColor[g.id] = GPAL[i % GPAL.length]);
-        const intentByPath = {}; ws.intents.forEach(it => intentByPath[it.path] = it);
-        const goalOf = s => { const it = intentByPath[(s.meta.intent || '').replace(/^\.\//, '').trim()]; return it && (it.meta.goals || [])[0]; };
-        // positions
-        const NW = 132, NH = 30, GX = 56, GY = 12, PAD = 12;
+        // vertical layout: foundations at the bottom, work laddering up toward goals
+        const NW = 150, NH = 30, GX = 22, GYv = 46, PAD = 14;
         const cols = {};
         specs.forEach(s => { const l = layerOf(s); (cols[l] = cols[l] || []).push(s); });
-        const pos = {}; let maxRows = 0;
         const maxLayer = Math.max(0, ...Object.keys(cols).map(Number));
-        Object.keys(cols).map(Number).sort((a, b) => a - b).forEach(l => {
-          cols[l].sort((a, b) => ({ done: 0, 'in-progress': 1, ready: 2, triage: 3 }[a.stage] ?? 2) - ({ done: 0, 'in-progress': 1, ready: 2, triage: 3 }[b.stage] ?? 2));
-          cols[l].forEach((s, i) => { pos[slugOf(s.path)] = { x: PAD + l * (NW + GX), y: PAD + i * (NH + GY), s }; });
-          maxRows = Math.max(maxRows, cols[l].length);
+        const rowW = {}; Object.keys(cols).forEach(l => { rowW[l] = cols[l].length * NW + (cols[l].length - 1) * GX; });
+        const totalW = Math.max(...Object.values(rowW)) + PAD * 2;
+        const pos = {};
+        Object.keys(cols).map(Number).forEach(l => {
+          cols[l].sort((a, b) => slugOf(a.path).localeCompare(slugOf(b.path)));
+          const startX = (totalW - rowW[l]) / 2;
+          cols[l].forEach((s, i) => { pos[slugOf(s.path)] = { x: startX + i * (NW + GX), y: PAD + (maxLayer - l) * (NH + GYv), s }; });
         });
-        const W = PAD * 2 + (maxLayer + 1) * NW + maxLayer * GX;
-        const Hsvg = PAD * 2 + maxRows * NH + (maxRows - 1) * GY;
-        const stroke = s => s.meta.status === 'blocked' ? '#c0622a' : ({ done: '#3a7d55', 'in-progress': '#b5712a', ready: '#b5712a', triage: '#8a8070' }[s.stage] || '#8a8070');
-        const fill = s => ({ done: 'rgba(58,125,85,.10)', 'in-progress': 'rgba(181,113,42,.12)' }[s.stage] || '#fffefb');
+        const W = totalW;
+        const Hsvg = PAD * 2 + (maxLayer + 1) * NH + maxLayer * GYv;
+        // near-monochrome: amber is the only accent (active work); everything else is ink/grey
+        const stroke = s => s.stage === 'in-progress' ? '#b5712a' : s.stage === 'done' ? '#cbc6b8' : s.meta.status === 'blocked' ? '#9a948a' : s.stage === 'triage' ? '#cbc6b8' : '#1c1916';
+        const textFill = s => s.stage === 'done' || s.stage === 'triage' ? '#9a948a' : '#1c1916';
+        const fill = s => s.stage === 'in-progress' ? 'rgba(181,113,42,.07)' : '#fffefb';
         let edges = '', nodes = '';
         specs.forEach(s => {
           const p = pos[slugOf(s.path)]; if (!p) return;
           deps(s).forEach(d => {
-            const q = pos[d]; if (!q) return;
-            const x1 = q.x + NW, y1 = q.y + NH / 2, x2 = p.x, y2 = p.y + NH / 2, mx = (x1 + x2) / 2;
-            edges += `<path d="M${x1} ${y1} C ${mx} ${y1} ${mx} ${y2} ${x2} ${y2}" fill="none" stroke="#c2bcab" stroke-width="1.25"/>`;
+            const q = pos[d]; if (!q) return;  // q = prerequisite (below), p = dependent (above)
+            const x1 = q.x + NW / 2, y1 = q.y, x2 = p.x + NW / 2, y2 = p.y + NH, my = (y1 + y2) / 2;
+            edges += `<path d="M${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}" fill="none" stroke="#cbc6b8" stroke-width="1.25"/>`;
           });
         });
         specs.forEach(s => {
           const p = pos[slugOf(s.path)]; if (!p) return;
-          const slug = slugOf(s.path), lbl = slug.length > 17 ? slug.slice(0, 16) + '…' : slug;
-          const gc = goalColor[goalOf(s)] || '#c9c2b4';
+          const slug = slugOf(s.path), lbl = slug.length > 19 ? slug.slice(0, 18) + '…' : slug;
           const dash = (s.stage === 'triage' || s.meta.status === 'blocked') ? ' stroke-dasharray="3 2"' : '';
           nodes += `<g class="dn" data-slug="${esc(slug)}">
             <rect x="${p.x}" y="${p.y}" width="${NW}" height="${NH}" rx="5" fill="${fill(s)}" stroke="${stroke(s)}"${dash}/>
-            <rect x="${p.x}" y="${p.y}" width="3.5" height="${NH}" fill="${gc}"/>
-            <text x="${p.x + 13}" y="${p.y + NH / 2 + 0.5}" font-family="ui-monospace,monospace" font-size="10.5" fill="#1c1916" dominant-baseline="middle">${esc(lbl)}</text>
-            ${s.meta.priority ? `<text x="${p.x + NW - 8}" y="${p.y + NH / 2 + 0.5}" text-anchor="end" font-family="ui-monospace,monospace" font-size="8.5" fill="${stroke(s)}" dominant-baseline="middle">${esc(s.meta.priority.toUpperCase())}</text>` : ''}
+            <text x="${p.x + 12}" y="${p.y + NH / 2 + 0.5}" font-family="ui-monospace,monospace" font-size="10.5" fill="${textFill(s)}" dominant-baseline="middle">${esc(lbl)}</text>
+            ${s.meta.priority ? `<text x="${p.x + NW - 8}" y="${p.y + NH / 2 + 0.5}" text-anchor="end" font-family="ui-monospace,monospace" font-size="8.5" fill="#9a948a" dominant-baseline="middle">${esc(s.meta.priority.toUpperCase())}</text>` : ''}
           </g>`;
         });
-        const legend = goals.length ? `<div class="dag-legend">${goals.map(g => `<span><i style="background:${goalColor[g.id]}"></i>${esc(g.description || g.id)}</span>`).join('')}</div>` : '';
-        countsEx.innerHTML = `<div class="dag-wrap"><svg width="${W}" height="${Hsvg}" viewBox="0 0 ${W} ${Hsvg}">${edges}${nodes}</svg></div>${legend}`;
+        countsEx.innerHTML = `<div class="dag-cap">↑ laddering up to goals</div><div class="dag-wrap"><svg width="${W}" height="${Hsvg}" viewBox="0 0 ${W} ${Hsvg}">${edges}${nodes}</svg></div>`;
         countsEx.querySelectorAll('.dn').forEach(g => { g.onclick = () => { const s = bySlug[g.dataset.slug]; if (s) openDrawer({ ...s, _ws: ws.name }); }; });
         // throughline breaks
         const orphanSpecs = specs.filter(s => !(s.meta.intent || '').trim());
