@@ -851,24 +851,32 @@ function renderResume(wss) {
         const focusSlug = focus && slugOf(focus.path);
         // vertical layout: foundations at the bottom, work laddering up toward goals at the top
         const NW = 150, NH = 30, GX = 22, GYv = 46, PAD = 14, GW = 168;
-        const cols = {};
-        specs.forEach(s => { const l = layerOf(s); (cols[l] = cols[l] || []).push(s); });
-        const maxLayer = Math.max(0, ...Object.keys(cols).map(Number));
+        const maxLayer = Math.max(0, ...specs.map(s => layerOf(s)));
         const reachGoals = goals.filter(g => specs.some(s => goalOf(s) === g.id));
+        const hasOrphans = specs.some(s => !reachGoals.some(g => g.id === goalOf(s)));
         const hasGoalRow = reachGoals.length > 0;
-        const goalRowW = hasGoalRow ? reachGoals.length * GW + (reachGoals.length - 1) * GX : 0;
-        const rowW = {}; Object.keys(cols).forEach(l => { rowW[l] = cols[l].length * NW + (cols[l].length - 1) * GX; });
-        const totalW = Math.max(goalRowW, ...Object.values(rowW)) + PAD * 2;
         const tierShift = hasGoalRow ? NH + GYv : 0;  // push specs down to make room for the goal row
-        const pos = {};
-        Object.keys(cols).map(Number).forEach(l => {
-          cols[l].sort((a, b) => slugOf(a.path).localeCompare(slugOf(b.path)));
-          const startX = (totalW - rowW[l]) / 2;
-          cols[l].forEach((s, i) => { pos[slugOf(s.path)] = { x: startX + i * (NW + GX), y: PAD + tierShift + (maxLayer - l) * (NH + GYv), s }; });
+        // forest layout: one vertical band per goal so each tree runs straight up — no crossing
+        const bands = reachGoals.map(g => g.id).concat(hasOrphans ? ['__orphan'] : []);
+        const bandSpecs = {}; bands.forEach(b => bandSpecs[b] = []);
+        specs.forEach(s => { const g = goalOf(s); bandSpecs[reachGoals.some(rg => rg.id === g) ? g : '__orphan'].push(s); });
+        const BANDGAP = 50;
+        const pos = {}, gpos = {}; let cursorX = PAD;
+        bands.forEach(b => {
+          const byLayer = {};
+          bandSpecs[b].forEach(s => { const l = layerOf(s); (byLayer[l] = byLayer[l] || []).push(s); });
+          let bw = GW;  // a band is at least as wide as its goal pill
+          Object.values(byLayer).forEach(arr => { bw = Math.max(bw, arr.length * NW + (arr.length - 1) * GX); });
+          Object.keys(byLayer).map(Number).forEach(l => {
+            const arr = byLayer[l].sort((a, b) => slugOf(a.path).localeCompare(slugOf(b.path)));
+            const lw = arr.length * NW + (arr.length - 1) * GX;
+            const startX = cursorX + (bw - lw) / 2;
+            arr.forEach((s, i) => { pos[slugOf(s.path)] = { x: startX + i * (NW + GX), y: PAD + tierShift + (maxLayer - l) * (NH + GYv), s }; });
+          });
+          if (b !== '__orphan') gpos[b] = { x: cursorX + (bw - GW) / 2, y: PAD };
+          cursorX += bw + BANDGAP;
         });
-        const gpos = {};
-        if (hasGoalRow) { const startX = (totalW - goalRowW) / 2; reachGoals.forEach((g, i) => { gpos[g.id] = { x: startX + i * (GW + GX), y: PAD }; }); }
-        const W = totalW;
+        const W = cursorX - BANDGAP + PAD;
         const Hsvg = PAD * 2 + (maxLayer + 1 + (hasGoalRow ? 1 : 0)) * NH + (maxLayer + (hasGoalRow ? 1 : 0)) * GYv;
         // near-monochrome: ink/grey everywhere; the in-focus node is the one charged surface (dark, amber)
         const stroke = s => slugOf(s.path) === focusSlug ? '#b5712a' : s.stage === 'in-progress' ? '#b5712a' : s.stage === 'done' ? '#cbc6b8' : s.meta.status === 'blocked' ? '#9a948a' : s.stage === 'triage' ? '#cbc6b8' : '#1c1916';
