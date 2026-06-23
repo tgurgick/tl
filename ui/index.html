@@ -319,7 +319,7 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lcard .meta { display: flex; justify-content: space-between; margin-top: 7px; font-family: var(--mono); font-size: .58rem; }
 .lcard .agent { color: var(--accent); display: flex; align-items: center; gap: 4px; }
 .lcard .elapsed { color: var(--dim); }
-.lcard .done-tag { color: rgba(111,174,132,.6); font-family: var(--mono); font-size: .58rem; display: block; margin-top: 6px; }
+.lcard.done .t { text-decoration: line-through; text-decoration-color: rgba(111,174,132,.6); color: var(--dim); }
 .lcard .pbar { height: 2px; background: rgba(255,255,255,.06); border-radius: 2px; overflow: hidden; margin-top: 8px; }
 .lcard .pbar i { display: block; height: 100%; width: 40%; border-radius: 2px;
   background: linear-gradient(90deg, rgba(226,165,94,.4), var(--accent)); animation: tl-slide 2.2s ease-in-out infinite; }
@@ -1093,11 +1093,10 @@ function renderLanes(wss) {
     items.forEach(s => {
       const slug = (s.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
       const card = document.createElement('div');
-      card.className = 'lcard' + (stage === 'in-progress' ? ' working' : '');
+      card.className = 'lcard' + (stage === 'in-progress' ? ' working' : '') + (stage === 'done' ? ' done' : '');
       let inner = (multi ? `<span class="ws-tag">${esc(s._ws)}</span>` : '') + `<p class="t">${esc(stage === 'triage' || stage === 'ready' ? s.title : slug)}</p>`;
       if (stage === 'in-progress') inner += `<div class="pbar"><i></i></div>
         <div class="meta"><span class="agent">⚡ active</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
-      if (stage === 'done') inner += `<span class="done-tag">✓ done</span>`;
       card.innerHTML = inner;
       card.onclick = () => openDrawer(s);
       body.appendChild(card);
