@@ -218,9 +218,12 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .bp-counts .ci { color: var(--dim); cursor: pointer; }
 .bp-counts .ci.open, .bp-counts .ci:hover { color: var(--ink); }
 .bp-counts .ci b { color: var(--mid); font-weight: 400; }
-.bp-counts .cap { margin-left: auto; color: var(--dim); cursor: pointer; }
-.bp-counts .cap:hover { color: var(--ink); }
 .bp-counts input { font-family: var(--sans); font-size: .8rem; background: var(--card); border: 1px solid var(--accent-line); border-radius: 3px; padding: 4px 9px; width: 260px; }
+.park { margin-top: 40px; }
+.park-label { display: block; font-family: var(--mono); font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
+.park-input { width: 100%; box-sizing: border-box; font-family: var(--sans); font-size: .92rem; color: var(--ink); background: var(--card); border: 1px solid var(--line2); border-radius: 5px; padding: 12px 14px; }
+.park-input:focus { border-color: var(--accent); outline: none; }
+.park-input:disabled { opacity: .5; }
 
 /* horizon — forward timeline */
 .horizon { padding: 4px 0 2px; }
@@ -409,9 +412,17 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .dr-notes { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line); }
 .dr-notes-h { font-family: var(--mono); font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; color: #b57fc7; margin-bottom: 10px; }
 .dr-notes-h .dim { color: var(--faint); text-transform: none; letter-spacing: 0; }
-.dr-notes-body { font-size: .8rem; margin-bottom: 12px; }
-.dr-note-input { width: 100%; font-family: var(--sans); font-size: .82rem; color: var(--ink); background: var(--card); border: 1px solid var(--line2); border-radius: 4px; padding: 8px 10px; }
+.dr-note-input { width: 100%; box-sizing: border-box; font-family: var(--sans); font-size: .82rem; color: var(--ink); background: var(--card); border: 1px solid var(--line2); border-radius: 4px; padding: 8px 10px; }
 .dr-note-input:focus { border-color: #b57fc7; outline: none; }
+/* inline (PR-style) notes on body sections */
+.dr-body > * { position: relative; }
+.rv-thread { margin: -2px 0 8px; }
+.rv-note { background: rgba(181,127,199,.09); border-left: 2px solid #b57fc7; padding: 6px 10px; margin: 5px 0; font-size: .8rem; color: var(--mid); border-radius: 0 3px 3px 0; }
+.rv-add { display: inline-block; font-family: var(--mono); font-size: .56rem; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity .1s; }
+.dr-body > *:hover + .rv-thread .rv-add, .rv-thread:hover .rv-add { opacity: 1; }
+.rv-add:hover { color: #b57fc7; }
+.rv-inline-input { width: 100%; box-sizing: border-box; font-family: var(--sans); font-size: .82rem; margin: 4px 0; padding: 7px 10px; border: 1px solid #b57fc7; border-radius: 4px; background: var(--card); color: var(--ink); }
+.rv-inline-input:focus { outline: none; }
 .pill {
   font-family: var(--mono); font-size: .6rem; letter-spacing: .03em; color: var(--dim);
   border: 1px solid var(--line2); border-radius: 2px; padding: 2px 8px;
@@ -557,6 +568,21 @@ function md(src) {
 }
 
 /* ── drawer ── */
+// parse a spec's NOTES.md into {date, anchor, text} — anchor ties a note to a section (inline review)
+function parseNotes(raw) {
+  if (!raw) return [];
+  const out = [];
+  for (const blk of raw.split(/\n(?=## )/)) {
+    const lines = blk.split('\n');
+    if (!/^## /.test(lines[0] || '')) continue;
+    const date = (lines[0].match(/##\s*([\d-]+)/) || [, ''])[1];
+    let rest = lines.slice(1), anchor = '';
+    if (rest[0] && /^>\s*on:/i.test(rest[0])) { anchor = rest[0].replace(/^>\s*on:\s*/i, '').trim(); rest = rest.slice(1); }
+    const text = rest.join('\n').trim();
+    if (text) out.push({ date, anchor, text });
+  }
+  return out;
+}
 function openDrawer(item) {
   const meta = item.meta || {};
   let pills = '';
@@ -567,19 +593,22 @@ function openDrawer(item) {
   if (item._ws) pills += `<span class="pill">${esc(item._ws)}</span>`;
   const body = (item.body || '').replace(/^\s*# .*\n+/, '');
   const isSpec = (item.path || '').endsWith('/');
+  const notes = parseNotes(item.notes);
+  const general = notes.filter(n => !n.anchor);
   const notesHtml = isSpec ? `
     <div class="dr-notes">
-      <div class="dr-notes-h">Notes${item.notes ? '' : ' <span class="dim">— none yet</span>'}</div>
-      ${item.notes ? `<div class="md dr-notes-body">${md(item.notes)}</div>` : ''}
-      <input class="dr-note-input" placeholder="leave a note for the agent / reviewer — ⏎ saves">
+      <div class="dr-notes-h">Notes <span class="dim">— hover a section above to comment inline, or leave a general note here</span></div>
+      ${general.map(n => `<div class="rv-note">${esc(n.text)}</div>`).join('')}
+      <input class="dr-note-input" placeholder="general note — ⏎ saves">
     </div>` : '';
   $('drawer').innerHTML = `
     <div class="path">${esc(item.path || '')}</div>
     <h2>${esc(item.title)}</h2>
     <div class="meta">${pills}</div>
-    <div class="md">${md(body)}</div>
+    <div class="md dr-body">${md(body)}</div>
     ${notesHtml}`;
   if (isSpec) {
+    decorateBlocks($('drawer').querySelector('.dr-body'), item, notes.filter(n => n.anchor));
     const inp = $('drawer').querySelector('.dr-note-input');
     inp.onkeydown = async e => {
       if (e.key !== 'Enter' || !inp.value.trim()) return;
@@ -590,6 +619,34 @@ function openDrawer(item) {
     };
   }
   document.body.classList.add('open');
+}
+// attach inline notes + a hover "+ note" affordance under each body block (PR-review style)
+function decorateBlocks(bodyEl, item, anchored) {
+  if (!bodyEl) return;
+  [...bodyEl.children].forEach(el => {
+    const key = el.textContent.trim().replace(/\s+/g, ' ').slice(0, 120);
+    if (!key) return;
+    const thread = document.createElement('div'); thread.className = 'rv-thread';
+    anchored.filter(n => key.slice(0, 70).startsWith(n.anchor.slice(0, 70)) || n.anchor.slice(0, 70).startsWith(key.slice(0, 70)))
+      .forEach(n => thread.insertAdjacentHTML('beforeend', `<div class="rv-note">${esc(n.text)}</div>`));
+    const add = document.createElement('span'); add.className = 'rv-add'; add.textContent = '+ note';
+    add.onclick = () => {
+      add.style.visibility = 'hidden';
+      const inp = document.createElement('input'); inp.className = 'rv-inline-input'; inp.placeholder = 'comment on this section — ⏎';
+      thread.insertBefore(inp, add); inp.focus();
+      const done = () => { inp.remove(); add.style.visibility = ''; };
+      inp.onkeydown = async e => {
+        if (e.key === 'Escape') return done();
+        if (e.key !== 'Enter') return;
+        const t = inp.value.trim(); if (!t) return done();
+        inp.disabled = true;
+        try { await postJSON('/api/note', { ws: item._ws, spec: item.path, text: t, anchor: key }); thread.insertBefore(Object.assign(document.createElement('div'), { className: 'rv-note', textContent: t }), inp); done(); loadSelected(); }
+        catch (err) { alert(err.message); inp.disabled = false; }
+      };
+    };
+    thread.appendChild(add);
+    el.after(thread);
+  });
 }
 $('scrim').onclick = () => document.body.classList.remove('open');
 addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('open'); });
@@ -859,7 +916,7 @@ function renderResume(wss) {
     };
 
     const counts = document.createElement('div'); counts.className = 'bp-counts';
-    counts.innerHTML = `<span class="ci" data-x="hz">horizon</span><span class="ci" data-x="mp">map</span><span class="ci" data-x="bl">backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">parked <b>${parked.length}</b></span><span class="cap">+ park a thought</span>`;
+    counts.innerHTML = `<span class="ci" data-x="hz">horizon</span><span class="ci" data-x="mp">map</span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span>`;
     const countsEx = document.createElement('div'); countsEx.className = 'expand';
 
     const builders = {
@@ -1123,19 +1180,18 @@ function renderResume(wss) {
         builders[x](); countsEx.classList.add('open');
       };
     });
-    counts.querySelector('.cap').onclick = () => {
-      const cap = counts.querySelector('.cap');
-      const inp = document.createElement('input'); inp.placeholder = 'park a thought to explore — ⏎ saves';
-      cap.replaceWith(inp); inp.focus();
-      const commit = async () => {
-        const v = inp.value.trim();
-        if (v) { try { await postJSON('/api/capture', { ws: ws.name, text: v }); loadSelected(); return; } catch (e) { alert(e.message); } }
-        loadSelected();
-      };
-      inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } if (e.key === 'Escape') loadSelected(); };
-      inp.onblur = commit;
-    };
     block.appendChild(counts); block.appendChild(countsEx);
+
+    // ── park a thought (prominent, at the bottom) ──
+    const park = document.createElement('div'); park.className = 'park';
+    park.innerHTML = `<span class="park-label">Park a thought</span><input class="park-input" placeholder="something to explore later — ⏎ saves">`;
+    const pinp = park.querySelector('.park-input');
+    pinp.onkeydown = async e => {
+      if (e.key !== 'Enter') return; e.preventDefault();
+      const v = pinp.value.trim(); if (!v) return;
+      pinp.disabled = true; try { await postJSON('/api/capture', { ws: ws.name, text: v }); pinp.value = ''; loadSelected(); } catch (err) { alert(err.message); pinp.disabled = false; }
+    };
+    block.appendChild(park);
 
     paper.appendChild(block);
   }

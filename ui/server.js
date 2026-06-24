@@ -675,13 +675,16 @@ ${title}
   }
 
   if (pathname === '/api/note') {
-    // leave feedback on any spec, in any stage — appended to its NOTES.md so it travels with the spec
+    // leave feedback on any spec, in any stage — appended to its NOTES.md so it travels with the spec.
+    // an optional `anchor` ties the note to a section of the spec (inline, PR-review style).
     const rel = String(body.spec || '').replace(/\/$/, '');
     const text = String(body.text || '').trim();
+    const anchor = String(body.anchor || '').replace(/\n/g, ' ').trim();
     if (!text) return json(res, 400, { error: 'empty note' });
     const dir = safePath(ws, rel);
     if (!dir || !isDir(dir) || !fs.existsSync(path.join(dir, 'SPEC.md'))) return json(res, 404, { error: 'spec not found' });
-    fs.appendFileSync(path.join(dir, 'NOTES.md'), `\n## ${isoDate()} — note\n${text}\n`);
+    const entry = `\n## ${isoDate()} — note\n` + (anchor ? `> on: ${anchor}\n` : '') + text + '\n';
+    fs.appendFileSync(path.join(dir, 'NOTES.md'), entry);
     return json(res, 200, { ok: true });
   }
 
