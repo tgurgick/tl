@@ -897,7 +897,7 @@ function renderResume(wss) {
         specs.forEach(s => { const g = goalOf(s); bandSpecs[reachGoals.some(rg => rg.id === g) ? g : '__orphan'].push(s); });
         const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
         const BANDGAP = 50;
-        const pos = {}, gpos = {}, dpos = {}; let cursorX = PAD; const allRoutes = [];
+        const pos = {}, gpos = {}, dpos = {}; let cursorX = PAD; const allRoutes = [], allGoalRoutes = [];
         bands.forEach(b => {
           const mem = bandSpecs[b].map(s => slugOf(s.path));               // slugs in this band
           const memSet = new Set(mem);
@@ -918,6 +918,16 @@ function renderResume(wss) {
               routes.push(chain);
             });
           });
+          // contribution routes: each in-band sink ladders up to the goal — dummy waypoints at the layers
+          // above it so the (dashed) edge bends around taller nodes in the band instead of behind them.
+          if (b !== '__orphan') {
+            mem.filter(sl => !mem.some(m => deps(bySlug[m]).includes(sl))).forEach(sl => {
+              const chain = [sl];
+              for (let L = Lr(sl) + 1; L <= maxLayer; L++) { const id = '__g' + b + (dseq++); layerOfId[id] = L; chain.push(id); }
+              for (let i = 0; i < chain.length - 1; i++) addSeg(chain[i], chain[i + 1]);
+              allGoalRoutes.push({ chain, band: b });
+            });
+          }
           const byLayer = {};
           Object.keys(layerOfId).forEach(id => { const L = layerOfId[id]; (byLayer[L] = byLayer[L] || []).push(id); });
           const layers = Object.keys(byLayer).map(Number).sort((a, c) => a - c);
@@ -965,15 +975,16 @@ function renderResume(wss) {
           for (let i = 1; i < pts.length; i++) { const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], my = (y1 + y2) / 2; dPath += ` C ${x1} ${my} ${x2} ${my} ${x2} ${y2}`; }
           edges += `<path d="${dPath}" fill="none" stroke="#cbc6b8" stroke-width="1.25"/>`;
         });
-        // contribution edges: a sink spec ladders up to its goal
-        specs.forEach(s => {
-          const p = pos[slugOf(s.path)]; if (!p) return;
-          if (hasGoalRow && !dependedOn.has(slugOf(s.path))) {
-            const g = gpos[goalOf(s)]; if (g) {
-              const x1 = p.x + NW / 2, y1 = p.y, x2 = g.x + GW / 2, y2 = g.y + NH, my = (y1 + y2) / 2;
-              goalEdges += `<path d="M${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}" fill="none" stroke="#d8d2c4" stroke-width="1.25" stroke-dasharray="1 4" stroke-linecap="round"/>`;
-            }
-          }
+        // contribution edges: spline from each sink through its dummy waypoints up to the goal pill,
+        // so a low sink in a tall band bends around the nodes above it instead of crossing behind them
+        allGoalRoutes.forEach(({ chain, band }) => {
+          const q = pos[chain[0]], g = gpos[band]; if (!q || !g) return;
+          const pts = [[q.x + NW / 2, q.y]];
+          for (let i = 1; i < chain.length; i++) { const dp = dpos[chain[i]]; if (dp) pts.push([dp.x, dp.y]); }
+          pts.push([g.x + GW / 2, g.y + NH]);
+          let dPath = `M${pts[0][0]} ${pts[0][1]}`;
+          for (let i = 1; i < pts.length; i++) { const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], my = (y1 + y2) / 2; dPath += ` C ${x1} ${my} ${x2} ${my} ${x2} ${y2}`; }
+          goalEdges += `<path d="${dPath}" fill="none" stroke="#d8d2c4" stroke-width="1.25" stroke-dasharray="1 4" stroke-linecap="round"/>`;
         });
         reachGoals.forEach(g => {
           const gp = gpos[g.id]; const lbl0 = g.description || g.id; const lbl = lbl0.length > 22 ? lbl0.slice(0, 21) + '…' : lbl0;
