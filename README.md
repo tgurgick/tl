@@ -52,7 +52,7 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, run, map, triage, reflect, dedup, bug-capture, ui
+├── skills/                     # /tl new, resume, capture, run, map, triage, reflect, dedup, bug-capture, goal, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
@@ -147,6 +147,10 @@ Ranks the backlog. Scores every spec against the weighted goals in `TRIAGE.yml`,
 ### /tl map
 
 Paints the throughline — the contribution ladder `goal → intent → spec → code` that is the product's whole premise. Renders what every spec ladders up to, overlays dependencies, and flags the breaks: orphan specs (no intent), goal-less intents, and goals with nothing delivering them. Read-only. Needs intents to declare their `goals` (the top rung of the chain).
+
+### /tl goal
+
+Conversational editing of the one human-owned config — the `goals` in `TRIAGE.yml`. A short Q&A (description → observable key results → relative importance) replaces hand-editing: you give the new goal's importance, and it proposes weights renormalized to exactly 1.0, shows the before → after, and writes only on your approval. The rationale is logged to `goal-log.jsonl` so `/tl reflect` can learn from weight decisions. Proposes, never writes silently.
 
 ### /tl reflect
 
