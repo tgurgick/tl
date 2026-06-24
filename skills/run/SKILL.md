@@ -48,7 +48,7 @@ Same as `/tl triage`: the argument is a workspace name under `projects/` or a pa
 
 ## Guardrails
 
-- One spec per invocation. Fan-out across parallel tracks is a separate, later capability — don't build it in here.
+- One spec per invocation. To run many in parallel, that's `/tl trains` (it evaluates conflicts and fans out conflict-free specs as concurrent subagents) — `run` itself always works exactly one.
 - Never delete a dispatch file. Status transitions only, so the queue stays an auditable, git-tracked record.
 - Never dispatch (that's the cockpit / `POST /api/dispatch`); `/tl run` only consumes.
 - Honor the spec's `Do not touch` absolutely. When in doubt about scope, capture a thread or fail the dispatch — never quietly broaden it.

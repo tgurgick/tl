@@ -52,7 +52,7 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, promote, groom, run, review, map, triage, reflect, dedup, bug-capture, goal, ui
+├── skills/                     # /tl new, resume, capture, promote, groom, run, trains, review, map, triage, reflect, dedup, bug-capture, goal, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
@@ -151,6 +151,10 @@ Guided workspace setup. Interviews you for goals (with observable key results), 
 ### /tl triage
 
 Ranks the backlog. Scores every spec against the weighted goals in `TRIAGE.yml`, applies the priority rules (first match wins), checks allocation drift, and rewrites `PRIORITIES.md`. Detects priorities a human changed by hand since the last run and records them in `override-log.jsonl`. Never creates, executes, or deletes specs, and never re-scores a human-set priority — only an explicit rule can change one.
+
+### /tl trains
+
+The parallel counterpart to `/tl run`. It evaluates the pending dispatch queue for conflicts — read-only research specs never conflict (unlimited parallel); code specs parallelize only when their declared file scopes are disjoint; undeclared scope is treated as a conflict — then claims the largest conflict-free batch and runs them as concurrent subagents (capped ~4, calm over swarm), each landing in `in-review`. Same-file specs serialize or get batched via `/tl groom`. Reports the batch vs the held-back, and what now waits for sign-off. The gate is what makes this safe: every train lands in `in-review`, never `done`.
 
 ### /tl review
 
