@@ -330,6 +330,9 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lcard { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; cursor: pointer; }
 .lcard:hover { border-color: var(--line2); }
 .lcard.working { border-color: var(--accent-line); }
+.lcard .gate { display: flex; align-items: center; gap: 4px; font-family: var(--mono); }
+.gate-tests { color: #6b8fc7; }
+.gate-review { color: #b57fc7; }
 .lcard .t { font-size: .78rem; line-height: 1.4; color: var(--ink); }
 .lcard .ws-tag { font-family: var(--mono); font-size: .55rem; color: var(--faint); display: block; margin-bottom: 3px; }
 .lcard .meta { display: flex; justify-content: space-between; margin-top: 7px; font-family: var(--mono); font-size: .58rem; }
@@ -785,6 +788,8 @@ function renderResume(wss) {
       .forEach(s => loops.push({ kind: 'idle', item: s, title: s.title + ' — stalled?', sub: 'IDLE · ' + rel(s.mtime), age: s.mtime }));
     specs.filter(s => s.stage === 'triage' && now - s.mtime > 14 * DAY)
       .forEach(s => loops.push({ kind: 'triage', item: s, title: s.title + ' — promote or kill?', sub: 'TRIAGE · ' + rel(s.mtime), age: s.mtime }));
+    specs.filter(s => s.stage === 'in-review')
+      .forEach(s => loops.push({ kind: 'review', item: s, title: s.title + ' — awaiting your sign-off', sub: 'REVIEW · ' + rel(s.mtime), age: s.mtime }));
     specs.filter(s => s.stage === 'done' && s.meta.type === 'research')
       .forEach(s => loops.push({ kind: 'research', item: s, title: s.title.replace(/^Research:\s*/i, '') + ' — recommendation ready', sub: 'RESEARCH · ' + rel(s.mtime), age: s.mtime }));
     ws.intents.filter(it => (it.meta.status === 'decomposed' || it.meta.status === 'approved') &&
@@ -795,10 +800,10 @@ function renderResume(wss) {
         loops.push({ kind: 'starving', item: { ...it, _ws: ws.name }, title: it.title + ' — no active work', sub: its.length ? `INTENT · ${doneN}/${its.length} specs done` : 'INTENT · not yet decomposed', age: 0 });
       });
 
-    const SEV = { research: 0, risk: 1, starving: 2, question: 3, blocked: 4, idle: 5, feedback: 6, decision: 7, triage: 8 };
+    const SEV = { review: 0, research: 1, risk: 2, starving: 3, question: 4, blocked: 5, idle: 6, feedback: 7, decision: 8, triage: 9 };
     loops.sort((a, b) => (SEV[a.kind] - SEV[b.kind]) || (a.age - b.age));
-    const LCOL = { research: '#6b57c7', risk: '#a83232', starving: '#b5712a', question: '#6b57c7', blocked: '#c0622a', idle: '#c0622a', feedback: '#c0622a', decision: '#6b57c7', triage: '#8a8070' };
-    const LIC = { research: IC.question, risk: IC.risk, starving: IC.risk, question: IC.question, blocked: IC.ban, idle: IC.ban, feedback: IC.chat, decision: IC.chat, triage: IC.archive };
+    const LCOL = { review: '#b57fc7', research: '#6b57c7', risk: '#a83232', starving: '#b5712a', question: '#6b57c7', blocked: '#c0622a', idle: '#c0622a', feedback: '#c0622a', decision: '#6b57c7', triage: '#8a8070' };
+    const LIC = { review: IC.check, research: IC.question, risk: IC.risk, starving: IC.risk, question: IC.question, blocked: IC.ban, idle: IC.ban, feedback: IC.chat, decision: IC.chat, triage: IC.archive };
 
     const askRow = l => {
       const r = document.createElement('div'); r.className = 'ask';
@@ -1159,6 +1164,8 @@ const STAGES = [
   ['triage', 'TRIAGE', '#8a8070'],
   ['ready', 'READY', '#c9c2b4'],
   ['in-progress', 'IN PROGRESS', '#e2a55e'],
+  ['tests', 'TESTS', '#6b8fc7'],
+  ['in-review', 'IN REVIEW', '#b57fc7'],
   ['done', 'DONE', '#6fae84'],
 ];
 
@@ -1190,6 +1197,8 @@ function renderLanes(wss) {
       let inner = (multi ? `<span class="ws-tag">${esc(s._ws)}</span>` : '') + `<p class="t">${esc(stage === 'triage' || stage === 'ready' ? s.title : slug)}</p>`;
       if (stage === 'in-progress') inner += `<div class="pbar"><i></i></div>
         <div class="meta"><span class="agent">⚡ active</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
+      if (stage === 'tests') inner += `<div class="meta"><span class="gate gate-tests">⏳ tests</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
+      if (stage === 'in-review') inner += `<div class="meta"><span class="gate gate-review">◆ needs review</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
       let dispBtn = null;
       if (stage === 'ready' && s.meta.status !== 'blocked') {
         const dst = dispBy[s._ws + '|' + slug];

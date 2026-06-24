@@ -52,7 +52,7 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, promote, groom, run, map, triage, reflect, dedup, bug-capture, goal, ui
+├── skills/                     # /tl new, resume, capture, promote, groom, run, review, map, triage, reflect, dedup, bug-capture, goal, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
@@ -151,6 +151,10 @@ Guided workspace setup. Interviews you for goals (with observable key results), 
 ### /tl triage
 
 Ranks the backlog. Scores every spec against the weighted goals in `TRIAGE.yml`, applies the priority rules (first match wins), checks allocation drift, and rewrites `PRIORITIES.md`. Detects priorities a human changed by hand since the last run and records them in `override-log.jsonl`. Never creates, executes, or deletes specs, and never re-scores a human-set priority — only an explicit rule can change one.
+
+### /tl review
+
+The human gate between `in-review` and `done`. `/tl run` carries work to `in-review/` but never signs it off — `/tl review` is where a person makes the call. For each spec waiting, it assembles the evidence (acceptance criteria, the worker's `FEEDBACK.md`, and the actual `git diff` — checked against the claims, optionally via `/code-review`), then accepts it to `done` or kicks it back to `in-progress` with a written reason (a captured thread). This gate is what makes parallel fan-out safe: many agents pool their output in `in-review/`, and you clear it in a batch instead of merging blind.
 
 ### /tl map
 

@@ -187,6 +187,8 @@ function readWorkspace(ws) {
     ...readStage(dir, 'triage', 'triage'),
     ...readStage(dir, 'ready', 'specs'),
     ...readStage(dir, 'in-progress', 'in-progress'),
+    ...readStage(dir, 'tests', 'tests'),
+    ...readStage(dir, 'in-review', 'in-review'),
     ...readStage(dir, 'done', 'done'),
   ];
 

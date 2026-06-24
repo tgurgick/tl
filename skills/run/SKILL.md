@@ -32,17 +32,19 @@ Same as `/tl triage`: the argument is a workspace name under `projects/` or a pa
 
 **7. Capture threads.** For anything worth not losing that surfaces mid-work — a decision, a follow-up, a risk, an out-of-scope discovery — write a thread via the `/tl capture` rules (`../capture/SKILL.md`). Undocumented discoveries are a leak.
 
-**8. Finish — success.** When the acceptance criteria are met:
-- Write `outcome/FEEDBACK.md` (template: `../../_templates/FEEDBACK.md`) — what shipped, what went well, what to watch, and a "Captured threads" list.
-- Move the spec folder `in-progress/<slug>/` → `done/<slug>/` and set `status: done`.
-- In the dispatch file set `status: "done"` and stamp `finished_at`.
+**8. The tests gate.** When the work is written, move the spec `in-progress/<slug>/` → `tests/<slug>/` (`status: tests`) and run the spec's acceptance-criteria tests / verification. If they fail, that's a failure (step 10): leave it in `tests/` as `status: blocked` with what broke.
 
-**9. Finish — failure or blocked.** If the work can't complete (blocked, out-of-scope, criteria unmet):
+**9. Hand to review — success.** When the criteria are met *and* tests pass:
+- Write `outcome/FEEDBACK.md` (template: `../../_templates/FEEDBACK.md`) — what shipped, what went well, what to watch, and a "Captured threads" list.
+- Move the spec `tests/<slug>/` → `in-review/<slug>/` and set `status: in-review`. **Do not move it to `done/`** — an agent never signs off its own work; `done` is a human's call (`/tl review`).
+- In the dispatch file set `status: "done"` and stamp `finished_at` — the worker's job is complete; the spec now waits for sign-off.
+
+**10. Finish — failure or blocked.** If the work can't complete (blocked, out-of-scope, criteria unmet, tests red):
 - Set the dispatch `status: "failed"` and stamp `finished_at`.
-- Leave the spec in `in-progress/` (set `status: blocked` if it's genuinely blocked) so a human can pick it up — don't silently revert it to `specs/`.
+- Leave the spec where it stopped (`in-progress/` or `tests/`), set `status: blocked` if genuinely blocked — don't silently revert it to `specs/`.
 - Explain plainly what stopped you and what would unblock it.
 
-**10. Report.** One block: which spec you claimed, what you did, the threads you captured, and the final state (done / failed) — plus what's next in the queue, if anything.
+**11. Report.** One block: which spec you claimed, what you did, the threads you captured, and the final state (in-review / failed) — plus what's next in the queue, if anything.
 
 ## Guardrails
 
@@ -51,4 +53,5 @@ Same as `/tl triage`: the argument is a workspace name under `projects/` or a pa
 - Never dispatch (that's the cockpit / `POST /api/dispatch`); `/tl run` only consumes.
 - Honor the spec's `Do not touch` absolutely. When in doubt about scope, capture a thread or fail the dispatch — never quietly broaden it.
 - Never claim across workspaces in one run.
-- A completed spec must have `outcome/FEEDBACK.md` before it moves to `done/`.
+- A completed spec must have `outcome/FEEDBACK.md` before it moves to `in-review/`.
+- **Never move a spec to `done/`** — an agent stops at `in-review/`; `done` is the human's sign-off (`/tl review`). This gate is what makes parallel fan-out safe.

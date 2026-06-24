@@ -12,10 +12,14 @@ A spec's lifecycle stage is its folder, inside a workspace (`projects/<name>/`):
 | `intents/` | Human objectives |
 | `specs/` | Agent-ready, not started (`status: ready` or `blocked`) |
 | `in-progress/` | Being worked |
-| `done/` | Completed, has `outcome/FEEDBACK.md` |
+| `tests/` | Code complete, the test/verification gate (CI or acceptance tests) — auto gate |
+| `in-review/` | Tests green, awaiting human sign-off — the human gate, has `outcome/FEEDBACK.md` |
+| `done/` | Reviewed and accepted |
 | `threads/` | Anything worth remembering that isn't active work |
 
 If `status` and folder disagree, the folder wins; skills fix the field to match.
+
+A spec flows `ready → in-progress → tests → in-review → done`. An agent (`/tl run`) carries work as far as `in-review`; only a human (or `/tl review`) promotes `in-review → done`. This gate is what makes parallel fan-out safe — many agents land their work in `in-review`, where it's signed off in a batch rather than merged blind.
 
 ## Spec (`specs/*/SPEC.md`, `done/*/SPEC.md`)
 
@@ -27,7 +31,7 @@ If `status` and folder disagree, the folder wins; skills fix the field to match.
 | `repo` | path | project repo | author |
 | `intent` | path | parent intent or `""` | author |
 | `type` | enum | `feature` `bug` `tech_debt` `research` | author |
-| `status` | enum | `ready` `in-progress` `blocked` `done` | author / triage |
+| `status` | enum | `ready` `in-progress` `tests` `in-review` `blocked` `done` | author / triage |
 | `priority` | enum | `p0` `p1` `p2` `p3` or `""` | triage / human |
 | `priority_set_by` | enum | `triage` `human` or `""` | triage / human |
 | `size` | enum | `small` `medium` `large` | author |
