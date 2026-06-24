@@ -162,6 +162,10 @@ function readStage(dir, stage, folder) {
       const fb = readFirst(path.join(p, 'outcome', 'FEEDBACK.md'), path.join(p, 'outcome', 'feedback.md'));
       if (fb) item.feedback = parseFrontmatter(fb).meta;
     }
+    if (isFolder) {
+      const notes = safeRead(path.join(p, 'NOTES.md'));
+      if (notes) item.notes = notes;
+    }
     out.push(item);
   }
   return out;
@@ -216,19 +220,9 @@ function readWorkspace(ws) {
     }
   }
 
-  const dispatch = [];
-  const dispatchDir = path.join(dir, '_dispatch');
-  if (isDir(dispatchDir)) {
-    for (const f of fs.readdirSync(dispatchDir).sort()) {
-      if (!f.endsWith('.json')) continue;
-      try { dispatch.push({ file: '_dispatch/' + f, ...JSON.parse(safeRead(path.join(dispatchDir, f)) || '{}') }); }
-      catch { /* skip malformed dispatch */ }
-    }
-  }
-
   return {
     name: ws.name, example: ws.example,
-    config, intents, specs, threads, metrics, dispatch,
+    config, intents, specs, threads, metrics,
     priorities: readFirst(path.join(dir, 'PRIORITIES.md'), path.join(dir, 'priorities.md')),
     project: parseFrontmatter(safeRead(path.join(dir, 'PROJECT.md')) || '').meta,
   };
@@ -648,36 +642,47 @@ ${title}
     return json(res, 200, { ok: true, path: 'specs/' + slug + '/' });
   }
 
-  if (pathname === '/api/dispatch') {
-    // producer side of the dispatch queue: write an intent-to-run file. Never executes.
-    const rel = String(body.spec || '');
-    if (!/^specs\//.test(rel)) return json(res, 400, { error: 'only ready specs can be dispatched' });
-    const specFull = safePath(ws, rel.endsWith('.md') ? rel : rel.replace(/\/$/, '') + '/SPEC.md');
-    if (!specFull || !fs.existsSync(specFull)) return json(res, 404, { error: 'spec not found' });
-    const meta = parseFrontmatter(safeRead(specFull) || '').meta;
-    if (meta.status === 'blocked') return json(res, 409, { error: 'spec is blocked — unblock before dispatching' });
-    const slug = rel.replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
-    const dispFull = safePath(ws, '_dispatch/' + slug + '.json');
-    if (!dispFull) return json(res, 400, { error: 'bad path' });
-    // idempotent: a pending/claimed dispatch already exists — no duplicate
-    if (fs.existsSync(dispFull)) {
-      try { const ex = JSON.parse(safeRead(dispFull) || '{}'); if (ex.status === 'pending' || ex.status === 'claimed') return json(res, 200, { ok: true, already: true, status: ex.status }); } catch {}
+  // helper: replace-or-insert a frontmatter field in a SPEC.md
+  function setStatus(dir, st) {
+    const f = path.join(dir, 'SPEC.md'); let t = safeRead(f); if (t == null) return;
+    t = /^status:.*$/m.test(t) ? t.replace(/^status:.*$/m, `status: "${st}"`) : t.replace(/^---\n/, `---\nstatus: "${st}"\n`);
+    fs.writeFileSync(f, t);
+  }
+
+  if (pathname === '/api/review') {
+    // the human gate, from the browser: accept an in-review spec to done, or kick it back with a note
+    const rel = String(body.spec || '').replace(/\/$/, '');
+    const action = String(body.action || '');
+    if (!/^in-review\//.test(rel)) return json(res, 400, { error: 'only in-review specs can be reviewed' });
+    const slug = rel.split('/').pop();
+    const srcDir = safePath(ws, rel);
+    if (!srcDir || !isDir(srcDir)) return json(res, 404, { error: 'spec not in review' });
+    if (action === 'accept') {
+      const dest = safePath(ws, 'done/' + slug); if (!dest) return json(res, 400, { error: 'bad path' });
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.renameSync(srcDir, dest); setStatus(dest, 'done');
+      return json(res, 200, { ok: true, path: 'done/' + slug + '/' });
     }
-    let goal = '';
-    const intent = meta.intent || '';
-    if (intent) {
-      const itFull = safePath(ws, intent.replace(/^\.\//, ''));
-      if (itFull && fs.existsSync(itFull)) { try { goal = (parseFrontmatter(safeRead(itFull)).meta.goals || [])[0] || ''; } catch {} }
+    if (action === 'reject') {
+      const note = String(body.note || '').trim();
+      const dest = safePath(ws, 'in-progress/' + slug); if (!dest) return json(res, 400, { error: 'bad path' });
+      if (note) fs.appendFileSync(path.join(srcDir, 'NOTES.md'), `\n## ${isoDate()} — kicked back\n${note}\n`);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.renameSync(srcDir, dest); setStatus(dest, 'in-progress');
+      return json(res, 200, { ok: true, path: 'in-progress/' + slug + '/' });
     }
-    const rec = {
-      spec: rel.replace(/\/$/, '') + (rel.endsWith('.md') ? '' : '/'),
-      intent, goal, repo: meta.repo || '',
-      status: 'pending', created: new Date().toISOString(),
-      claimed_by: null, claimed_at: null, finished_at: null,
-    };
-    fs.mkdirSync(path.dirname(dispFull), { recursive: true });
-    fs.writeFileSync(dispFull, JSON.stringify(rec, null, 2) + '\n');
-    return json(res, 200, { ok: true, file: '_dispatch/' + slug + '.json' });
+    return json(res, 400, { error: 'action must be accept or reject' });
+  }
+
+  if (pathname === '/api/note') {
+    // leave feedback on any spec, in any stage — appended to its NOTES.md so it travels with the spec
+    const rel = String(body.spec || '').replace(/\/$/, '');
+    const text = String(body.text || '').trim();
+    if (!text) return json(res, 400, { error: 'empty note' });
+    const dir = safePath(ws, rel);
+    if (!dir || !isDir(dir) || !fs.existsSync(path.join(dir, 'SPEC.md'))) return json(res, 404, { error: 'spec not found' });
+    fs.appendFileSync(path.join(dir, 'NOTES.md'), `\n## ${isoDate()} — note\n${text}\n`);
+    return json(res, 200, { ok: true });
   }
 
   return json(res, 404, { error: 'unknown endpoint' });

@@ -116,19 +116,6 @@ error_tracking:         # optional — enables /tl bug-capture
 
 Append-only, one JSON object per line. Schemas are defined in each skill's SKILL.md. Never edit existing lines; corrections are new lines.
 
-## Dispatch queue (`_dispatch/*.json`, per workspace)
+## Spec notes (`<stage>/<slug>/NOTES.md`, optional)
 
-The contract between the cockpit (producer) and `/tl run` (consumer). One file per dispatched spec, named `<spec-slug>.json`. The cockpit writes these — it never executes; work runs later in a user-controlled session that claims the queue.
-
-| Field | Meaning |
-|-------|---------|
-| `spec` | workspace-relative path to the dispatched spec (`specs/<slug>/`) |
-| `intent` | the spec's parent intent path (copied for the worker's context) |
-| `goal` | the goal id the spec ladders to, resolved via the intent |
-| `repo` | the code repo the work targets (from the spec's `repo`) |
-| `status` | `pending` → `claimed` → `done` \| `failed` |
-| `created` | ISO timestamp when dispatched |
-| `claimed_by` / `claimed_at` | who claimed it and when (the worker stamps these) |
-| `finished_at` | ISO timestamp when the worker finished |
-
-The file stores a **reference, not a frozen prompt** — the worker assembles the brief fresh from the current spec/intent/goal at claim time, so a dispatch can't go stale. The producer only ever writes `status: pending`; the worker writes the later transitions. Dispatching an already-`pending`/`claimed` spec is a no-op (no duplicates). The worker transitions status rather than deleting files, so the queue stays an auditable, git-tracked record; `_dispatch/` is shown in the UI, not hidden.
+Append-only human feedback on a spec, left from the cockpit while work is in flight. Each note is a small dated section (`## YYYY-MM-DD — note`, or `— kicked back` for a review rejection). The file lives in the spec's own folder, so it travels with the spec through every stage. `/tl run` reads it as binding context (treat it like the acceptance criteria); `/tl review` surfaces it. There is no queue — the `ready/` stage **is** the queue, the stage folders **are** the status, and the cockpit's write actions are review (accept / kick back) and notes, not dispatch.
