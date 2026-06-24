@@ -52,7 +52,7 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, map, triage, reflect, dedup, bug-capture, ui
+├── skills/                     # /tl new, resume, capture, run, map, triage, reflect, dedup, bug-capture, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
@@ -131,6 +131,10 @@ The continuity answer. Reconstructs context after time away: status, the goal in
 ### /tl capture
 
 Zero-ceremony memory. One thought in, one thread file out — type and status inferred, origin recorded, no interview. This is also how agent discoveries at spec completion become threads instead of scope creep.
+
+### /tl run
+
+The dispatch consumer. The cockpit's dispatch button only *writes* a queue file (`_dispatch/<slug>.json`) — it never executes. `/tl run` is what does the work: in a session you control, it claims one pending dispatch (highest priority, oldest first), moves the spec `ready → in-progress`, assembles the brief fresh from the spec + its intent + its goal, works it against the acceptance criteria within the spec's file scope, captures any discoveries as threads, then writes `FEEDBACK.md` and moves it to `done` — flipping the dispatch to `done` (or `failed`). One spec per run; status transitions only, never deletes — the queue stays an auditable record.
 
 ### /tl new
 
