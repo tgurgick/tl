@@ -52,7 +52,7 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, promote, run, map, triage, reflect, dedup, bug-capture, goal, ui
+├── skills/                     # /tl new, resume, capture, promote, groom, run, map, triage, reflect, dedup, bug-capture, goal, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
@@ -135,6 +135,10 @@ Zero-ceremony memory. One thought in, one thread file out — type and status in
 ### /tl promote
 
 The commit path for a parked thought — turns a thread into a draft intent through a short Q&A, the counterpart to the research valve's "explore, don't commit yet." It reads the thread, interviews for the outcome, the goal it ladders to, and success metrics, then proposes an intent and, on approval, writes it and flips the thread to `promoted` (linked both ways). Refuses to write a goal-less intent — if nothing fits, it sends you to `/tl goal` first. Proposes, never writes silently.
+
+### /tl groom
+
+The batch counterpart to `/tl promote` — works through *all* the parked threads at once when loose ends pile up. For each it proposes a disposition (promote / spec / research / merge / close / keep), **auto-executes the high-confidence ones**, and surfaces only the ambiguous as a short "needs your call" list. It's an orchestrator: it reuses `promote` (thread → intent), the research valve (uncertain → `type: research` spec), and `reflect`'s parallel-track detection to flag which new specs can run concurrently — then hands off (it fills the backlog and points; it never dispatches). Ends with a ledger of everything it did. `resume` nudges it; `groom` does it.
 
 ### /tl run
 
