@@ -897,30 +897,53 @@ function renderResume(wss) {
         specs.forEach(s => { const g = goalOf(s); bandSpecs[reachGoals.some(rg => rg.id === g) ? g : '__orphan'].push(s); });
         const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
         const BANDGAP = 50;
-        const pos = {}, gpos = {}; let cursorX = PAD;
+        const pos = {}, gpos = {}, dpos = {}; let cursorX = PAD; const allRoutes = [];
         bands.forEach(b => {
           const mem = bandSpecs[b].map(s => slugOf(s.path));               // slugs in this band
-          const dn = sl => deps(bySlug[sl]).filter(d => mem.includes(d));  // prerequisites below, in band
-          const up = sl => mem.filter(m => deps(bySlug[m]).includes(sl));  // dependents above, in band
+          const memSet = new Set(mem);
+          const Lr = sl => layerOf(bySlug[sl]);
+          // segments between consecutive layers; a skip-layer edge (≥2 apart) gets a dummy waypoint per
+          // intervening layer, so it routes through a slot between nodes instead of behind one.
+          const segBelow = {}, segAbove = {}, layerOfId = {}, routes = [];
+          const addSeg = (lo, hi) => { (segBelow[hi] = segBelow[hi] || []).push(lo); (segAbove[lo] = segAbove[lo] || []).push(hi); };
+          mem.forEach(sl => layerOfId[sl] = Lr(sl));
+          let dseq = 0;
+          mem.forEach(sl => {
+            const Lp = Lr(sl);
+            deps(bySlug[sl]).filter(d => memSet.has(d)).forEach(d => {
+              const chain = [d];                                            // bottom (prerequisite) → top (dependent)
+              for (let L = Lr(d) + 1; L <= Lp - 1; L++) { const id = '__' + b + (dseq++); layerOfId[id] = L; chain.push(id); }
+              chain.push(sl);
+              for (let i = 0; i < chain.length - 1; i++) addSeg(chain[i], chain[i + 1]);
+              routes.push(chain);
+            });
+          });
           const byLayer = {};
-          mem.forEach(sl => { const l = layerOf(bySlug[sl]); (byLayer[l] = byLayer[l] || []).push(sl); });
+          Object.keys(layerOfId).forEach(id => { const L = layerOfId[id]; (byLayer[L] = byLayer[L] || []).push(id); });
           const layers = Object.keys(byLayer).map(Number).sort((a, c) => a - c);
-          const ord = {}; layers.forEach(l => ord[l] = byLayer[l].slice().sort());  // seed alphabetical
-          const idx = (l, sl) => { const a = ord[l]; return a ? a.indexOf(sl) : -1; };
-          // barycenter sweeps: order siblings by the average position of their neighbours, to uncross edges
-          const sweep = (l, nl, nf) => { ord[l] = ord[l].map((sl, i) => { const ns = nf(sl).map(n => idx(nl, n)).filter(v => v >= 0); return { sl, k: ns.length ? mean(ns) : i }; }).sort((a, c) => a.k - c.k).map(o => o.sl); };
+          const isDummy = id => id[0] === '_';
+          // seed: real nodes alphabetical, dummies after; barycenter then slots them in by connection
+          const ord = {}; layers.forEach(L => ord[L] = byLayer[L].slice().sort((a, c) => (isDummy(a) - isDummy(c)) || (a < c ? -1 : a > c ? 1 : 0)));
+          const idx = (L, id) => { const a = ord[L]; return a ? a.indexOf(id) : -1; };
+          // barycenter sweeps over real+dummy nodes, ordering each by the average slot of its neighbours
+          const sweep = (L, nl, nbr) => { ord[L] = ord[L].map((id, i) => { const ns = (nbr[id] || []).map(n => idx(nl, n)).filter(v => v >= 0); return { id, k: ns.length ? mean(ns) : i }; }).sort((a, c) => a.k - c.k).map(o => o.id); };
           for (let it = 0; it < 4; it++) {
-            layers.forEach(l => { if (ord[l - 1]) sweep(l, l - 1, dn); });               // align to prerequisites below
-            layers.slice().reverse().forEach(l => { if (ord[l + 1]) sweep(l, l + 1, up); }); // align to dependents above
+            layers.forEach(L => { if (ord[L - 1]) sweep(L, L - 1, segBelow); });               // align to prerequisites below
+            layers.slice().reverse().forEach(L => { if (ord[L + 1]) sweep(L, L + 1, segAbove); }); // align to dependents above
           }
-          let bw = GW;  // a band is at least as wide as its goal pill
-          layers.forEach(l => { bw = Math.max(bw, ord[l].length * NW + (ord[l].length - 1) * GX); });
-          layers.forEach(l => {
-            const arr = ord[l], lw = arr.length * NW + (arr.length - 1) * GX, startX = cursorX + (bw - lw) / 2;
-            arr.forEach((sl, i) => { pos[sl] = { x: startX + i * (NW + GX), y: PAD + tierShift + (maxLayer - l) * (NH + GYv), s: bySlug[sl] }; });
+          let bw = GW;  // a band is at least as wide as its goal pill — and now accounts for dummy slots
+          layers.forEach(L => { bw = Math.max(bw, ord[L].length * NW + (ord[L].length - 1) * GX); });
+          layers.forEach(L => {
+            const arr = ord[L], lw = arr.length * NW + (arr.length - 1) * GX, startX = cursorX + (bw - lw) / 2;
+            arr.forEach((id, i) => {
+              const x = startX + i * (NW + GX), y = PAD + tierShift + (maxLayer - L) * (NH + GYv);
+              if (isDummy(id)) dpos[id] = { x: x + NW / 2, y: y + NH / 2 };  // a waypoint: a point, no box
+              else pos[id] = { x, y, s: bySlug[id] };
+            });
           });
           if (b !== '__orphan') gpos[b] = { x: cursorX + (bw - GW) / 2, y: PAD };
           cursorX += bw + BANDGAP;
+          allRoutes.push(...routes);
         });
         const W = cursorX - BANDGAP + PAD;
         const Hsvg = PAD * 2 + (maxLayer + 1 + (hasGoalRow ? 1 : 0)) * NH + (maxLayer + (hasGoalRow ? 1 : 0)) * GYv;
@@ -931,14 +954,20 @@ function renderResume(wss) {
         // sinks = specs nothing else depends on; these are what deliver up to a goal
         const dependedOn = new Set(); specs.forEach(s => deps(s).forEach(d => dependedOn.add(d)));
         let edges = '', goalEdges = '', nodes = '', goalNodes = '';
+        // dependency edges — a smooth path bottom→top through any dummy waypoints, so skip-layer edges
+        // bend around intervening nodes instead of crossing behind them
+        allRoutes.forEach(chain => {
+          const q = pos[chain[0]], p = pos[chain[chain.length - 1]]; if (!q || !p) return;  // q = prerequisite (below), p = dependent (above)
+          const pts = [[q.x + NW / 2, q.y]];
+          for (let i = 1; i < chain.length - 1; i++) { const dp = dpos[chain[i]]; if (dp) pts.push([dp.x, dp.y]); }
+          pts.push([p.x + NW / 2, p.y + NH]);
+          let dPath = `M${pts[0][0]} ${pts[0][1]}`;
+          for (let i = 1; i < pts.length; i++) { const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], my = (y1 + y2) / 2; dPath += ` C ${x1} ${my} ${x2} ${my} ${x2} ${y2}`; }
+          edges += `<path d="${dPath}" fill="none" stroke="#cbc6b8" stroke-width="1.25"/>`;
+        });
+        // contribution edges: a sink spec ladders up to its goal
         specs.forEach(s => {
           const p = pos[slugOf(s.path)]; if (!p) return;
-          deps(s).forEach(d => {
-            const q = pos[d]; if (!q) return;  // q = prerequisite (below), p = dependent (above)
-            const x1 = q.x + NW / 2, y1 = q.y, x2 = p.x + NW / 2, y2 = p.y + NH, my = (y1 + y2) / 2;
-            edges += `<path d="M${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}" fill="none" stroke="#cbc6b8" stroke-width="1.25"/>`;
-          });
-          // contribution edge: a sink spec ladders up to its goal
           if (hasGoalRow && !dependedOn.has(slugOf(s.path))) {
             const g = gpos[goalOf(s)]; if (g) {
               const x1 = p.x + NW / 2, y1 = p.y, x2 = g.x + GW / 2, y2 = g.y + NH, my = (y1 + y2) / 2;
