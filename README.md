@@ -52,7 +52,7 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, run, map, triage, reflect, dedup, bug-capture, goal, ui
+├── skills/                     # /tl new, resume, capture, promote, run, map, triage, reflect, dedup, bug-capture, goal, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
@@ -131,6 +131,10 @@ The continuity answer. Reconstructs context after time away: status, the goal in
 ### /tl capture
 
 Zero-ceremony memory. One thought in, one thread file out — type and status inferred, origin recorded, no interview. This is also how agent discoveries at spec completion become threads instead of scope creep.
+
+### /tl promote
+
+The commit path for a parked thought — turns a thread into a draft intent through a short Q&A, the counterpart to the research valve's "explore, don't commit yet." It reads the thread, interviews for the outcome, the goal it ladders to, and success metrics, then proposes an intent and, on approval, writes it and flips the thread to `promoted` (linked both ways). Refuses to write a goal-less intent — if nothing fits, it sends you to `/tl goal` first. Proposes, never writes silently.
 
 ### /tl run
 
