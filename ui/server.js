@@ -214,9 +214,19 @@ function readWorkspace(ws) {
     }
   }
 
+  const dispatch = [];
+  const dispatchDir = path.join(dir, '_dispatch');
+  if (isDir(dispatchDir)) {
+    for (const f of fs.readdirSync(dispatchDir).sort()) {
+      if (!f.endsWith('.json')) continue;
+      try { dispatch.push({ file: '_dispatch/' + f, ...JSON.parse(safeRead(path.join(dispatchDir, f)) || '{}') }); }
+      catch { /* skip malformed dispatch */ }
+    }
+  }
+
   return {
     name: ws.name, example: ws.example,
-    config, intents, specs, threads, metrics,
+    config, intents, specs, threads, metrics, dispatch,
     priorities: readFirst(path.join(dir, 'PRIORITIES.md'), path.join(dir, 'priorities.md')),
     project: parseFrontmatter(safeRead(path.join(dir, 'PROJECT.md')) || '').meta,
   };
@@ -224,7 +234,7 @@ function readWorkspace(ws) {
 
 // ---------- change tracking (snapshot diffs — workspaces aren't in git) ----------
 
-const TEXT_RE = /\.(md|yml|yaml|jsonl)$/;
+const TEXT_RE = /\.(md|yml|yaml|jsonl|json)$/;
 const snapshots = new Map();   // full path -> array of lines
 const changes = new Map();     // ws|path -> {ws, path, status, added, removed, ts}
 
@@ -634,6 +644,38 @@ ${title}
       }
     }
     return json(res, 200, { ok: true, path: 'specs/' + slug + '/' });
+  }
+
+  if (pathname === '/api/dispatch') {
+    // producer side of the dispatch queue: write an intent-to-run file. Never executes.
+    const rel = String(body.spec || '');
+    if (!/^specs\//.test(rel)) return json(res, 400, { error: 'only ready specs can be dispatched' });
+    const specFull = safePath(ws, rel.endsWith('.md') ? rel : rel.replace(/\/$/, '') + '/SPEC.md');
+    if (!specFull || !fs.existsSync(specFull)) return json(res, 404, { error: 'spec not found' });
+    const meta = parseFrontmatter(safeRead(specFull) || '').meta;
+    if (meta.status === 'blocked') return json(res, 409, { error: 'spec is blocked — unblock before dispatching' });
+    const slug = rel.replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
+    const dispFull = safePath(ws, '_dispatch/' + slug + '.json');
+    if (!dispFull) return json(res, 400, { error: 'bad path' });
+    // idempotent: a pending/claimed dispatch already exists — no duplicate
+    if (fs.existsSync(dispFull)) {
+      try { const ex = JSON.parse(safeRead(dispFull) || '{}'); if (ex.status === 'pending' || ex.status === 'claimed') return json(res, 200, { ok: true, already: true, status: ex.status }); } catch {}
+    }
+    let goal = '';
+    const intent = meta.intent || '';
+    if (intent) {
+      const itFull = safePath(ws, intent.replace(/^\.\//, ''));
+      if (itFull && fs.existsSync(itFull)) { try { goal = (parseFrontmatter(safeRead(itFull)).meta.goals || [])[0] || ''; } catch {} }
+    }
+    const rec = {
+      spec: rel.replace(/\/$/, '') + (rel.endsWith('.md') ? '' : '/'),
+      intent, goal, repo: meta.repo || '',
+      status: 'pending', created: new Date().toISOString(),
+      claimed_by: null, claimed_at: null, finished_at: null,
+    };
+    fs.mkdirSync(path.dirname(dispFull), { recursive: true });
+    fs.writeFileSync(dispFull, JSON.stringify(rec, null, 2) + '\n');
+    return json(res, 200, { ok: true, file: '_dispatch/' + slug + '.json' });
   }
 
   return json(res, 404, { error: 'unknown endpoint' });

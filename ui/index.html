@@ -165,10 +165,14 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .hero { background: #1c1916; border: 1px solid rgba(181,113,42,.22); border-left: 3px solid #b5712a; border-radius: 2px; padding: 1.4rem 1.6rem; cursor: pointer; transition: background .12s; }
 .hero.flat { cursor: default; }
 .hero:not(.flat):hover { background: #211d19; }
-.hero .head { display: flex; justify-content: space-between; gap: 16px; margin-bottom: .6rem; }
+.hero .head { display: flex; align-items: center; gap: 10px; margin-bottom: .6rem; }
 .hero .fl { font-family: var(--mono); font-size: .62rem; letter-spacing: .12em; text-transform: uppercase; color: #e2a55e; }
-.hero .chip { font-family: var(--mono); font-size: .62rem; color: #e2a55e; background: rgba(226,165,94,.12); padding: 2px 8px; border-radius: 2px; white-space: nowrap; }
+.hero .chip { margin-left: auto; font-family: var(--mono); font-size: .62rem; color: #e2a55e; background: rgba(226,165,94,.12); padding: 2px 8px; border-radius: 2px; white-space: nowrap; }
 .hero .chip.clear { color: #8fc7a0; background: rgba(58,125,85,.2); }
+.hero-dispatch { font-family: var(--mono); font-size: .6rem; color: #1c1916; background: #e2a55e; border: 1px solid #e2a55e; border-radius: 3px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+.hero-dispatch:hover { background: #eab978; }
+.hero-dispatch.queued, .hero-dispatch[disabled] { background: transparent; color: #8fc7a0; border-color: rgba(143,199,160,.4); cursor: default; }
+.hero .reason code { font-family: var(--mono); font-size: .92em; background: rgba(245,241,232,.1); padding: 1px 5px; border-radius: 3px; }
 .hero .summary { font-family: var(--serif); font-size: 1.12rem; line-height: 1.45; color: #f5f1e8; margin: 0 0 .5rem; }
 .hero .reason { font-size: .8rem; color: #a89f8d; margin: 0; }
 .hero .hint { font-family: var(--mono); font-size: .56rem; letter-spacing: .04em; color: #6f655a; margin-top: .9rem; text-align: right; }
@@ -220,6 +224,18 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .bp-counts .cap { margin-left: auto; color: var(--dim); cursor: pointer; }
 .bp-counts .cap:hover { color: var(--ink); }
 .bp-counts input { font-family: var(--sans); font-size: .8rem; background: var(--card); border: 1px solid var(--accent-line); border-radius: 3px; padding: 4px 9px; width: 260px; }
+.disp-row { display: flex; align-items: center; gap: 10px; padding: 7px 2px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.disp-row:hover .t { color: var(--ink); }
+.disp-row .txt { flex: 1; min-width: 0; }
+.disp-row .t { font-size: .78rem; color: var(--mid); }
+.disp-row .sub { font-family: var(--mono); font-size: .56rem; color: var(--faint); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-st { font-family: var(--mono); font-size: .54rem; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 2px; flex: none; }
+.ds-pending { color: var(--accent); background: var(--accent-bg); }
+.ds-claimed { color: var(--info); background: rgba(107,87,199,.13); }
+.ds-done { color: var(--ok); background: rgba(58,125,85,.15); }
+.ds-failed { color: #a83232; background: rgba(168,50,50,.12); }
+.disp-foot { font-family: var(--mono); font-size: .56rem; color: var(--faint); margin-top: 10px; }
+.disp-foot code { font-family: var(--mono); background: rgba(128,128,128,.16); padding: 1px 5px; border-radius: 3px; }
 
 /* horizon — forward timeline */
 .horizon { padding: 4px 0 2px; }
@@ -320,6 +336,9 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lcard .agent { color: var(--accent); display: flex; align-items: center; gap: 4px; }
 .lcard .elapsed { color: var(--dim); }
 .lcard.done .t { text-decoration: line-through; text-decoration-color: rgba(111,174,132,.6); color: var(--dim); }
+.lc-dispatch { margin-top: 9px; width: 100%; font-family: var(--mono); font-size: .58rem; color: var(--accent); background: transparent; border: 1px solid var(--accent-line); border-radius: 3px; padding: 4px 9px; cursor: pointer; }
+.lc-dispatch:hover { border-color: var(--accent); background: var(--accent-bg); }
+.lc-dispatch.queued, .lc-dispatch[disabled] { color: var(--ok); border-color: transparent; background: transparent; cursor: default; }
 .lcard .pbar { height: 2px; background: rgba(255,255,255,.06); border-radius: 2px; overflow: hidden; margin-top: 8px; }
 .lcard .pbar i { display: block; height: 100%; width: 40%; border-radius: 2px;
   background: linear-gradient(90deg, rgba(226,165,94,.4), var(--accent)); animation: tl-slide 2.2s ease-in-out infinite; }
@@ -623,6 +642,9 @@ function renderResume(wss) {
 
     const specs = ws.specs.map(s => ({ ...s, _ws: ws.name }));
     const threads = (ws.threads || []).map(t => ({ ...t, _ws: ws.name }));
+    const slugOf = p => (p || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
+    const dispatch = ws.dispatch || [];
+    const dispatchOf = sl => dispatch.find(d => slugOf(d.spec) === sl);
     const goals = (ws.config && ws.config.goals) || [];
     const top = goals.slice().sort((a, b) => (b.weight || 0) - (a.weight || 0))[0];
     const done = specs.filter(s => s.stage === 'done').sort((a, b) => b.mtime - a.mtime);
@@ -696,15 +718,27 @@ function renderResume(wss) {
       const slug = (next.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
       const p = (next.meta.priority || '').toUpperCase();
       const chip = kind === 'spec' ? `${esc(slug)}${p ? ' · ' + esc(p) : ''}` : `${esc(slug)} · question`;
+      const disp = kind === 'spec' ? dispatchOf(slug) : null;
+      const queued = disp && (disp.status === 'pending' || disp.status === 'claimed');
       const reason = kind === 'spec'
-        ? `Needs you: top of the stack${next.meta.status === 'blocked' ? ', but blocked' : ', unblocked'} — read it, then delegate.`
+        ? (queued
+          ? `Queued for dispatch — run <code>/tl run</code> in a Claude session to start it.`
+          : `Needs you: top of the stack${next.meta.status === 'blocked' ? ', but blocked' : ', unblocked'} — dispatch it, or read it first.`)
         : `Needs you: an open question, upstream of new work.`;
+      const dispBtn = kind === 'spec' && next.meta.status !== 'blocked'
+        ? `<button class="hero-dispatch${queued ? ' queued' : ''}"${queued ? ' disabled' : ''}>${queued ? disp.status === 'claimed' ? 'running…' : 'queued ✓' : 'dispatch →'}</button>` : '';
       hero.innerHTML = `
-        <div class="head"><span class="fl">In focus</span><span class="chip">${chip}</span></div>
+        <div class="head"><span class="fl">In focus</span><span class="chip">${chip}</span>${dispBtn}</div>
         <p class="summary">${esc(next.title)}</p>
         <p class="reason">${reason}</p>
         <p class="hint">click to ${kind === 'spec' ? 'read the spec' : 'read the thread'} ↓</p>
         <div class="hero-body"><div class="md">loading…</div></div>`;
+      const hdb = hero.querySelector('.hero-dispatch:not([disabled])');
+      if (hdb) hdb.onclick = async e => {
+        e.stopPropagation(); hdb.disabled = true; hdb.textContent = 'dispatching…';
+        try { await postJSON('/api/dispatch', { ws: ws.name, spec: next.path }); } catch (err) { alert(err.message); }
+        loadSelected();
+      };
       let loaded = false;
       const hb = hero.querySelector('.hero-body');
       hb.onclick = e => e.stopPropagation();
@@ -823,7 +857,8 @@ function renderResume(wss) {
     };
 
     const counts = document.createElement('div'); counts.className = 'bp-counts';
-    counts.innerHTML = `<span class="ci" data-x="hz">horizon</span><span class="ci" data-x="mp">map</span><span class="ci" data-x="bl">backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">parked <b>${parked.length}</b></span><span class="cap">+ park a thought</span>`;
+    const queuedN = dispatch.filter(d => d.status === 'pending' || d.status === 'claimed').length;
+    counts.innerHTML = `<span class="ci" data-x="hz">horizon</span><span class="ci" data-x="mp">map</span><span class="ci" data-x="bl">backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">parked <b>${parked.length}</b></span>${dispatch.length ? `<span class="ci" data-x="dp">dispatched <b>${queuedN}</b></span>` : ''}<span class="cap">+ park a thought</span>`;
     const countsEx = document.createElement('div'); countsEx.className = 'expand';
 
     const builders = {
@@ -1036,6 +1071,19 @@ function renderResume(wss) {
         if (!parked.length) { countsEx.innerHTML = '<div class="empty">nothing parked</div>'; return; }
         parked.forEach(t => { const r = document.createElement('div'); r.className = 'loop-row'; r.innerHTML = `${IC.archive('#8a8070')}<div class="txt"><div class="t">${esc(t.title)}</div><div class="sub">${(t.meta.type || '').toUpperCase()} · ${rel(t.mtime)}</div></div>`; r.onclick = () => openDrawer(t); countsEx.appendChild(r); });
       },
+      dp: () => {
+        countsEx.innerHTML = '';
+        if (!dispatch.length) { countsEx.innerHTML = '<div class="empty">nothing dispatched</div>'; return; }
+        const ord = { claimed: 0, pending: 1, failed: 2, done: 3 };
+        dispatch.slice().sort((a, b) => (ord[a.status] ?? 9) - (ord[b.status] ?? 9) || (a.created < b.created ? 1 : -1)).forEach(d => {
+          const sl = slugOf(d.spec);
+          const r = document.createElement('div'); r.className = 'disp-row';
+          r.innerHTML = `<span class="ds-st ds-${esc(d.status)}">${esc(d.status)}</span><div class="txt"><div class="t">${esc(sl)}</div><div class="sub">${d.goal ? esc(d.goal) + ' · ' : ''}${esc(d.file)}</div></div>`;
+          r.onclick = () => { const s = specs.find(x => slugOf(x.path) === sl); if (s) openDrawer(s); };
+          countsEx.appendChild(r);
+        });
+        countsEx.insertAdjacentHTML('beforeend', `<div class="disp-foot">queued work runs when you invoke <code>/tl run</code> — the cockpit never executes</div>`);
+      },
     };
     let openCount = null;
     counts.querySelectorAll('.ci').forEach(ci => {
@@ -1079,7 +1127,12 @@ function renderLanes(wss) {
   root.innerHTML = '';
   const multi = wss.length > 1;
   const all = [];
-  for (const ws of wss) for (const s of ws.specs) { s._ws = ws.name; all.push(s); }
+  const slugOfP = p => (p || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
+  const dispBy = {};
+  for (const ws of wss) {
+    for (const s of ws.specs) { s._ws = ws.name; all.push(s); }
+    (ws.dispatch || []).forEach(d => { dispBy[ws.name + '|' + slugOfP(d.spec)] = d.status; });
+  }
 
   for (const [stage, name, color] of STAGES) {
     let items = all.filter(s => s.stage === stage);
@@ -1097,8 +1150,19 @@ function renderLanes(wss) {
       let inner = (multi ? `<span class="ws-tag">${esc(s._ws)}</span>` : '') + `<p class="t">${esc(stage === 'triage' || stage === 'ready' ? s.title : slug)}</p>`;
       if (stage === 'in-progress') inner += `<div class="pbar"><i></i></div>
         <div class="meta"><span class="agent">⚡ active</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
+      let dispBtn = null;
+      if (stage === 'ready' && s.meta.status !== 'blocked') {
+        const dst = dispBy[s._ws + '|' + slug];
+        const q = dst === 'pending' || dst === 'claimed';
+        inner += `<button class="lc-dispatch${q ? ' queued' : ''}"${q ? ' disabled' : ''}>${q ? dst === 'claimed' ? 'running…' : 'queued ✓' : 'dispatch →'}</button>`;
+        dispBtn = q;
+      }
       card.innerHTML = inner;
       card.onclick = () => openDrawer(s);
+      if (dispBtn === false) {
+        const db = card.querySelector('.lc-dispatch');
+        db.onclick = async e => { e.stopPropagation(); db.disabled = true; db.textContent = 'dispatching…'; try { await postJSON('/api/dispatch', { ws: s._ws, spec: s.path }); } catch (err) { alert(err.message); } loadSelected(); };
+      }
       body.appendChild(card);
     });
     lane.appendChild(body);
