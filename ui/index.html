@@ -916,7 +916,7 @@ function renderResume(wss) {
     };
 
     const counts = document.createElement('div'); counts.className = 'bp-counts';
-    counts.innerHTML = `<span class="ci" data-x="hz">horizon</span><span class="ci" data-x="mp">map</span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span>`;
+    counts.innerHTML = `<span class="ci" data-x="hz">horizon</span><span class="ci" data-x="mp">map</span><span class="ci" data-x="bl">backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">parked <b>${parked.length}</b></span>`;
     const countsEx = document.createElement('div'); countsEx.className = 'expand';
 
     const builders = {
