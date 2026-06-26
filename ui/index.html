@@ -327,10 +327,6 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lcard .agent { color: var(--accent); display: flex; align-items: center; gap: 4px; }
 .lcard .elapsed { color: var(--dim); }
 .lcard.done .t { text-decoration: line-through; text-decoration-color: rgba(111,174,132,.6); color: var(--dim); }
-.rv-acts { display: flex; gap: 6px; margin-top: 9px; }
-.rv-acts button { flex: 1; font-family: var(--mono); font-size: .58rem; border-radius: 3px; padding: 4px 6px; cursor: pointer; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
-.rv-accept:hover { color: var(--ok); border-color: var(--ok); }
-.rv-reject:hover { color: #c0622a; border-color: #c0622a; }
 .lc-note { margin-top: 7px; font-family: var(--mono); font-size: .56rem; color: #b57fc7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lcard .pbar { height: 2px; background: rgba(255,255,255,.06); border-radius: 2px; overflow: hidden; margin-top: 8px; }
 .lcard .pbar i { display: block; height: 100%; width: 40%; border-radius: 2px;
@@ -409,6 +405,15 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .drawer .path { font-family: var(--mono); font-size: .62rem; color: var(--faint); margin-bottom: 10px; }
 .drawer h2 { font-family: var(--serif); font-size: 1.25rem; font-weight: 500; margin-bottom: 14px; }
 .drawer .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px; }
+.dr-review { display: flex; gap: 8px; margin-bottom: 20px; }
+.dr-review button { font-family: var(--mono); font-size: .68rem; border-radius: 4px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
+.dr-accept { color: var(--ok) !important; border-color: var(--ok) !important; }
+.dr-accept:hover { background: rgba(58,125,85,.1); }
+.dr-reject:hover { color: #c0622a; border-color: #c0622a; }
+.dr-outcome { margin-bottom: 24px; padding: 14px 16px; background: rgba(107,143,199,.06); border-left: 3px solid #6b8fc7; border-radius: 0 4px 4px 0; }
+.dr-outcome-h { font-family: var(--mono); font-size: .58rem; letter-spacing: .08em; text-transform: uppercase; color: #6b8fc7; margin: 14px 0 6px; }
+.dr-outcome-h:first-child { margin-top: 0; }
+.dr-outcome .md { font-size: .82rem; }
 .dr-notes { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line); }
 .dr-notes-h { font-family: var(--mono); font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; color: #b57fc7; margin-bottom: 10px; }
 .dr-notes-h .dim { color: var(--faint); text-transform: none; letter-spacing: 0; }
@@ -601,12 +606,27 @@ function openDrawer(item) {
       ${general.map(n => `<div class="rv-note">${esc(n.text)}</div>`).join('')}
       <input class="dr-note-input" placeholder="general note — ⏎ saves">
     </div>` : '';
+  // the outcome (FEEDBACK / RECOMMENDATION) — the result you review
+  const outcomeHtml = (item.outcome && item.outcome.length) ? `
+    <div class="dr-outcome">
+      ${item.outcome.map(o => `<div class="dr-outcome-h">${esc(o.name.replace(/_/g, ' '))}</div><div class="md">${md(o.body)}</div>`).join('')}
+    </div>` : '';
+  // the human gate, in the pop-out: accept → done, or kick back → in-progress with a note
+  const reviewHtml = item.stage === 'in-review' ? `
+    <div class="dr-review"><button class="dr-accept">accept ✓ → done</button><button class="dr-reject">kick back</button></div>` : '';
   $('drawer').innerHTML = `
     <div class="path">${esc(item.path || '')}</div>
     <h2>${esc(item.title)}</h2>
     <div class="meta">${pills}</div>
+    ${reviewHtml}
+    ${outcomeHtml}
     <div class="md dr-body">${md(body)}</div>
     ${notesHtml}`;
+  if (item.stage === 'in-review') {
+    const review = async (action, note) => { try { await postJSON('/api/review', { ws: item._ws, spec: item.path, action, note }); document.body.classList.remove('open'); loadSelected(); } catch (err) { alert(err.message); } };
+    $('drawer').querySelector('.dr-accept').onclick = () => review('accept');
+    $('drawer').querySelector('.dr-reject').onclick = () => { const note = prompt('Kick back — what needs fixing? (a note for the next run)'); if (note !== null) review('reject', note); };
+  }
   if (isSpec) {
     decorateBlocks($('drawer').querySelector('.dr-body'), item, notes.filter(n => n.anchor));
     const inp = $('drawer').querySelector('.dr-note-input');
@@ -1232,16 +1252,10 @@ function renderLanes(wss) {
       if (stage === 'in-progress') inner += `<div class="pbar"><i></i></div>
         <div class="meta"><span class="agent">⚡ active</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
       if (stage === 'tests') inner += `<div class="meta"><span class="gate gate-tests">⏳ tests</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
-      if (stage === 'in-review') inner += `<div class="meta"><span class="gate gate-review">◆ needs review</span><span class="elapsed">${rel(s.mtime)}</span></div>
-        <div class="rv-acts"><button class="rv-accept">accept ✓</button><button class="rv-reject">kick back</button></div>`;
+      if (stage === 'in-review') inner += `<div class="meta"><span class="gate gate-review">◆ needs review</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
       if (s.notes) inner += `<div class="lc-note">✎ ${esc((s.notes.match(/— note\n(.+)/) || s.notes.match(/\n([^\n#].+)/) || [, ''])[1] || 'note').slice(0, 60)}</div>`;
       card.innerHTML = inner;
       card.onclick = () => openDrawer(s);
-      if (stage === 'in-review') {
-        const post = async (action, note) => { try { await postJSON('/api/review', { ws: s._ws, spec: s.path, action, note }); } catch (err) { alert(err.message); } loadSelected(); };
-        card.querySelector('.rv-accept').onclick = e => { e.stopPropagation(); post('accept'); };
-        card.querySelector('.rv-reject').onclick = e => { e.stopPropagation(); const note = prompt('Kick back — what needs fixing? (a note for the next run)'); if (note !== null) post('reject', note); };
-      }
       body.appendChild(card);
     });
     lane.appendChild(body);

@@ -163,6 +163,18 @@ function readStage(dir, stage, folder) {
       if (fb) item.feedback = parseFrontmatter(fb).meta;
     }
     if (isFolder) {
+      const outDir = path.join(p, 'outcome');
+      if (isDir(outDir)) {
+        const outs = [];
+        for (const of of fs.readdirSync(outDir).sort()) {
+          if (!of.endsWith('.md')) continue;
+          const c = safeRead(path.join(outDir, of));
+          if (c) outs.push({ name: of.replace(/\.md$/, ''), body: parseFrontmatter(c).body });
+        }
+        // recommendation first — it's the thing to review
+        outs.sort((a, b) => (a.name === 'RECOMMENDATION' ? -1 : b.name === 'RECOMMENDATION' ? 1 : 0));
+        if (outs.length) item.outcome = outs;
+      }
       const notes = safeRead(path.join(p, 'NOTES.md'));
       if (notes) item.notes = notes;
     }
