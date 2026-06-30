@@ -322,6 +322,11 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .gate-tests { color: #6b8fc7; }
 .gate-review { color: #b57fc7; }
 .lcard .t { font-size: .78rem; line-height: 1.4; color: var(--ink); }
+.lcard .lc-pri { font-family: var(--mono); font-size: .54rem; font-weight: 600; padding: 1px 5px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; }
+.lc-pri.p0 { color: #a83232; background: rgba(168,50,50,.13); }
+.lc-pri.p1 { color: #c0622a; background: rgba(192,98,42,.13); }
+.lc-pri.p2 { color: #6b57c7; background: rgba(107,87,199,.13); }
+.lc-pri.p3 { color: #8a8070; background: rgba(138,128,112,.16); }
 .lcard .ws-tag { font-family: var(--mono); font-size: .55rem; color: var(--faint); display: block; margin-bottom: 3px; }
 .lcard .meta { display: flex; justify-content: space-between; margin-top: 7px; font-family: var(--mono); font-size: .58rem; }
 .lcard .agent { color: var(--accent); display: flex; align-items: center; gap: 4px; }
@@ -1255,7 +1260,9 @@ function renderLanes(wss) {
       const slug = (s.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
       const card = document.createElement('div');
       card.className = 'lcard' + (stage === 'in-progress' ? ' working' : '') + (stage === 'done' ? ' done' : '');
-      let inner = (multi ? `<span class="ws-tag">${esc(s._ws)}</span>` : '') + `<p class="t">${esc(stage === 'triage' || stage === 'ready' ? s.title : slug)}</p>`;
+      const pr = (s.meta.priority || '').toLowerCase();
+      const priBadge = pr ? `<span class="lc-pri ${pr}">${esc(pr.toUpperCase())}</span>` : '';
+      let inner = (multi ? `<span class="ws-tag">${esc(s._ws)}</span>` : '') + `<p class="t">${priBadge}${esc(stage === 'triage' || stage === 'ready' ? s.title : slug)}</p>`;
       if (stage === 'in-progress') inner += `<div class="pbar"><i></i></div>
         <div class="meta"><span class="agent">⚡ active</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
       if (stage === 'tests') inner += `<div class="meta"><span class="gate gate-tests">⏳ tests</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
