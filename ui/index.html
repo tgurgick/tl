@@ -688,7 +688,7 @@ const LOOP = {
 };
 async function postJSON(p, body) {
   const r = await fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!r.ok) { let e = {}; try { e = await r.json(); } catch {} throw new Error(e.error || ('HTTP ' + r.status)); }
+  if (!r.ok) { let e = {}; try { e = await r.json(); } catch {} const err = new Error(e.error || ('HTTP ' + r.status)); err.status = r.status; throw err; }
   return r.json();
 }
 const specFileOf = item => { const p = item.path || ''; return p.endsWith('/') ? p + 'SPEC.md' : p; };
@@ -1209,7 +1209,14 @@ function renderResume(wss) {
     pinp.onkeydown = async e => {
       if (e.key !== 'Enter') return; e.preventDefault();
       const v = pinp.value.trim(); if (!v) return;
-      pinp.disabled = true; try { await postJSON('/api/capture', { ws: ws.name, text: v }); pinp.value = ''; loadSelected(); } catch (err) { alert(err.message); pinp.disabled = false; }
+      pinp.disabled = true;
+      try { await postJSON('/api/capture', { ws: ws.name, text: v }); pinp.value = ''; loadSelected(); }
+      catch (err) {
+        pinp.disabled = false;
+        // a duplicate isn't an error — that thought is already parked, calmly say so
+        if (err.status === 409) { pinp.value = ''; pinp.placeholder = '✓ already parked — nothing duplicated'; }
+        else alert(err.message);
+      }
     };
     block.appendChild(park);
 
