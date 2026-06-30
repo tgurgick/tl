@@ -1001,12 +1001,14 @@ function renderResume(wss) {
               routes.push(chain);
             });
           });
-          // contribution routes: each in-band sink ladders up to the goal — dummy waypoints at the layers
-          // above it so the (dashed) edge bends around taller nodes in the band instead of behind them.
+          // contribution routes: each in-band sink ladders up to the goal — a dummy waypoint only at the
+          // layers where a real node actually sits (one the dashed edge could cross), so short bands aren't
+          // widened by waypoints at empty layers.
           if (b !== '__orphan') {
+            const realLayers = new Set(mem.map(m => Lr(m)));
             mem.filter(sl => !mem.some(m => deps(bySlug[m]).includes(sl))).forEach(sl => {
               const chain = [sl];
-              for (let L = Lr(sl) + 1; L <= maxLayer; L++) { const id = '__g' + b + (dseq++); layerOfId[id] = L; chain.push(id); }
+              for (let L = Lr(sl) + 1; L <= maxLayer; L++) { if (!realLayers.has(L)) continue; const id = '__g' + b + (dseq++); layerOfId[id] = L; chain.push(id); }
               for (let i = 0; i < chain.length - 1; i++) addSeg(chain[i], chain[i + 1]);
               allGoalRoutes.push({ chain, band: b });
             });
