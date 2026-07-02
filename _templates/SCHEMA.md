@@ -40,7 +40,7 @@ A spec flows `ready → in-progress → tests → in-review → done`. An agent 
 | `tags` | list | | author |
 | `agent` | enum | optional — `any` `claude` `codex` `cursor` `gemini` (default `any`) | author / human |
 
-**Agent routing.** `agent` is a lane hint for heterogeneous fan-out. `tl run --agent <name>` claims only specs whose `agent` is `<name>` or `any` — so Claude, Codex, and Cursor can each drain their own lane concurrently over one throughline, coordinated by the folder-move claim (`specs/ → in-progress/` is the lock — whoever moves it first owns the spec; no central orchestrator). Absent or `any` = runnable by whichever agent picks it up. This field also tells the TESTS gate who *built* a spec, so a cross-model verifier can pick a checker that isn't the builder (see `alt-model-alignment-check`).
+**Agent routing.** `agent` is a lane hint for heterogeneous fan-out. `tl run --agent <name>` claims only specs whose `agent` is `<name>` or `any` — so Claude, Codex, and Cursor can each drain their own lane concurrently over one throughline, coordinated by the folder-move claim (`specs/ → in-progress/` is the lock — whoever moves it first owns the spec; no central orchestrator). Absent or `any` = runnable by whichever agent picks it up. This field also **identifies the builder** at the TESTS gate, so the cross-model verifier can pick a checker that is *not* the builder — the verifier must differ (see `alt-model-alignment-check` and the alignment record below).
 
 Bug specs add: `source` (`sentry` `datadog` `manual`), `source_id`, `source_url`, `affected_users` (int), `first_seen` (date).
 
@@ -96,6 +96,21 @@ Body: the thought itself. For `decision` threads, include the why — a recorded
 `scores` and `priority_was_right` are the learnable fields — keep them honest, they feed the same loop as the override log.
 
 `agent_tool`, `duration_minutes`, `cost_usd`, and `tokens_used` are optional cost signals — absent on older FEEDBACK files and unset when unknown. Together they enable head-to-head comparison across agents for the same spec type; they feed the future benchmark-analytics schema. The same four fields appear on each `cycle-log.jsonl` line (below) so metrics aggregation reads them without reparsing markdown.
+
+## Alignment (`*/outcome/ALIGNMENT.md`)
+
+The record of the cross-model check at the TESTS gate: a verifier agent **different from the builder** reviews the diff against the acceptance criteria, the intent's Outcome, and `_patterns/review-gates.md`, its concerns go back to the builder to remediate (bounded), and this file logs each round. Written before the spec advances to `in-review`; travels with the spec. The **builder** is the spec's `agent:` field; the **verifier** must differ.
+
+| Field | Type | Values |
+|-------|------|--------|
+| `spec` | path | the spec being checked |
+| `builder` | string | who built it — the spec's `agent:` lane / FEEDBACK `agent_tool` (e.g. `claude`) |
+| `verifier` | string | the checking agent, **required != `builder`** (e.g. `codex`) |
+| `rounds` | int | how many advise → remediate → re-check cycles ran (1–2; cap ~2) |
+| `verdict` | enum | `pass` (converged) or `residual-concerns` (cap tripped, unresolved) |
+| `residual_concerns` | list | specifics still open when `verdict: residual-concerns`; `[]` on `pass` |
+
+Body: one short section per round — what the verifier raised, and how the builder addressed it. On `residual-concerns` the open items are the flag the human reads at `/tl review`; the human gate is never removed, only better-informed. Absent = no cross-model check ran (older specs, or a single-agent workspace).
 
 ## Workspace config (`TRIAGE.yml`)
 

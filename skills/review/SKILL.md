@@ -19,7 +19,8 @@ Same as `/tl triage`. Read the `in-review/` stage; if it's empty, say so and sto
 - the spec's **Acceptance criteria** — the contract to check against
 - `outcome/FEEDBACK.md` — what the worker says it did, and what to watch
 - the actual change — the diff in the spec's `repo` (git diff), so claims are checked against reality, not taken on faith
-- the **review gates** (`_patterns/review-gates.md`) — the same security + code-standard checklist the tests gate ran; confirm they hold, and read any `outcome/ALIGNMENT.md` (the cross-model verifier's verdict) if present
+- the **review gates** (`_patterns/review-gates.md`) — the same security + code-standard checklist the tests gate ran; confirm they hold
+- `outcome/ALIGNMENT.md` if present — the cross-model verifier's verdict. **Surface it:** who verified (must differ from the builder), how many rounds, and the verdict. If `verdict: residual-concerns`, lead with the `residual_concerns` — those are the items the bounded loop couldn't resolve, handed to you on purpose; weigh them before accepting. A clean `pass` means a different model already vetted the diff against the criteria and gates — corroborating evidence, not a substitute for your call
 - if the work is code and the stakes warrant it, run `/code-review` on the diff and fold its findings in
 
 **3. Make the call** — present each spec with a recommendation, and let the human choose:
