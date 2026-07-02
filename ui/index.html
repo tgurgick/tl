@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Throughline</title>
-<link rel="icon" href="/logo.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f3f0e8'/%3E%3Ctext x='16' y='23' font-family='ui-monospace,SFMono-Regular,monospace' font-size='19' font-weight='600' fill='%231c1916' text-anchor='middle'%3Etl%3C/text%3E%3C/svg%3E">
 <style>
 /* ── tokens: Resume = warm journal (light) · Live Look = mission control (dark) ── */
 :root {
@@ -140,6 +140,8 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .bp-status { font-family: var(--mono); font-size: .72rem; color: var(--mid); margin: 0 0 7px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
 .bp-status:hover { color: var(--ink); }
 .bp-status .gl { color: var(--ok); }
+.bp-status .just-done { color: var(--ok); }
+.bp-status .age-inline { color: var(--faint); }
 .bp-status .ar { color: var(--faint); transition: transform .12s; display: inline-block; }
 .bp-status.open .ar { transform: rotate(90deg); }
 
@@ -266,6 +268,7 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .dec-row .txt { flex: 1; font-family: var(--serif); font-style: italic; font-size: .86rem; line-height: 1.5; }
 .dec-row .age { font-family: var(--mono); font-size: .6rem; color: var(--dim); flex: none; }
 .footnote { margin-top: 46px; text-align: center; font-family: var(--mono); font-size: .62rem; color: var(--faint); }
+.fn-cmds { margin-top: 8px; font-size: .58rem; color: var(--faint); opacity: .7; letter-spacing: .02em; }
 .empty { font-size: .78rem; color: var(--dim); padding: 8px 0; }
 
 /* map — dependency DAG + breaks */
@@ -750,13 +753,16 @@ function renderResume(wss) {
     const status = document.createElement('p');
     status.className = 'bp-status';
     const lastDone = done[0];
-    status.innerHTML = `<span class="gl">✓</span> ${done.length} done${inprog.length ? ' · ' + inprog.length + ' in progress' : ''}${lastDone ? ' · last ' + rel(lastDone.mtime) : ''} <span class="ar">›</span>`;
+    const lastTitle = lastDone ? (lastDone.title.length > 38 ? lastDone.title.slice(0, 37) + '…' : lastDone.title) : '';
+    status.innerHTML = `<span class="gl">✓</span> ${done.length} done${inprog.length ? ' · ' + inprog.length + ' in progress' : ''}${lastDone ? ' · <span class="just-done">just shipped:</span> ' + esc(lastTitle) + ' <span class="age-inline">' + rel(lastDone.mtime) + '</span>' : ''} <span class="ar">›</span>`;
     const statusEx = document.createElement('div'); statusEx.className = 'expand';
-    [...inprog.map(s => ({ s, k: '▸', c: '#6b57c7' })), ...done.slice(0, 10).map(s => ({ s, k: '✓', c: '#3a7d55' }))].forEach(({ s, k, c }) => {
+    const RECENT = 6;  // keep the list short — most recent only; the rest live in done/
+    [...inprog.map(s => ({ s, k: '▸', c: '#6b57c7' })), ...done.slice(0, RECENT).map(s => ({ s, k: '✓', c: '#3a7d55' }))].forEach(({ s, k, c }) => {
       const r = document.createElement('div'); r.className = 'loop-row';
       r.innerHTML = `<span class="gly mono" style="font-size:.62rem;color:${c}">${k}</span><div class="txt"><div class="t">${esc(s.title)}</div></div><span class="age">${rel(s.mtime)}</span>`;
       r.onclick = () => openDrawer(s); statusEx.appendChild(r);
     });
+    if (done.length > RECENT) statusEx.insertAdjacentHTML('beforeend', `<div class="loop-row" style="color:var(--faint);font-size:.7rem">+ ${done.length - RECENT} older in done/</div>`);
     if (!inprog.length && !done.length) statusEx.innerHTML = '<div class="empty">nothing completed yet</div>';
     status.onclick = () => { status.classList.toggle('open'); statusEx.classList.toggle('open'); };
     block.appendChild(status); block.appendChild(statusEx);
@@ -1229,7 +1235,7 @@ function renderResume(wss) {
 
     paper.appendChild(block);
   }
-  paper.insertAdjacentHTML('beforeend', '<div class="footnote">every change is a file edit — including the ones you make here · git is the database</div>');
+  paper.insertAdjacentHTML('beforeend', '<div class="footnote">every change is a file edit — including the ones you make here · git is the database<div class="fn-cmds">/tl&nbsp; resume · capture · run · review · map · triage · groom · promote · goal · new</div></div>');
 }
 
 /* ════ LIVE LOOK ════ */
