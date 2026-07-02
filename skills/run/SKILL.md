@@ -23,6 +23,8 @@ The **`ready/` stage is the queue** — every spec there is authorized and prior
 - **Code specs** → eligible only if their `Files to touch` are **disjoint** from every spec already in the batch *and* every `depends_on` is in `done/`. Same-file specs conflict — at most one this round.
 - **Undeclared scope** (a code spec with no `Files to touch`) → can't be proven disjoint, so it conflicts with all other code specs. A missing-scope smell — name it (fix: declare the scope, or batch these into one spec via `/tl groom`).
 
+**Agent routing (heterogeneous fan-out).** A spec may carry an optional `agent:` lane (`any | claude | codex | cursor | gemini`, default `any`). When you're running as a specific agent (`tl run --agent <name>`), consider only specs whose `agent` is `<name>` or `any` — specs in another agent's lane are held for that agent. Because the claim is a folder move (`specs/ → in-progress/`), Claude, Codex, and Cursor can each drain their own lane **concurrently** over one throughline with no central orchestrator — whoever moves the folder first owns the spec. The file-conflict rules above still apply within and across lanes: never two units at the same file.
+
 Among eligible specs prefer higher priority (p0 > p3); break ties by oldest. **Cap the batch at ~4** — calm over swarm; defer the rest to the next run and say so. If nothing is ready, say so and stop. (To hold a ranked spec back from runs, it belongs in `triage/`, not `ready/` — the folder is the gate.)
 
 Report the batch — and what was held back and why — before working.

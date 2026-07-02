@@ -38,6 +38,9 @@ A spec flows `ready → in-progress → tests → in-review → done`. An agent 
 | `depends_on` | list of paths | | author |
 | `blocks` | list of paths | | author |
 | `tags` | list | | author |
+| `agent` | enum | optional — `any` `claude` `codex` `cursor` `gemini` (default `any`) | author / human |
+
+**Agent routing.** `agent` is a lane hint for heterogeneous fan-out. `tl run --agent <name>` claims only specs whose `agent` is `<name>` or `any` — so Claude, Codex, and Cursor can each drain their own lane concurrently over one throughline, coordinated by the folder-move claim (`specs/ → in-progress/` is the lock — whoever moves it first owns the spec; no central orchestrator). Absent or `any` = runnable by whichever agent picks it up. This field also tells the TESTS gate who *built* a spec, so a cross-model verifier can pick a checker that isn't the builder (see `alt-model-alignment-check`).
 
 Bug specs add: `source` (`sentry` `datadog` `manual`), `source_id`, `source_url`, `affected_users` (int), `first_seen` (date).
 

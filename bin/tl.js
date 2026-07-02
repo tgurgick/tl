@@ -311,18 +311,33 @@ function topGoal(triage) {
 // ---------- tl run ----------
 
 function cmdRun(args) {
-  const ws = resolveWorkspace(args[0]);
-  const named = args[1];
+  // extract --agent <me> (heterogeneous routing) from the positional args
+  let agent = null;
+  const pos = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--agent') agent = String(args[++i] || '').toLowerCase();
+    else if (args[i].startsWith('--agent=')) agent = args[i].slice(8).toLowerCase();
+    else pos.push(args[i]);
+  }
+  const ws = resolveWorkspace(pos[0]);
+  const named = pos[1];
   printSkill('run');
 
   const specs = readAllSpecs(ws.dir);
-  const ready = specs.filter(s => s.stage === 'ready');
   const doneSet = new Set(specs.filter(s => s.stage === 'done').map(s => s.path));
+  const allReady = specs.filter(s => s.stage === 'ready');
+  // agent routing: a spec's `agent:` (default `any`) must match the running agent's lane.
+  const agentOf = s => (s.meta.agent || 'any').toLowerCase();
+  const ready = agent ? allReady.filter(s => agentOf(s) === 'any' || agentOf(s) === agent) : allReady;
+  const otherLane = agent ? allReady.filter(s => agentOf(s) !== 'any' && agentOf(s) !== agent)
+    .map(s => ({ ...s, holdReason: 'assigned to agent "' + agentOf(s) + '"' })) : [];
 
-  out('\n===== RUN BRIEF: ' + ws.name + ' =====\n');
+  out('\n===== RUN BRIEF: ' + ws.name + (agent ? ' (agent lane: ' + agent + ')' : '') + ' =====\n');
 
   if (!ready.length) {
-    out('The ready/ queue is empty — nothing to run. Stop and say so.');
+    out(agent
+      ? 'No ready specs in the "' + agent + '" lane (agent: ' + agent + ' or any). Nothing to run for this agent.'
+      : 'The ready/ queue is empty — nothing to run. Stop and say so.');
     hr();
     return;
   }
@@ -337,6 +352,7 @@ function cmdRun(args) {
   } else {
     ({ batch, held } = selectBatch(ready, doneSet));
   }
+  held = held.concat(otherLane);  // specs in another agent's lane wait for that agent
 
   out('## Selected batch (' + batch.length + ')');
   for (const s of batch) {
@@ -671,6 +687,7 @@ function usage() {
   out('Usage:');
   out('  tl resume [workspace]           Reconstruct context — stage counts, ready top, open loops');
   out('  tl run    [workspace] [spec]    Work the ready queue — pick the conflict-free batch (or a named spec)');
+  out('              [--agent <name>]    Only claim specs in this agent\'s lane (agent: <name> or any) — heterogeneous fan-out');
   out('  tl review [workspace]           Sign off in-review work — criteria + feedback');
   out('  tl sync-rules                   Regenerate the per-agent rules files from skills/*/SKILL.md');
   out('');
