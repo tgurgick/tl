@@ -124,6 +124,8 @@ Append-only, one JSON object per line. Schemas are defined in each skill's SKILL
 
 `cycle-log.jsonl` records one line per completed cycle and carries the same four cost signals as FEEDBACK.md, so metrics aggregation reads them from the JSONL without reparsing markdown. Each line includes at least: `spec` (path), `completed` (date), plus the optional `agent_tool` (enum: `claude-code` `cursor` `codex` `windsurf` `other`), `duration_minutes` (number), `cost_usd` (number, estimated), and `tokens_used` (number). Older lines that predate these fields are valid — the fields are optional.
 
+`loop-log.jsonl` (written by `/tl loop`) records one line per loop iteration: `goal` (id), `iteration` (int), `specs_run` (int), `specs_auto_reviewed` (int), `specs_awaiting_review` (int), `key_results_met` (int), `key_results_total` (int). It traces a goal's progress across an autonomous cycle; the human gate still owns `in-review → done`.
+
 ## Spec notes (`<stage>/<slug>/NOTES.md`, optional)
 
 Append-only human feedback on a spec, left from the cockpit while work is in flight. Each note is a small dated section (`## YYYY-MM-DD — note`, or `— kicked back` for a review rejection). The file lives in the spec's own folder, so it travels with the spec through every stage. `/tl run` reads it as binding context (treat it like the acceptance criteria); `/tl review` surfaces it. There is no queue — the `ready/` stage **is** the queue, the stage folders **are** the status, and the cockpit's write actions are review (accept / kick back) and notes, not dispatch.

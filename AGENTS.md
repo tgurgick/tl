@@ -39,6 +39,7 @@ Each verb is one `skills/<name>/SKILL.md` — the algorithm. Don't re-derive the
 - `tl dedup` — Clean a tl workspace's bug specs — auto-close bugs resolved in the error tracker, merge duplicates, flag stale ones.
 - `tl goal` — Add or rebalance the goals in a tl workspace's TRIAGE.yml through a short Q&A — interview for a new goal's description, observable key results, and relative importance, then propose weights renormalized to 1.0 and write the change on approval.
 - `tl groom` — Batch-groom a tl workspace's parked threads — propose a disposition for each (promote, spec, research, merge, close, keep), auto-execute the high-confidence ones, ask only on the ambiguous, and move the rest into the backlog.
+- `tl loop` — Run a tl workspace's specs in a loop toward a goal — triage, run the conflict-free batch to in-review, check the goal's key results, and iterate until they're met, the queue is empty, or a safety cap trips.
 - `tl map` — Paint the throughline — the contribution ladder showing what every spec ladders up to (goal → intent → spec → outcome), overlaid with dependencies, and where the chain breaks.
 - `tl new` — Guided setup of a new tl project workspace — interviews for goals, allocation targets, priority rules, and first intents, then scaffolds projects/<name>/ and runs the first triage.
 - `tl promote` — Turn a parked thread into a draft intent through a short Q&A — read the thread, interview for the outcome, the goal it ladders to, and success metrics, then propose an intent and, on approval, write it and flip the thread to promoted.
