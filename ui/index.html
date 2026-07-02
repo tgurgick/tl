@@ -337,7 +337,9 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lcard .ws-tag { font-family: var(--mono); font-size: .55rem; color: var(--faint); display: block; margin-bottom: 3px; }
 .lcard .meta { display: flex; justify-content: space-between; margin-top: 7px; font-family: var(--mono); font-size: .58rem; }
 .lcard .agent { color: var(--accent); display: flex; align-items: center; gap: 4px; }
-.lcard .elapsed { color: var(--dim); }
+.lcard .elapsed { color: var(--dim); display: inline-flex; align-items: center; gap: 4px; }
+.lcard .agent-mark { display: inline-flex; align-items: center; color: var(--dim); opacity: .72; }
+.lcard.working .agent-mark { color: var(--accent); opacity: .9; }
 .lcard.done .t { text-decoration: line-through; text-decoration-color: rgba(111,174,132,.6); color: var(--dim); }
 .lc-note { margin-top: 7px; font-family: var(--mono); font-size: .56rem; color: #b57fc7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lcard .pbar { height: 2px; background: rgba(255,255,255,.06); border-radius: 2px; overflow: hidden; margin-top: 8px; }
@@ -535,6 +537,24 @@ const IC = {
   archive: c => `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>`,
   arrow: c => `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>`,
 };
+
+/* ── per-agent marks — subtle monochrome glyphs, not trademarked logos ── */
+const AGENT_IC = {
+  // Claude — a small sunburst / asterisk spark
+  claude: c => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round"><path d="M12 4v16M4 12h16M6.3 6.3l11.4 11.4M17.7 6.3 6.3 17.7"/></svg>`,
+  // GPT-Codex (OpenAI) — a simple interlocking knot ring
+  codex: c => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 4v8l6 3.5"/></svg>`,
+  // Cursor — a chevron cursor caret
+  cursor: c => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 4 14 8-6 1.5L9 20 5 4Z"/></svg>`,
+  // Gemini — a four-point spark / star
+  gemini: c => `<svg width="14" height="14" viewBox="0 0 24 24" fill="${c}" stroke="none"><path d="M12 2c.4 4.4 3.6 7.6 8 8-4.4.4-7.6 3.6-8 8-.4-4.4-3.6-7.6-8-8 4.4-.4 7.6-3.6 8-8Z"/></svg>`,
+};
+const AGENT_LABEL = { claude: 'Claude', codex: 'GPT-Codex', cursor: 'Cursor', gemini: 'Gemini' };
+function agentMark(s, c) {
+  const a = (s.meta.agent || '').toLowerCase();
+  if (!a || a === 'any' || !AGENT_IC[a]) return '';
+  return `<span class="agent-mark" title="${AGENT_LABEL[a]}">${AGENT_IC[a](c)}</span>`;
+}
 
 /* ── markdown (drawer) ── */
 function inline(s) {
@@ -1378,10 +1398,11 @@ function renderLanes(wss) {
       const pr = (s.meta.priority || '').toLowerCase();
       const priBadge = pr ? `<span class="lc-pri ${pr}">${esc(pr.toUpperCase())}</span>` : '';
       let inner = (multi ? `<span class="ws-tag">${esc(s._ws)}</span>` : '') + `<p class="t">${priBadge}${esc(stage === 'triage' || stage === 'ready' ? s.title : slug)}</p>`;
+      const amark = agentMark(s, 'currentColor');
       if (stage === 'in-progress') inner += `<div class="pbar"><i></i></div>
-        <div class="meta"><span class="agent">⚡ active</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
-      if (stage === 'tests') inner += `<div class="meta"><span class="gate gate-tests">⏳ tests</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
-      if (stage === 'in-review') inner += `<div class="meta"><span class="gate gate-review">◆ needs review</span><span class="elapsed">${rel(s.mtime)}</span></div>`;
+        <div class="meta"><span class="agent">⚡ active</span><span class="elapsed">${amark}${rel(s.mtime)}</span></div>`;
+      if (stage === 'tests') inner += `<div class="meta"><span class="gate gate-tests">⏳ tests</span><span class="elapsed">${amark}${rel(s.mtime)}</span></div>`;
+      if (stage === 'in-review') inner += `<div class="meta"><span class="gate gate-review">◆ needs review</span><span class="elapsed">${amark}${rel(s.mtime)}</span></div>`;
       if (s.notes) inner += `<div class="lc-note">✎ ${esc((s.notes.match(/— note\n(.+)/) || s.notes.match(/\n([^\n#].+)/) || [, ''])[1] || 'note').slice(0, 60)}</div>`;
       card.innerHTML = inner;
       card.onclick = () => openDrawer(s);
