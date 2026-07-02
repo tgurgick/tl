@@ -1,0 +1,8 @@
+{
+  "name": "throughline",
+  "version": "0.1.0",
+  "description": "tl — the throughline CLI: deterministic file work, then prints the matching SKILL as a prompt for the running agent.",
+  "bin": {
+    "tl": "bin/tl.js"
+  }
+}
