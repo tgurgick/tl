@@ -422,6 +422,11 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .dr-accept { color: var(--ok) !important; border-color: var(--ok) !important; }
 .dr-accept:hover { background: rgba(58,125,85,.1); }
 .dr-reject:hover { color: #c0622a; border-color: #c0622a; }
+.dr-decide { display: flex; gap: 8px; margin-bottom: 20px; }
+.dr-decide button { font-family: var(--mono); font-size: .68rem; border-radius: 4px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
+.dr-decide button:hover { color: var(--ink); border-color: var(--ink); }
+.dr-decide .dr-resolve:hover { color: var(--ok); border-color: var(--ok); }
+.dr-decide .dr-research:hover { color: var(--info); border-color: var(--info); }
 .dr-outcome { margin-bottom: 24px; padding: 14px 16px; background: rgba(107,143,199,.06); border-left: 3px solid #6b8fc7; border-radius: 0 4px 4px 0; }
 .dr-outcome-h { font-family: var(--mono); font-size: .58rem; letter-spacing: .08em; text-transform: uppercase; color: #6b8fc7; margin: 14px 0 6px; }
 .dr-outcome-h:first-child { margin-top: 0; }
@@ -626,11 +631,20 @@ function openDrawer(item) {
   // the human gate, in the pop-out: accept → done, or kick back → in-progress with a note
   const reviewHtml = item.stage === 'in-review' ? `
     <div class="dr-review"><button class="dr-accept">accept ✓ → done</button><button class="dr-reject">kick back</button></div>` : '';
+  // the decay-inbox decision, in the pop-out: same actions askRow offers, so you can decide here
+  const dec = item._decide;
+  let decideBtns = '';
+  if (dec) {
+    if (dec.thread) decideBtns = `<button class="dr-resolve">resolve</button><button class="dr-park">park</button><button class="dr-research">research →</button>`;
+    else if (dec.kind === 'blocked' || dec.kind === 'triage') decideBtns = `<button class="dr-research">research →</button>`;
+  }
+  const decideHtml = decideBtns ? `<div class="dr-decide">${decideBtns}</div>` : '';
   $('drawer').innerHTML = `
     <div class="path">${esc(item.path || '')}</div>
     <h2>${esc(item.title)}</h2>
     <div class="meta">${pills}</div>
     ${reviewHtml}
+    ${decideHtml}
     ${outcomeHtml}
     <div class="md dr-body">${md(body)}</div>
     ${notesHtml}`;
@@ -638,6 +652,14 @@ function openDrawer(item) {
     const review = async (action, note) => { try { await postJSON('/api/review', { ws: item._ws, spec: item.path, action, note }); document.body.classList.remove('open'); loadSelected(); } catch (err) { alert(err.message); } };
     $('drawer').querySelector('.dr-accept').onclick = () => review('accept');
     $('drawer').querySelector('.dr-reject').onclick = () => { const note = prompt('Kick back — what needs fixing? (a note for the next run)'); if (note !== null) review('reject', note); };
+  }
+  if (decideBtns) {
+    // wired to the same endpoints askRow uses, so the human can decide without going back to the inbox row
+    const decide = (p, body) => (async () => { try { await postJSON(p, { ws: item._ws, ...body }); document.body.classList.remove('open'); loadSelected(); } catch (err) { alert(err.message); } })();
+    const rs = $('drawer').querySelector('.dr-resolve'); if (rs) rs.onclick = () => decide('/api/thread-status', { path: item.path, status: 'closed' });
+    const pk = $('drawer').querySelector('.dr-park'); if (pk) pk.onclick = () => decide('/api/thread-status', { path: item.path, status: 'parked' });
+    const rc = $('drawer').querySelector('.dr-research');
+    if (rc) rc.onclick = () => decide('/api/research', dec.thread ? { title: dec.topic, source: item.path } : { title: dec.topic });
   }
   if (isSpec) {
     decorateBlocks($('drawer').querySelector('.dr-body'), item, notes.filter(n => n.anchor));
@@ -897,9 +919,11 @@ function renderResume(wss) {
     const askRow = l => {
       const r = document.createElement('div'); r.className = 'ask';
       r.innerHTML = `${LIC[l.kind](LCOL[l.kind])}<div class="txt"><div class="t">${esc(l.title)}</div><div class="sub">${esc(l.sub)}</div></div><div class="acts"></div>`;
-      r.querySelector('.txt').onclick = () => openDrawer(l.item);
-      const acts = r.querySelector('.acts');
       const topic = l.title.replace(/\s+—.*$/, '');
+      // carry the decision context into the pop-out so the same actions work there
+      const decideItem = { ...l.item, _ws: ws.name, _decide: { thread: !!l.thread, kind: l.kind, topic } };
+      r.querySelector('.txt').onclick = () => openDrawer(decideItem);
+      const acts = r.querySelector('.acts');
       const mk = (label, cls, fn) => { const b = document.createElement('button'); if (cls) b.className = cls; b.textContent = label; b.onclick = e => { e.stopPropagation(); fn(b); }; acts.appendChild(b); };
       const post = (p, body) => (async () => { try { await postJSON(p, { ws: ws.name, ...body }); } catch (e) { alert(e.message); } loadSelected(); })();
       if (l.thread) {
@@ -913,7 +937,7 @@ function renderResume(wss) {
         });
         mk('close', '', () => post('/api/thread-status', { path: l.item.path, status: 'done' }));
       } else {
-        mk(l.kind === 'research' ? 'decide' : 'open', '', () => openDrawer(l.item));
+        mk(l.kind === 'research' ? 'decide' : 'open', '', () => openDrawer(decideItem));
         if (l.kind === 'blocked' || l.kind === 'triage') mk('research', 'research', () => post('/api/research', { title: topic }));
       }
       return r;
