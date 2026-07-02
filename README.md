@@ -52,7 +52,7 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, promote, groom, run, review, map, triage, reflect, dedup, bug-capture, goal, ui
+├── skills/                     # /tl new, resume, capture, promote, groom, decompose, run, review, map, triage, reflect, dedup, bug-capture, goal, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
@@ -139,6 +139,10 @@ The commit path for a parked thought — turns a thread into a draft intent thro
 ### /tl groom
 
 The batch counterpart to `/tl promote` — works through *all* the parked threads at once when loose ends pile up. For each it proposes a disposition (promote / spec / research / merge / close / keep), **auto-executes the high-confidence ones**, and surfaces only the ambiguous as a short "needs your call" list. It's an orchestrator: it reuses `promote` (thread → intent), the research valve (uncertain → `type: research` spec), and `reflect`'s parallel-track detection to flag which new specs can run concurrently — then hands off (it fills the backlog and points; it never dispatches). Ends with a ledger of everything it did. `resume` nudges it; `groom` does it.
+
+### /tl decompose
+
+The rung between deciding and building. Where `/tl promote` turns a thread into an intent, `decompose` turns an **intent** or an **accepted research recommendation** into the `ready` specs that implement it — reading the recommendation's smallest-first-step and phasing, drafting testable, **file-scoped** specs under the right intent, and writing them on approval. Refuses to orphan a spec (no home → `/tl goal`/`promote` first) and always declares each spec's `Files to touch` — which is how it *earns* parallel fan-out downstream (undeclared scope is what forces `run` to serialize). Proposes; never writes silently. Closes the "research isn't folded back into specs" gap.
 
 ### /tl run
 
