@@ -273,8 +273,12 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 
 /* map — dependency DAG + breaks */
 .dag-cap { font-family: var(--mono); font-size: .58rem; color: var(--faint); text-align: center; margin: 2px 0 -2px; letter-spacing: .04em; }
-.dag-wrap { overflow-x: auto; padding: 8px 0 4px; display: flex; justify-content: center; }
-.dag-wrap svg { display: block; }
+.dag-wrap { position: relative; overflow: hidden; padding: 0; margin: 8px 0 4px; height: 440px; border: 1px solid var(--line, #e7e2d6); border-radius: 8px; background: #fbf9f4; touch-action: none; }
+.dag-wrap svg { display: block; width: 100%; height: 100%; cursor: grab; }
+.dag-wrap svg.panning { cursor: grabbing; }
+.dag-reset { position: absolute; top: 8px; right: 8px; font-family: var(--mono); font-size: .58rem; letter-spacing: .04em; color: var(--faint); background: rgba(255,254,251,.86); border: 1px solid var(--line, #e0dacd); border-radius: 6px; padding: 3px 8px; cursor: pointer; opacity: 0; transition: opacity .15s; z-index: 2; }
+.dag-wrap:hover .dag-reset { opacity: 1; }
+.dag-reset:hover { color: var(--ink, #1c1916); }
 .dn { cursor: pointer; }
 .dn rect:first-child { transition: stroke-width .1s; }
 .dn:hover rect:first-child { stroke-width: 2; }
@@ -1098,8 +1102,87 @@ function renderResume(wss) {
             ${s.meta.priority ? `<text x="${p.x + NW - 8}" y="${p.y + NH / 2 + 0.5}" text-anchor="end" font-family="ui-monospace,monospace" font-size="8.5" fill="${prFill}" dominant-baseline="middle">${esc(s.meta.priority.toUpperCase())}</text>` : ''}
           </g>`;
         });
-        countsEx.innerHTML = `<div class="dag-cap">↑ laddering up to goals</div><div class="dag-wrap"><svg width="${W}" height="${Hsvg}" viewBox="0 0 ${W} ${Hsvg}">${goalEdges}${edges}${goalNodes}${nodes}</svg></div>`;
+        countsEx.innerHTML = `<div class="dag-cap">↑ laddering up to goals</div><div class="dag-wrap"><button class="dag-reset" title="Reset view (or double-click the map)">reset view</button><svg viewBox="0 0 ${W} ${Hsvg}" preserveAspectRatio="xMidYMid meet">${goalEdges}${edges}${goalNodes}${nodes}</svg></div>`;
         countsEx.querySelectorAll('.dn[data-slug]').forEach(g => { g.onclick = () => { const s = bySlug[g.dataset.slug]; if (s) openDrawer({ ...s, _ws: ws.name }); }; });
+        // zoom + pan by manipulating the SVG viewBox (crisp, no CSS transform).
+        // default framing centres on the in-focus node (or the goal tier) zoomed in; the user can
+        // wheel-zoom toward the cursor, drag to pan, and double-click / "reset view" to return.
+        (() => {
+          const wrap = countsEx.querySelector('.dag-wrap');
+          const svg = wrap && wrap.querySelector('svg');
+          const resetBtn = wrap && wrap.querySelector('.dag-reset');
+          if (!svg) return;
+          // default view box: frame the in-focus node (or goal tier) with margin, not the whole graph
+          let defView;
+          const fp = focusSlug && pos[focusSlug];
+          if (fp) {
+            const m = 190;  // breathing room so neighbours + a ladder edge stay in frame
+            defView = { x: fp.x + NW / 2 - (NW / 2 + m), y: fp.y + NH / 2 - (NH / 2 + m), w: NW + 2 * m, h: NH + 2 * m };
+          } else if (hasGoalRow) {
+            const m = 120;   // frame the goal tier across the full width, with room to hint the ladder below
+            defView = { x: -m, y: PAD - m, w: W + 2 * m, h: NH + 3 * m };
+          } else {
+            defView = { x: 0, y: 0, w: W, h: Hsvg };
+          }
+          // never zoom past the full graph; keep aspect sane against the viewport
+          const clampSpan = v => {
+            v.w = Math.max(60, Math.min(v.w, W * 3));
+            v.h = Math.max(60, Math.min(v.h, Hsvg * 3));
+            return v;
+          };
+          clampSpan(defView);
+          let view = { ...defView };
+          const apply = () => svg.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
+          apply();
+          const reset = () => { view = { ...defView }; apply(); };
+          if (resetBtn) resetBtn.onclick = e => { e.stopPropagation(); reset(); };
+          // map client px → SVG user coords under the current viewBox.
+          // preserveAspectRatio="meet" letterboxes, so the drawn area is inset within the element —
+          // account for that inset or cursor-anchored zoom drifts when aspect ratios differ.
+          const geom = () => {
+            const r = svg.getBoundingClientRect();
+            const scale = Math.min(r.width / view.w, r.height / view.h);  // "meet" uses the smaller
+            const dw = view.w * scale, dh = view.h * scale;
+            return { r, scale, offX: r.left + (r.width - dw) / 2, offY: r.top + (r.height - dh) / 2 };
+          };
+          const toUser = (cx, cy) => { const g = geom(); return { x: view.x + (cx - g.offX) / g.scale, y: view.y + (cy - g.offY) / g.scale }; };
+          svg.addEventListener('wheel', e => {
+            e.preventDefault();
+            const before = toUser(e.clientX, e.clientY);   // user point under the cursor now
+            const f = Math.exp(e.deltaY * 0.0015);         // wheel up = zoom in
+            view.w = Math.max(60, Math.min(view.w * f, W * 3));
+            view.h = Math.max(60, Math.min(view.h * f, Hsvg * 3));
+            apply();
+            const after = toUser(e.clientX, e.clientY);    // where that pixel now lands
+            view.x += before.x - after.x; view.y += before.y - after.y;  // shift so it's fixed again
+            apply();
+          }, { passive: false });
+          // drag to pan; a real drag suppresses the node click that would otherwise fire on mouseup
+          let drag = null;
+          svg.addEventListener('pointerdown', e => {
+            if (e.button !== 0) return;
+            drag = { sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y, moved: false };
+            svg.classList.add('panning');
+            try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+          });
+          svg.addEventListener('pointermove', e => {
+            if (!drag) return;
+            const scale = geom().scale;                 // user-units per client px, under "meet"
+            const dx = (e.clientX - drag.sx) / scale, dy = (e.clientY - drag.sy) / scale;
+            if (Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) > 3) drag.moved = true;
+            view.x = drag.ox - dx; view.y = drag.oy - dy; apply();
+          });
+          const endDrag = e => {
+            if (!drag) return;
+            svg.classList.remove('panning');
+            try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
+            const moved = drag.moved; drag = null;
+            if (moved) { const swallow = ev => { ev.stopPropagation(); }; svg.addEventListener('click', swallow, { capture: true, once: true }); }
+          };
+          svg.addEventListener('pointerup', endDrag);
+          svg.addEventListener('pointercancel', endDrag);
+          svg.addEventListener('dblclick', e => { e.preventDefault(); reset(); });
+        })();
         // throughline breaks
         const orphanSpecs = specs.filter(s => !(s.meta.intent || '').trim());
         const goalless = ws.intents.filter(it => !(it.meta.goals || []).length);
