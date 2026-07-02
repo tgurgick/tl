@@ -81,12 +81,18 @@ Body: the thought itself. For `decision` threads, include the why — a recorded
 | `spec` | path | the completed spec |
 | `completed` | date | required |
 | `agent_model` | string | e.g. `claude-fable-5` |
+| `agent_tool` | enum | optional — `claude-code` `cursor` `codex` `windsurf` `other` — which tool ran the spec (not just the model) |
+| `duration_minutes` | number | optional — wall-clock minutes to carry the spec to in-review, e.g. `12` |
+| `cost_usd` | number | optional — estimated API cost in USD, e.g. `0.42` |
+| `tokens_used` | number | optional — total tokens consumed, e.g. `38000` |
 | `scores.correctness` | int 1–5 | did it work |
 | `scores.completeness` | int 1–5 | all criteria met |
 | `scores.scope_discipline` | int 1–5 | stayed in bounds |
 | `priority_was_right` | bool | was this worth doing when we did it |
 
 `scores` and `priority_was_right` are the learnable fields — keep them honest, they feed the same loop as the override log.
+
+`agent_tool`, `duration_minutes`, `cost_usd`, and `tokens_used` are optional cost signals — absent on older FEEDBACK files and unset when unknown. Together they enable head-to-head comparison across agents for the same spec type; they feed the future benchmark-analytics schema. The same four fields appear on each `cycle-log.jsonl` line (below) so metrics aggregation reads them without reparsing markdown.
 
 ## Workspace config (`TRIAGE.yml`)
 
@@ -115,6 +121,8 @@ error_tracking:         # optional — enables /tl bug-capture
 ## Metrics (`_metrics/*.jsonl`, per workspace)
 
 Append-only, one JSON object per line. Schemas are defined in each skill's SKILL.md. Never edit existing lines; corrections are new lines.
+
+`cycle-log.jsonl` records one line per completed cycle and carries the same four cost signals as FEEDBACK.md, so metrics aggregation reads them from the JSONL without reparsing markdown. Each line includes at least: `spec` (path), `completed` (date), plus the optional `agent_tool` (enum: `claude-code` `cursor` `codex` `windsurf` `other`), `duration_minutes` (number), `cost_usd` (number, estimated), and `tokens_used` (number). Older lines that predate these fields are valid — the fields are optional.
 
 ## Spec notes (`<stage>/<slug>/NOTES.md`, optional)
 
