@@ -15,7 +15,7 @@ Same as `/tl triage`: argument or context names a workspace under `projects/`; e
 
 Read specs (all stages), `threads/`, `PRIORITIES.md`, `TRIAGE.yml`, and `_metrics/*.jsonl` (last lines). Then report exactly these sections, in this order — they mirror the UI's Resume tab top to bottom, so CLI and UI never drift:
 
-**1. Status** — what changed while away: completed specs (count + the most recent, from `done/` mtimes or `cycle-log.jsonl`) and anything in-progress. One or two lines.
+**1. Status** — what changed while away: completed specs (count + the most recent, from `done/` mtimes or `cycle-log.jsonl`) and anything in-progress. For each `in-progress/` spec, **read `NOTES.md` if present** and surface it here — especially `— kicked back` notes from `/tl review`; those are binding corrections the next worker must honor before re-reading `FEEDBACK.md`. One or two lines plus any kickback note verbatim.
 
 **2. Goal in focus** — the top-weighted goal from `TRIAGE.yml`, one line, with its weight and key-result count.
 
@@ -30,7 +30,7 @@ Read specs (all stages), `threads/`, `PRIORITIES.md`, `TRIAGE.yml`, and `_metric
    - open `question` / `risk` / `decision` threads
    - blocked specs (with what blocks them)
    - done specs missing `outcome/FEEDBACK.md`
-   - `in-progress` specs idle too long (stalled?)
+   - `in-progress` specs idle too long (stalled?) or with **`NOTES.md`** (kickback / mid-flight feedback — rank these above stalled-idle; read the note, not just the folder)
    - `triage` items aging (promote or kill?)
    - a goal with **zero active specs** — it's starving; an intent needs decomposing or the goal needs dropping (this is the priorities-back-to-intent check)
    - completed `research` specs whose recommendation is awaiting a human decision

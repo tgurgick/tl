@@ -2,6 +2,10 @@
 spec: ""                        # path to the completed spec
 completed: YYYY-MM-DD
 agent_model: ""                 # which model executed this (e.g., claude-fable-5)
+agent_tool: ""                  # optional — which tool ran it: claude-code | cursor | codex | windsurf | other
+duration_minutes:               # optional — wall-clock minutes to carry the spec to in-review
+cost_usd:                       # optional — estimated API cost in USD
+tokens_used:                    # optional — total tokens consumed
 scores:
   correctness: 0                # 1-5 — did it work?
   completeness: 0               # 1-5 — were all acceptance criteria met?

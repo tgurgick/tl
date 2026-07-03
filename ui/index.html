@@ -56,12 +56,20 @@ body {
 }
 a { color: inherit; }
 
-/* three modes: human · split · agent */
+/* modes: human · split · agent · experiments */
 .stage { display: flex; height: calc(100vh - 49px); }
 .pane { min-width: 0; }
 .human { overflow-y: auto; }
 .agent { display: flex; flex-direction: column; overflow: hidden; }
-body.m-human .agent, body.m-agent .human { display: none; }
+/* #view-live and #view-experiments both carry .agent (dark theme); only the
+   active mode's pane shows. Experiments is its own top-level mode. */
+#view-experiments { display: none; }
+body.m-human #view-resume, body.m-agent #view-live, body.m-experiments #view-experiments { display: flex; }
+body.m-human #view-live, body.m-human #view-experiments,
+body.m-agent #view-resume, body.m-agent #view-experiments,
+body.m-experiments #view-resume, body.m-experiments #view-live,
+body.m-split #view-experiments { display: none; }
+body.m-experiments #view-experiments { flex: 1 1 100%; }
 body.m-human .human, body.m-agent .agent { flex: 1 1 100%; }
 body.m-split .human { flex: 0 0 384px; border-right: 1px solid var(--line2); }
 body.m-split .agent { flex: 1 1 auto; }
@@ -98,8 +106,13 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 }
 .bar .tab:hover { color: var(--ink); }
 .bar .tab.active { color: var(--ink); background: rgba(127,127,127,.12); }
-.bar .tab .live-dot { width: 6px; height: 6px; border-radius: 50%; background: #34d399; opacity: .35; }
-.bar .tab.active .live-dot { opacity: 1; animation: tl-pulse 2s infinite; }
+/* tab activity dots — same size/spacing (the tab's flex gap handles it), dim when
+   idle, pulse only when there's activity on that tab. Agent = green (agents
+   working); Experiments = orange (a test running / moving in shadow). */
+.bar .tab .live-dot, .bar .tab .exp-live { width: 6px; height: 6px; border-radius: 50%; opacity: .3; }
+.bar .tab .live-dot { background: #34d399; }
+.bar .tab .exp-live { background: var(--accent); }
+.bar .tab .live-dot.on, .bar .tab .exp-live.on { opacity: 1; animation: tl-pulse 2s infinite; }
 .bar .tab .dotn { display: none; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
 .bar .tab.unseen .dotn { display: inline-block; }
 
@@ -127,6 +140,33 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 
 /* ════ RESUME (boarding pass) ════ */
 #view-resume { min-height: calc(100vh - 49px); }
+.resume-shell { display: flex; min-height: calc(100vh - 49px - 33px); }
+.insights-rail {
+  display: none; width: 248px; flex-shrink: 0;
+  padding: 28px 20px 48px 28px; border-right: 1px solid var(--line);
+  background: var(--surface);
+  font-family: var(--mono); font-size: .66rem; color: var(--mid);
+}
+body.m-human #view-resume { flex-direction: column; }
+body.m-human .resume-shell { width: 100%; }
+body.m-human .insights-rail { display: block; position: sticky; top: 0; align-self: flex-start; height: calc(100vh - 49px - 33px); overflow-y: auto; }
+body.m-human .datestrip > div { max-width: none; margin: 0; padding: 8px 32px; }
+body.m-human .paper { flex: 1 1 auto; max-width: 60rem; margin: 0; padding: 40px 52px 80px; }
+body.m-split .resume-shell { display: block; }
+body.m-split .insights-rail { display: none !important; }
+.ins-block + .ins-block { margin-top: 1.35rem; padding-top: 1.1rem; border-top: 1px solid var(--line); }
+.ins-block .il { display: block; font-size: .58rem; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
+.ins-stat { font-size: 1.35rem; color: var(--ink); line-height: 1.1; margin: 0 0 2px; font-weight: 500; }
+.ins-sub { color: var(--faint); font-size: .6rem; margin: 0 0 8px; }
+.ins-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; }
+.ins-row .ir-l { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ins-row .ir-l span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ins-row .ir-n { color: var(--ink); flex-shrink: 0; }
+.ins-tool-meta { color: var(--faint); font-size: .58rem; margin: -1px 0 6px 0; padding-left: 0; }
+.ins-highlight { margin-top: 8px; }
+.ins-highlight .ih-task { color: var(--ink); font-size: .64rem; line-height: 1.45; margin: 0 0 5px; }
+.ins-highlight .ih-winner { color: var(--mid); font-size: .6rem; margin: 0 0 4px; }
+.ins-quiet { color: var(--faint); font-size: .6rem; line-height: 1.45; }
 .datestrip { border-bottom: 1px solid var(--line); background: var(--surface); }
 .datestrip > div {
   max-width: 40rem; margin: 0 auto; padding: 8px 24px;
@@ -322,7 +362,7 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lane-head .nm { font-family: var(--mono); font-size: .62rem; letter-spacing: .1em; color: var(--dim); }
 .lane-head .ct { margin-left: auto; font-family: var(--mono); font-size: .62rem; color: var(--faint); }
 .lane-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: none; }
-.lcard { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; cursor: pointer; }
+.lcard { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; cursor: pointer; }
 .lcard:hover { border-color: var(--line2); }
 .lcard.working { border-color: var(--accent-line); }
 .lcard .gate { display: flex; align-items: center; gap: 4px; font-family: var(--mono); }
@@ -336,10 +376,13 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lc-pri.p3 { color: #8a8070; background: rgba(138,128,112,.16); }
 .lcard .ws-tag { font-family: var(--mono); font-size: .55rem; color: var(--faint); display: block; margin-bottom: 3px; }
 .lcard .meta { display: flex; justify-content: space-between; margin-top: 7px; font-family: var(--mono); font-size: .58rem; }
-.lcard .agent { color: var(--accent); display: flex; align-items: center; gap: 4px; }
+.lcard .lc-status { color: var(--accent); display: inline-flex; align-items: center; gap: 4px; }
 .lcard .elapsed { color: var(--dim); display: inline-flex; align-items: center; gap: 4px; }
 .lcard .agent-mark { display: inline-flex; align-items: center; color: var(--dim); opacity: .72; }
 .lcard.working .agent-mark { color: var(--accent); opacity: .9; }
+.lcard .lc-owner { position: absolute; top: 9px; right: 10px; display: inline-flex; align-items: center; color: var(--accent); }
+.lcard .lc-owner svg { width: 20px; height: 20px; flex: none; }
+.lcard.has-owner .t { padding-right: 32px; }
 .lcard.done .t { text-decoration: line-through; text-decoration-color: rgba(111,174,132,.6); color: var(--dim); }
 .lc-note { margin-top: 7px; font-family: var(--mono); font-size: .56rem; color: #b57fc7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lcard .pbar { height: 2px; background: rgba(255,255,255,.06); border-radius: 2px; overflow: hidden; margin-top: 8px; }
@@ -424,6 +467,8 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .dr-accept { color: var(--ok) !important; border-color: var(--ok) !important; }
 .dr-accept:hover { background: rgba(58,125,85,.1); }
 .dr-reject:hover { color: #c0622a; border-color: #c0622a; }
+.dr-release { color: var(--ok) !important; border-color: var(--ok) !important; }
+.dr-release:hover { background: rgba(58,125,85,.1); }
 .dr-decide { display: flex; gap: 8px; margin-bottom: 20px; }
 .dr-decide button { font-family: var(--mono); font-size: .68rem; border-radius: 4px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
 .dr-decide button:hover { color: var(--ink); border-color: var(--ink); }
@@ -451,6 +496,8 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
   font-family: var(--mono); font-size: .6rem; letter-spacing: .03em; color: var(--dim);
   border: 1px solid var(--line2); border-radius: 2px; padding: 2px 8px;
 }
+.pill.pill-owner { color: var(--accent); border-color: var(--accent); display: inline-flex; align-items: center; gap: 4px; }
+.pill.pill-owner svg { width: .82em; height: .82em; }
 .pill.p0 { color: var(--bad); border-color: var(--bad); }
 .pill.p1 { color: var(--warn); border-color: var(--warn); }
 .pill.q { color: var(--info); border-color: var(--info); }
@@ -467,6 +514,112 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .md th, .md td { border-bottom: 1px solid var(--line); padding: 6px 10px 6px 0; }
 .md blockquote { border-left: 2px solid var(--line2); padding-left: 14px; color: var(--mid); margin: 0 0 12px; }
 .md input[type=checkbox] { accent-color: var(--accent); margin-right: 6px; }
+
+/* ════ EXPERIMENTS (candidate comparison) ════ */
+#view-experiments { background: var(--bg); }
+.exp-deck { display: flex; flex: 1; min-height: 0; }
+.exp-queue { width: 268px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.exp-queue .body { flex: 1; overflow-y: auto; padding: 8px; scrollbar-width: thin; }
+.exp-new { margin-left: auto; font-family: var(--mono); font-size: .56rem; letter-spacing: .04em; color: var(--accent); background: transparent; border: 1px solid var(--accent-line); border-radius: 3px; padding: 2px 8px; cursor: pointer; text-transform: none; }
+.exp-new:hover { border-color: var(--accent); }
+.exp-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.exp-detail .body { flex: 1; overflow-y: auto; padding: 22px 26px 60px; scrollbar-width: thin; }
+.exp-empty { padding: 30px; font-family: var(--mono); font-size: .65rem; color: var(--faint); line-height: 1.6; }
+
+.exp-item { background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 9px 11px; margin-bottom: 7px; cursor: pointer; }
+.exp-item:hover { border-color: var(--line2); }
+.exp-item.active { border-color: var(--accent-line); background: var(--accent-bg); }
+.exp-item .eid { font-family: var(--mono); font-size: .64rem; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exp-item .erow { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-family: var(--mono); font-size: .56rem; color: var(--dim); }
+.exp-item .ecount { margin-left: auto; }
+
+.exp-st { font-family: var(--mono); font-size: .56rem; letter-spacing: .03em; padding: 1px 6px; border-radius: 2px; text-transform: uppercase; white-space: nowrap; }
+.exp-st.st-succeeded, .exp-st.st-selected, .exp-st.st-applied { color: var(--ok); background: rgba(111,174,132,.14); }
+.exp-st.st-running { color: var(--accent); background: var(--accent-bg); }
+.exp-st.st-queued, .exp-st.st-awaiting_evaluation { color: var(--info); background: rgba(155,140,240,.14); }
+.exp-st.st-failed, .exp-st.st-timed_out, .exp-st.st-over_budget, .exp-st.st-rejected, .exp-st.st-apply-failed, .exp-st.st-invalid_output { color: var(--bad); background: rgba(217,106,90,.14); }
+.exp-st.st-unavailable, .exp-st.st-cancelled { color: var(--dim); background: rgba(138,128,112,.16); }
+
+.exp-hd { margin-bottom: 18px; }
+.exp-hd h2 { font-family: var(--mono); font-size: .9rem; color: var(--ink); font-weight: 500; word-break: break-all; }
+.exp-hd .sub { font-family: var(--mono); font-size: .58rem; color: var(--dim); margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.exp-hd .sub code { background: var(--surface); padding: 1px 5px; border-radius: 3px; color: var(--mid); }
+
+.exp-sec { margin-top: 26px; }
+.exp-sec > h3 { font-family: var(--mono); font-size: .6rem; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); margin-bottom: 12px; }
+
+.exp-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); gap: 12px; }
+.exp-card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px 13px; }
+.exp-card.winner { border-color: var(--ok); box-shadow: inset 3px 0 0 var(--ok); }
+/* task summary + labels + fork (kickback additions) */
+.exp-summary { margin-top: 7px; font-size: .82rem; color: var(--ink); line-height: 1.45; max-width: 74ch; }
+.exp-labels { margin-top: 7px; display: flex; gap: 5px; flex-wrap: wrap; }
+.exp-label { font-family: var(--mono); font-size: .55rem; letter-spacing: .04em; color: var(--dim); border: 1px solid var(--line2); border-radius: 2px; padding: 1px 6px; }
+.exp-variant { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: .62rem; color: var(--accent); background: rgba(226,165,94,.1); border: 1px solid var(--accent-line); border-radius: 3px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+.exp-variant:hover { background: rgba(226,165,94,.2); }
+.exp-variant svg { width: 13px; height: 13px; }
+.exp-var-tag { display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono); font-size: .5rem; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); border: 1px solid var(--accent-line); border-radius: 2px; padding: 0 4px; margin-right: 6px; vertical-align: 1px; }
+.exp-var-tag svg { width: 9px; height: 9px; }
+.exp-form label.sub2 { font-size: .54rem; color: var(--dim); text-transform: none; letter-spacing: 0; margin: 0 0 2px; }
+/* side-by-side variant diffs */
+.exp-diffs { display: flex; gap: 12px; overflow-x: auto; }
+.exp-diff-col { flex: 1 1 0; min-width: 250px; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.exp-diff-col.winner { border-color: var(--ok); }
+.exp-diff-col .ddh { font-family: var(--mono); font-size: .62rem; font-weight: 600; color: var(--ink); padding: 5px 9px; background: rgba(255,255,255,.03); border-bottom: 1px solid var(--line); }
+.exp-diff-col .dbody { max-height: 360px; overflow: auto; font-family: var(--mono); font-size: .58rem; line-height: 1.5; padding: 4px 0; }
+.exp-diff-col .dl { padding: 0 9px; white-space: pre-wrap; word-break: break-all; }
+.exp-diff-col .dl.add { background: rgba(111,174,132,.14); color: #6fae84; }
+.exp-diff-col .dl.del { background: rgba(192,98,42,.13); color: #c0622a; }
+.exp-diff-col .dl.hunk { color: var(--dim); background: rgba(107,87,199,.09); }
+.exp-card .ch { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
+.exp-card .cid { font-family: var(--mono); font-size: .72rem; color: var(--ink); }
+.exp-card .role { font-family: var(--mono); font-size: .52rem; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); border: 1px solid var(--line2); border-radius: 2px; padding: 1px 5px; }
+.exp-card .role.primary { color: var(--accent); border-color: var(--accent-line); }
+.exp-card .win-tag { margin-left: auto; font-family: var(--mono); font-size: .54rem; color: var(--ok); letter-spacing: .04em; }
+.exp-kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-family: var(--mono); font-size: .6rem; }
+.exp-kv .k { color: var(--dim); }
+.exp-kv .v { color: var(--mid); text-align: right; overflow: hidden; text-overflow: ellipsis; }
+.exp-kv .v.fault { color: var(--bad); }
+.exp-kv .v.auto { color: var(--accent); }
+.exp-trace-btn { margin-top: 10px; font-family: var(--mono); font-size: .56rem; color: var(--dim); background: transparent; border: 1px solid var(--line2); border-radius: 3px; padding: 3px 8px; cursor: pointer; width: 100%; }
+.exp-trace-btn:hover { color: var(--ink); border-color: var(--line2); }
+.exp-trace { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; display: none; }
+.exp-trace.open { display: block; }
+.exp-tr { display: flex; gap: 7px; padding: 3px 0; font-family: var(--mono); font-size: .56rem; align-items: baseline; }
+.exp-tr .tt { color: var(--faint); flex: none; min-width: 44px; }
+.exp-tr .tk { flex: none; min-width: 46px; }
+.exp-tr .tk.ok { color: var(--ok); } .exp-tr .tk.bad { color: var(--bad); }
+.exp-tr .tm { color: var(--mid); overflow: hidden; text-overflow: ellipsis; }
+.exp-trace .cap { font-family: var(--mono); font-size: .54rem; color: var(--faint); padding: 5px 0 0; }
+.exp-reason { margin-top: 8px; font-family: var(--mono); font-size: .56rem; color: var(--mid); background: var(--surface2); border-radius: 3px; padding: 6px 8px; white-space: pre-wrap; max-height: 110px; overflow: auto; }
+
+.exp-judge, .exp-winner { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; }
+.exp-gate { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: .6rem; margin-bottom: 10px; }
+.exp-gate.pass { color: var(--ok); } .exp-gate.fail { color: var(--bad); }
+.exp-scores { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: .6rem; margin-top: 4px; }
+.exp-scores th, .exp-scores td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); color: var(--mid); }
+.exp-scores th { color: var(--dim); font-weight: 400; }
+.exp-scores td:first-child, .exp-scores th:first-child { text-align: left; }
+.exp-scores tr.win td:first-child { color: var(--ok); }
+.exp-rat { font-family: var(--mono); font-size: .6rem; color: var(--mid); margin-top: 10px; line-height: 1.5; }
+.exp-winner .wln { font-family: var(--mono); font-size: .72rem; color: var(--ink); }
+.exp-winner .wln b { color: var(--ok); }
+.exp-note { font-size: .78rem; color: var(--dim); line-height: 1.5; }
+.exp-note.warn { color: var(--warn); }
+
+/* queue-experiment form (in the drawer) */
+.exp-form label { display: block; font-family: var(--mono); font-size: .58rem; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin: 14px 0 5px; }
+.exp-form input, .exp-form select { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: .74rem; background: var(--card); border: 1px solid var(--line2); border-radius: 4px; padding: 7px 9px; color: var(--ink); }
+.exp-form .row2 { display: flex; gap: 10px; }
+.exp-form .row2 > div { flex: 1; }
+.exp-form .hint { font-family: var(--mono); font-size: .56rem; color: var(--faint); margin-top: 6px; line-height: 1.5; }
+.exp-form .exp-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.exp-form .exp-actions button { font-family: var(--mono); font-size: .64rem; border-radius: 4px; padding: 7px 15px; cursor: pointer; }
+.exp-form .q-cancel { background: transparent; border: 1px solid var(--line2); color: var(--dim); }
+.exp-form .q-save { background: var(--accent); border: 1px solid var(--accent); color: #fffefb; }
+.dr-exp { display: flex; gap: 8px; margin-bottom: 20px; }
+.dr-exp button { font-family: var(--mono); font-size: .68rem; border-radius: 4px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
+.dr-exp button:hover { color: var(--accent); border-color: var(--accent); }
 </style>
 </head>
 <body class="m-human">
@@ -483,13 +636,17 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
     <button class="tab active" data-view="human">Human</button>
     <button class="tab" data-view="split">Split</button>
     <button class="tab" data-view="agent" id="liveTab"><span class="live-dot"></span>Agent<span class="dotn"></span></button>
+    <button class="tab" data-view="experiments" id="expTab"><span class="exp-live" title="an experiment is running"></span>Experiments</button>
   </nav>
 </header>
 
 <div class="stage">
 <section id="view-resume" class="pane human">
   <div class="datestrip"><div><span id="dsProj"></span><span id="dsDate"></span></div></div>
-  <div class="paper" id="paper"></div>
+  <div class="resume-shell">
+    <aside class="insights-rail" id="insightsRail" aria-label="Project insights"></aside>
+    <div class="paper" id="paper"></div>
+  </div>
 </section>
 
 <section id="view-live" class="pane agent">
@@ -506,6 +663,18 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
     <div class="vpane">
       <div class="panel-head" id="crumb"><span class="crumb">no file selected</span></div>
       <div class="body" id="viewer"><div class="empty-state">waiting for an agent to touch a file…</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="view-experiments" class="pane agent">
+  <div class="exp-deck">
+    <div class="exp-queue">
+      <div class="panel-head">EXPERIMENTS <button class="exp-new" id="expNew" title="Queue a fixture/local experiment">+ new</button></div>
+      <div class="body" id="expList"></div>
+    </div>
+    <div class="exp-detail">
+      <div class="body" id="expDetail"><div class="exp-empty">select an experiment to compare candidates, traces, and the judge’s pick</div></div>
     </div>
   </div>
 </section>
@@ -538,30 +707,50 @@ const IC = {
   arrow: c => `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>`,
 };
 
-/* ── per-agent marks — subtle monochrome glyphs, not trademarked logos ── */
+/* ── per-agent marks — brand-recognizable logos (trademarks of their owners,
+   used here only to identify which agent worked a spec). Each renders in its
+   brand color where distinctive; monochrome brands take the passed color. ── */
 const AGENT_IC = {
-  // Claude — a small sunburst / asterisk spark
-  claude: c => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round"><path d="M12 4v16M4 12h16M6.3 6.3l11.4 11.4M17.7 6.3 6.3 17.7"/></svg>`,
-  // GPT-Codex (OpenAI) — a simple interlocking knot ring
-  codex: c => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 4v8l6 3.5"/></svg>`,
-  // Cursor — a chevron cursor caret
-  cursor: c => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 4 14 8-6 1.5L9 20 5 4Z"/></svg>`,
-  // Gemini — a four-point spark / star
-  gemini: c => `<svg width="14" height="14" viewBox="0 0 24 24" fill="${c}" stroke="none"><path d="M12 2c.4 4.4 3.6 7.6 8 8-4.4.4-7.6 3.6-8 8-.4-4.4-3.6-7.6-8-8 4.4-.4 7.6-3.6 8-8Z"/></svg>`,
+  // Claude / Anthropic — the radial sunburst, in Anthropic clay
+  claude: () => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#D97757" stroke-width="2" stroke-linecap="round"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4"/></svg>`,
+  // GPT / OpenAI — the six-petal blossom knot
+  codex: c => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.5"><ellipse cx="12" cy="12" rx="3.1" ry="8"/><ellipse cx="12" cy="12" rx="3.1" ry="8" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="3.1" ry="8" transform="rotate(120 12 12)"/></svg>`,
+  // Cursor — the angular cube mark
+  cursor: c => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.5" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M12 12 3 7m9 5 9-5m-9 5v10"/></svg>`,
+  // Gemini / Google — the four-point sparkle, in Gemini blue
+  gemini: () => `<svg width="14" height="14" viewBox="0 0 24 24" fill="#4285F4" stroke="none"><path d="M12 2c.4 4.4 3.6 7.6 8 8-4.4.4-7.6 3.6-8 8-.4-4.4-3.6-7.6-8-8 4.4-.4 7.6-3.6 8-8Z"/></svg>`,
 };
-const AGENT_LABEL = { claude: 'Claude', codex: 'GPT-Codex', cursor: 'Cursor', gemini: 'Gemini' };
+const AGENT_LABEL = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini' };
 function agentMark(s, c) {
   const a = (s.meta.agent || '').toLowerCase();
   if (!a || a === 'any' || !AGENT_IC[a]) return '';
   return `<span class="agent-mark" title="${AGENT_LABEL[a]}">${AGENT_IC[a](c)}</span>`;
 }
+// Who actually claimed this spec (from `claimed_by`, stamped at claim time) —
+// the live owner, shown prominently on in-progress+ cards. Distinct from the
+// faint `agent:` lane hint above: lane = who it's routed to, owner = who's on it.
+function ownerBadge(s) {
+  const a = (s.meta.claimed_by || '').toLowerCase();
+  if (!a || !AGENT_IC[a]) return '';
+  return `<span class="lc-owner" title="claimed by ${AGENT_LABEL[a]}">${AGENT_IC[a]('currentColor')}</span>`;
+}
 
 /* ── markdown (drawer) ── */
+// Only http(s) and relative/anchor links become anchors; any other scheme
+// (javascript:, data:, …) is rendered as plain text so a crafted link can't
+// execute. The URL is already esc()'d by md() before it reaches here.
+function safeUrl(u) {
+  const m = String(u).trim().match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
+  if (!m) return true;                       // no scheme → relative/anchor, allow
+  const scheme = m[1].toLowerCase();
+  return scheme === 'http' || scheme === 'https';
+}
 function inline(s) {
   return s
     .replace(/`([^`]+)`/g, (_, c) => '<code>' + c + '</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) =>
+      safeUrl(url) ? `<a href="${url}" target="_blank" rel="noopener">${label}</a>` : label);
 }
 function md(src) {
   const lines = esc(src).split('\n');
@@ -631,6 +820,8 @@ function openDrawer(item) {
   const p = (meta.priority || '').toLowerCase();
   if (p) pills += `<span class="pill ${p}">${esc(p.toUpperCase())}</span>`;
   for (const k of ['type', 'size', 'status']) if (meta[k]) pills += `<span class="pill">${esc(String(meta[k]).replace('_',' '))}</span>`;
+  const claimant = (meta.claimed_by || '').toLowerCase();
+  if (claimant && AGENT_IC[claimant]) pills += `<span class="pill pill-owner">${AGENT_IC[claimant]('currentColor')}claimed by ${esc(AGENT_LABEL[claimant])}</span>`;
   if (meta.origin) pills += `<span class="pill">from ${esc(meta.origin)}</span>`;
   if (item._ws) pills += `<span class="pill">${esc(item._ws)}</span>`;
   const body = (item.body || '').replace(/^\s*# .*\n+/, '');
@@ -651,6 +842,13 @@ function openDrawer(item) {
   // the human gate, in the pop-out: accept → done, or kick back → in-progress with a note
   const reviewHtml = item.stage === 'in-review' ? `
     <div class="dr-review"><button class="dr-accept">accept ✓ → done</button><button class="dr-reject">kick back</button></div>` : '';
+  // the triage gate, in the pop-out: release → ready, symmetric to accept above
+  const releaseHtml = item.stage === 'triage' ? `
+    <div class="dr-review"><button class="dr-release">release → ready</button></div>` : '';
+  // queue an experiment for this spec — opens the queue form pre-filled with the spec path.
+  // only for real specs (folders), and not decay-inbox decision pop-outs.
+  const expHtml = (isSpec && !item._decide) ? `
+    <div class="dr-exp"><button class="dr-experiment">⚗ experiment →</button></div>` : '';
   // the decay-inbox decision, in the pop-out: same actions askRow offers, so you can decide here
   const dec = item._decide;
   let decideBtns = '';
@@ -664,6 +862,8 @@ function openDrawer(item) {
     <h2>${esc(item.title)}</h2>
     <div class="meta">${pills}</div>
     ${reviewHtml}
+    ${releaseHtml}
+    ${expHtml}
     ${decideHtml}
     ${outcomeHtml}
     <div class="md dr-body">${md(body)}</div>
@@ -673,6 +873,13 @@ function openDrawer(item) {
     $('drawer').querySelector('.dr-accept').onclick = () => review('accept');
     $('drawer').querySelector('.dr-reject').onclick = () => { const note = prompt('Kick back — what needs fixing? (a note for the next run)'); if (note !== null) review('reject', note); };
   }
+  if (item.stage === 'triage') {
+    // release a triage spec into the ready queue — one click, symmetric to accept
+    $('drawer').querySelector('.dr-release').onclick = async () => {
+      try { await postJSON('/api/release', { ws: item._ws, spec: item.path }); document.body.classList.remove('open'); loadSelected(); }
+      catch (err) { alert(err.message); }
+    };
+  }
   if (decideBtns) {
     // wired to the same endpoints askRow uses, so the human can decide without going back to the inbox row
     const decide = (p, body) => (async () => { try { await postJSON(p, { ws: item._ws, ...body }); document.body.classList.remove('open'); loadSelected(); } catch (err) { alert(err.message); } })();
@@ -680,6 +887,11 @@ function openDrawer(item) {
     const pk = $('drawer').querySelector('.dr-park'); if (pk) pk.onclick = () => decide('/api/thread-status', { path: item.path, status: 'parked' });
     const rc = $('drawer').querySelector('.dr-research');
     if (rc) rc.onclick = () => decide('/api/research', dec.thread ? { title: dec.topic, source: item.path } : { title: dec.topic });
+  }
+  if (isSpec && !item._decide) {
+    // "experiment →" queues a fixture/local run for this spec via the queue form
+    const expBtn = $('drawer').querySelector('.dr-experiment');
+    if (expBtn) expBtn.onclick = () => openExperimentQueueForm(item._ws, item.path);
   }
   if (isSpec) {
     decorateBlocks($('drawer').querySelector('.dr-body'), item, notes.filter(n => n.anchor));
@@ -773,9 +985,226 @@ function addHeroFeedback(hb, wsName, item) {
   showFlag();
 }
 
+function fmtInsightN(n) {
+  const v = Number(n) || 0;
+  if (v >= 10000) return (v / 1000).toFixed(0) + 'k';
+  if (v >= 1000) return (v / 1000).toFixed(1) + 'k';
+  return String(v);
+}
+
+const TOOL_LABEL = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini', windsurf: 'Windsurf', other: 'Other' };
+
+function fmtInsightCost(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return null;
+  if (v >= 1) return '$' + v.toFixed(2);
+  if (v >= 0.01) return '$' + v.toFixed(2);
+  if (v > 0) return '$' + v.toFixed(3);
+  return '$0';
+}
+
+function fmtInsightDur(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return null;
+  if (v < 1) return '<1m';
+  if (v >= 60) return (v / 60).toFixed(1) + 'h';
+  return Math.round(v) + 'm';
+}
+
+function fmtPerfLine(item, { avg = true } = {}) {
+  const parts = [];
+  const dur = avg ? item.avg_duration_minutes : item.duration_minutes;
+  const cost = avg ? item.avg_cost_usd : item.total_cost_usd;
+  const tok = avg ? item.avg_tokens_used : item.total_tokens_used;
+  const d = fmtInsightDur(dur);
+  const c = fmtInsightCost(cost);
+  const t = tok != null ? fmtInsightN(tok) + ' tok' : null;
+  if (d) parts.push(d);
+  if (c) parts.push(c);
+  if (t) parts.push(t);
+  return parts.join(' · ');
+}
+
+function mergePerfBucket(dst, src) {
+  const n = src.count || 0;
+  dst.count += n;
+  if (src.avg_duration_minutes != null && n) {
+    dst.duration_minutes += src.avg_duration_minutes * n;
+    dst.runs_with_duration += n;
+  } else if (src.duration_minutes) {
+    dst.duration_minutes += src.duration_minutes;
+    dst.runs_with_duration += src.runs_with_duration || n;
+  }
+  if (src.avg_cost_usd != null && n) {
+    dst.cost_usd += src.avg_cost_usd * n;
+    dst.runs_with_cost += n;
+  } else if (src.cost_usd) {
+    dst.cost_usd += src.cost_usd;
+    dst.runs_with_cost += src.runs_with_cost || n;
+  }
+  if (src.avg_tokens_used != null && n) {
+    dst.tokens_used += src.avg_tokens_used * n;
+    dst.runs_with_tokens += n;
+  } else if (src.tokens_used) {
+    dst.tokens_used += src.tokens_used;
+    dst.runs_with_tokens += src.runs_with_tokens || n;
+  }
+}
+
+function mergeInsights(list) {
+  if (!list.length) return null;
+  if (list.length === 1) return list[0];
+  const out = {
+    active_agent_count: 0,
+    active_agents: [],
+    stage_counts: { ready: 0, 'in-progress': 0, tests: 0, 'in-review': 0, done: 0, triage: 0 },
+    lines_added: { total: 0, experiments: 0 },
+    tools: [],
+    models: [],
+    experiments: { total: 0, by_status: {}, candidate_runs: 0, recent_winner: '', recent_winner_tool: '' },
+  };
+  const toolMap = {};
+  const modelMap = {};
+  const agentMap = {};
+  for (const ins of list) {
+    out.active_agent_count += ins.active_agent_count || 0;
+    for (const [k, v] of Object.entries(ins.stage_counts || {})) {
+      if (out.stage_counts[k] != null) out.stage_counts[k] += v;
+    }
+    out.lines_added.total += ins.lines_added?.total || 0;
+    out.lines_added.experiments += ins.lines_added?.experiments || 0;
+    for (const t of ins.tools || []) {
+      if (!toolMap[t.tool]) toolMap[t.tool] = { tool: t.tool, count: 0, duration_minutes: 0, cost_usd: 0, tokens_used: 0, runs_with_duration: 0, runs_with_cost: 0, runs_with_tokens: 0 };
+      mergePerfBucket(toolMap[t.tool], t);
+    }
+    for (const m of ins.models || []) {
+      if (!modelMap[m.model]) modelMap[m.model] = { model: m.model, tool: m.tool || '', count: 0, duration_minutes: 0, cost_usd: 0, tokens_used: 0, runs_with_duration: 0, runs_with_cost: 0, runs_with_tokens: 0 };
+      mergePerfBucket(modelMap[m.model], m);
+      if (!modelMap[m.model].tool && m.tool) modelMap[m.model].tool = m.tool;
+    }
+    for (const a of ins.active_agents || []) {
+      agentMap[a.agent] = (agentMap[a.agent] || 0) + a.count;
+    }
+    const ex = ins.experiments || {};
+    out.experiments.total += ex.total || 0;
+    out.experiments.candidate_runs += ex.candidate_runs || 0;
+    for (const [st, n] of Object.entries(ex.by_status || {})) {
+      out.experiments.by_status[st] = (out.experiments.by_status[st] || 0) + n;
+    }
+    if (!out.experiments.latest && ex.latest) out.experiments.latest = ex.latest;
+    if (!out.experiments.recent_winner && ex.recent_winner) {
+      out.experiments.recent_winner = ex.recent_winner;
+      out.experiments.recent_winner_tool = ex.recent_winner_tool || '';
+    }
+  }
+  out.tools = Object.values(toolMap)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3)
+    .map(t => ({
+      tool: t.tool,
+      count: t.count,
+      avg_duration_minutes: t.runs_with_duration ? +(t.duration_minutes / t.runs_with_duration).toFixed(1) : null,
+      avg_cost_usd: t.runs_with_cost ? +(t.cost_usd / t.runs_with_cost).toFixed(3) : null,
+      avg_tokens_used: t.runs_with_tokens ? Math.round(t.tokens_used / t.runs_with_tokens) : null,
+    }));
+  out.models = Object.values(modelMap)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3)
+    .map(m => ({
+      model: m.model,
+      tool: m.tool,
+      count: m.count,
+      avg_duration_minutes: m.runs_with_duration ? +(m.duration_minutes / m.runs_with_duration).toFixed(1) : null,
+      avg_cost_usd: m.runs_with_cost ? +(m.cost_usd / m.runs_with_cost).toFixed(3) : null,
+      avg_tokens_used: m.runs_with_tokens ? Math.round(m.tokens_used / m.runs_with_tokens) : null,
+    }));
+  out.active_agents = Object.entries(agentMap).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([agent, count]) => ({ agent, count, specs: [] }));
+  return out;
+}
+
+function fmtExperimentHighlight(latest) {
+  if (!latest || !latest.winner_id) return '<p class="ins-quiet">No judged winners yet</p>';
+  const tool = TOOL_LABEL[latest.winner_tool] || latest.winner_tool || latest.winner_id;
+  const winner = latest.winner_model ? `${latest.winner_model} · ${tool}` : tool;
+  const task = latest.task_summary || latest.task_title || latest.tl_spec || latest.task_type;
+  const by = latest.winner_set_by && latest.winner_set_by !== 'judge'
+    ? ` · picked by ${latest.winner_set_by}`
+    : '';
+  return `<div class="ins-highlight">
+    <p class="ih-task">${esc(task)}</p>
+    <p class="ih-winner">Won: ${esc(winner)}${esc(by)}</p>
+    ${latest.rationale ? `<p class="ins-quiet">${esc(latest.rationale)}</p>` : ''}
+  </div>`;
+}
+
+function renderInsightsRail(wss) {
+  const rail = $('insightsRail');
+  if (!rail) return;
+  const ins = mergeInsights(wss.map(w => w.insights).filter(Boolean));
+  if (!ins) { rail.innerHTML = ''; return; }
+
+  const agentRows = (ins.active_agents || []).slice(0, 3).map(a => {
+    const ic = AGENT_IC[a.agent] ? AGENT_IC[a.agent]('currentColor') : '';
+    const label = AGENT_LABEL[a.agent] || a.agent;
+    return `<div class="ins-row"><span class="ir-l">${ic}<span>${esc(label)}</span></span><span class="ir-n">${a.count}</span></div>`;
+  }).join('') || '<p class="ins-quiet">none running</p>';
+
+  const stage = ins.stage_counts || {};
+  const stageLine = `${stage.ready || 0} ready · ${stage['in-progress'] || 0} active · ${stage['in-review'] || 0} review · ${stage.done || 0} done`;
+
+  const toolRows = (ins.tools || []).map(t => {
+    const label = TOOL_LABEL[t.tool] || t.tool;
+    const perf = fmtPerfLine(t);
+    return `<div class="ins-row"><span class="ir-l"><span>${esc(label)}</span></span><span class="ir-n">${t.count}</span></div>${perf ? `<p class="ins-tool-meta">avg ${esc(perf)}</p>` : ''}`;
+  }).join('') || '<p class="ins-quiet">no tool signals yet</p>';
+
+  const modelRows = (ins.models || []).map(m => {
+    const label = m.model.length > 22 ? m.model.slice(0, 21) + '…' : m.model;
+    const perf = fmtPerfLine(m);
+    const toolHint = m.tool ? ` · ${esc(TOOL_LABEL[m.tool] || m.tool)}` : '';
+    return `<div class="ins-row"><span class="ir-l"><span title="${esc(m.model)}">${esc(label)}</span></span><span class="ir-n">${m.count}</span></div>${perf ? `<p class="ins-tool-meta">avg ${esc(perf)}${toolHint}</p>` : (toolHint ? `<p class="ins-tool-meta">${toolHint.slice(3)}</p>` : '')}`;
+  }).join('');
+
+  const ex = ins.experiments || {};
+  const exActive = (ex.by_status?.running || 0) + (ex.by_status?.queued || 0) + (ex.by_status?.['in-progress'] || 0);
+  const exWon = ex.by_status?.succeeded || ex.by_status?.done || 0;
+  let exLine = `${ex.total || 0} total`;
+  if (exActive) exLine += ` · ${exActive} active`;
+  if (exWon) exLine += ` · ${exWon} judged`;
+  if (ex.candidate_runs) exLine += ` · ${ex.candidate_runs} runs`;
+  const latestHighlight = fmtExperimentHighlight(ex.latest);
+
+  rail.innerHTML = `
+    <div class="ins-block">
+      <span class="il">Agents running</span>
+      <p class="ins-stat">${ins.active_agent_count || 0}</p>
+      ${agentRows}
+    </div>
+    <div class="ins-block">
+      <span class="il">Pipeline</span>
+      <p class="ins-sub">${esc(stageLine)}</p>
+    </div>
+    <div class="ins-block">
+      <span class="il">Lines added</span>
+      <p class="ins-stat">${fmtInsightN(ins.lines_added?.total || 0)}</p>
+      <p class="ins-sub">from experiment patches</p>
+    </div>
+    <div class="ins-block">
+      <span class="il">Top tools</span>
+      ${toolRows}
+    </div>
+    ${modelRows ? `<div class="ins-block"><span class="il">Models</span>${modelRows}</div>` : ''}
+    <div class="ins-block">
+      <span class="il">Experiments</span>
+      <p class="ins-sub">${esc(exLine)}</p>
+      ${latestHighlight}
+    </div>`;
+}
+
 function renderResume(wss) {
   $('dsProj').textContent = wss.map(w => w.name).join(' · ');
   $('dsDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  renderInsightsRail(wss);
   const paper = $('paper');
   paper.innerHTML = '';
   const multi = wss.length > 1;
@@ -923,8 +1352,13 @@ function renderResume(wss) {
       .forEach(s => loops.push({ kind: 'review', item: s, title: s.title + ' — awaiting your sign-off', sub: 'REVIEW · ' + rel(s.mtime), age: s.mtime }));
     specs.filter(s => s.stage === 'done' && s.meta.type === 'research')
       .forEach(s => loops.push({ kind: 'research', item: s, title: s.title.replace(/^Research:\s*/i, '') + ' — recommendation ready', sub: 'RESEARCH · ' + rel(s.mtime), age: s.mtime }));
-    ws.intents.filter(it => (it.meta.status === 'decomposed' || it.meta.status === 'approved') &&
-      !specs.some(s => (s.meta.intent || '').replace(/^\.\//, '').trim() === it.path && (s.stage === 'ready' || s.stage === 'in-progress')))
+    ws.intents.filter(it => {
+      if (it.meta.status !== 'decomposed' && it.meta.status !== 'approved') return false;
+      const its = specs.filter(s => (s.meta.intent || '').replace(/^\.\//, '').trim() === it.path);
+      if (its.some(s => s.stage === 'ready' || s.stage === 'in-progress')) return false; // has active work
+      if (its.length && its.every(s => s.stage === 'done')) return false;                 // complete, not starving
+      return true;
+    })
       .forEach(it => {
         const its = specs.filter(s => (s.meta.intent || '').replace(/^\.\//, '').trim() === it.path);
         const doneN = its.filter(s => s.stage === 'done').length;
@@ -1393,16 +1827,21 @@ function renderLanes(wss) {
     body.className = 'lane-body';
     items.forEach(s => {
       const slug = (s.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
+      const owner = ownerBadge(s);           // who claimed it (live), if stamped
+      const showOwner = !!owner && (stage === 'in-progress' || stage === 'tests' || stage === 'in-review');
       const card = document.createElement('div');
-      card.className = 'lcard' + (stage === 'in-progress' ? ' working' : '') + (stage === 'done' ? ' done' : '');
+      card.className = 'lcard' + (stage === 'in-progress' ? ' working' : '') + (stage === 'done' ? ' done' : '') + (showOwner ? ' has-owner' : '');
       const pr = (s.meta.priority || '').toLowerCase();
       const priBadge = pr ? `<span class="lc-pri ${pr}">${esc(pr.toUpperCase())}</span>` : '';
       let inner = (multi ? `<span class="ws-tag">${esc(s._ws)}</span>` : '') + `<p class="t">${priBadge}${esc(stage === 'triage' || stage === 'ready' ? s.title : slug)}</p>`;
       const amark = agentMark(s, 'currentColor');
+      // the owner's brand logo sits absolute in the top-right corner, so it adds
+      // no height and never collides with the gate label or the timestamp
       if (stage === 'in-progress') inner += `<div class="pbar"><i></i></div>
-        <div class="meta"><span class="agent">⚡ active</span><span class="elapsed">${amark}${rel(s.mtime)}</span></div>`;
-      if (stage === 'tests') inner += `<div class="meta"><span class="gate gate-tests">⏳ tests</span><span class="elapsed">${amark}${rel(s.mtime)}</span></div>`;
-      if (stage === 'in-review') inner += `<div class="meta"><span class="gate gate-review">◆ needs review</span><span class="elapsed">${amark}${rel(s.mtime)}</span></div>`;
+        <div class="meta"><span class="lc-status">⚡ active</span><span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
+      if (stage === 'tests') inner += `<div class="meta"><span class="gate gate-tests">⏳ tests</span><span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
+      if (stage === 'in-review') inner += `<div class="meta"><span class="gate gate-review">◆ needs review</span><span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
+      if (showOwner) inner += owner;
       if (s.notes) inner += `<div class="lc-note">✎ ${esc((s.notes.match(/— note\n(.+)/) || s.notes.match(/\n([^\n#].+)/) || [, ''])[1] || 'note').slice(0, 60)}</div>`;
       card.innerHTML = inner;
       card.onclick = () => openDrawer(s);
@@ -1411,6 +1850,294 @@ function renderLanes(wss) {
     lane.appendChild(body);
     root.appendChild(lane);
   }
+}
+
+/* ════ EXPERIMENTS ════ */
+// The dashboard reads experiment artifacts (never executes agents). Data comes from
+// /api/experiments (queue list) and /api/experiment (candidate/trace/judge/winner detail).
+const EXP_ST = ['succeeded','running','queued','awaiting_evaluation','failed','timed_out','over_budget','unavailable','cancelled','invalid_output','selected','applied','rejected','apply-failed','superseded'];
+const expStClass = s => 'exp-st st-' + (EXP_ST.includes(s) ? s : 'unknown');
+const fmtCost = v => v == null ? '—' : '$' + Number(v).toFixed(2);
+const fmtDur = v => v == null ? '—' : Number(v) + 'm';
+const fmtTok = v => v == null ? '—' : Number(v).toLocaleString();
+let expActiveId = null;
+let expDetailCache = null;
+
+// the Experiments tab live dot — on only while a test is actually running
+function setExpLive(on) { const d = document.querySelector('#expTab .exp-live'); if (d) d.classList.toggle('on', !!on); }
+async function refreshExpLive() {
+  const wsName = selected[0]; if (!wsName) { setExpLive(false); return; }
+  try {
+    const list = await (await fetch('/api/experiments?ws=' + encodeURIComponent(wsName))).json();
+    setExpLive(Array.isArray(list) && list.some(e => e.running));
+  } catch { /* leave the dot as-is on a transient error */ }
+}
+
+async function renderExperimentList() {
+  const box = $('expList');
+  // one workspace at a time for experiments — use the first selected
+  const wsName = selected[0];
+  if (!wsName) { box.innerHTML = '<div class="exp-empty">no workspace selected</div>'; return; }
+  let list = [];
+  try { list = await (await fetch('/api/experiments?ws=' + encodeURIComponent(wsName))).json(); }
+  catch { box.innerHTML = '<div class="exp-empty">could not load experiments</div>'; return; }
+  setExpLive(Array.isArray(list) && list.some(e => e.running));
+  if (!Array.isArray(list) || !list.length) {
+    box.innerHTML = `<div class="exp-empty">no experiments yet — <span style="color:var(--accent);cursor:pointer" id="expEmptyNew">queue one →</span></div>`;
+    const b = $('expEmptyNew'); if (b) b.onclick = () => openExperimentQueueForm(wsName);
+    $('expDetail').innerHTML = '<div class="exp-empty">no experiments to show</div>';
+    return;
+  }
+  box.innerHTML = '';
+  list.forEach(e => {
+    const el = document.createElement('div');
+    el.className = 'exp-item' + (e.id === expActiveId ? ' active' : '');
+    const shadows = (e.shadow_agents || []).length;
+    // a variant (forked from another experiment) carries replay_of — mark it
+    const variantTag = e.replay_of
+      ? `<span class="exp-var-tag" title="variant of ${esc(e.replay_of)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h5"/><path d="M9 12l8-6"/><path d="M13 6h4v4"/><path d="M9 12l8 6"/><path d="M13 18h4v-4"/></svg>variant</span>`
+      : '';
+    el.innerHTML = `<div class="eid">${variantTag}${esc(e.id)}</div>
+      <div class="erow"><span class="${expStClass(e.status)}">${esc(e.status)}</span>
+        <span>${esc(e.primary_agent || '?')}${shadows ? ' +' + shadows : ''}</span>
+        <span class="ecount">${e.candidate_count} cand</span></div>`;
+    el.onclick = () => selectExperiment(wsName, e.id);
+    box.appendChild(el);
+  });
+  // auto-open the first experiment if none is active
+  if (!expActiveId || !list.some(e => e.id === expActiveId)) selectExperiment(wsName, list[0].id);
+}
+
+async function selectExperiment(wsName, id) {
+  expActiveId = id;
+  document.querySelectorAll('#expList .exp-item').forEach(el => el.classList.toggle('active', el.querySelector('.eid').textContent === id));
+  const det = $('expDetail');
+  det.innerHTML = '<div class="exp-empty">loading…</div>';
+  let d;
+  try { d = await (await fetch(`/api/experiment?ws=${encodeURIComponent(wsName)}&id=${encodeURIComponent(id)}`)).json(); }
+  catch { det.innerHTML = '<div class="exp-empty">could not load experiment</div>'; return; }
+  if (!d || d.error) { det.innerHTML = `<div class="exp-empty">${esc((d && d.error) || 'not found')}</div>`; return; }
+  expDetailCache = d;
+  renderExperimentDetail(wsName, d);
+}
+
+function candCard(c, winnerId) {
+  const isWin = c.candidate_id === winnerId;
+  const kv = [];
+  const push = (k, v, cls) => kv.push(`<div class="k">${esc(k)}</div><div class="v${cls ? ' ' + cls : ''}">${esc(v)}</div>`);
+  push('status', c.status);
+  push('tool', c.agent_tool || '—');
+  // requested vs resolved model, and where the resolution came from — the routing story
+  push('req model', c.agent_model_auto ? 'auto' : (c.agent_model || '—'), c.agent_model_auto ? 'auto' : '');
+  push('resolved', c.agent_model || 'unknown');
+  push('model src', c.agent_model_source || 'unknown');
+  push('cost', fmtCost(c.cost_usd));
+  push('duration', fmtDur(c.duration_minutes));
+  push('tokens', fmtTok(c.tokens_used));
+  push('tests', c.task_complete == null ? '—' : (c.task_complete ? 'pass' : 'fail'), c.task_complete === false ? 'fault' : '');
+  if (c.fault) push('fault', c.fault, 'fault');
+  const traceId = 'trace-' + c.candidate_id.replace(/[^a-z0-9]/gi, '');
+  const traceRows = c.trace.map(t => {
+    const sc = t.status === 'succeeded' ? 'ok' : /fail|error|timed/.test(t.status) ? 'bad' : '';
+    const tt = (t.ts || '').replace(/^.*T/, '').replace(/\..*$/, '') || '·';
+    return `<div class="exp-tr"><span class="tt">${esc(tt)}</span><span class="tk ${sc}">${esc(t.type || '')}</span><span class="tm">${esc(t.summary || '')}</span></div>`;
+  }).join('') || '<div class="cap">no trace events</div>';
+  const cap = c.trace_capped ? `<div class="cap">showing first ${c.trace.length} of ${c.trace_total} events (capped)</div>` : '';
+  const reasoning = c.reasoning ? `<div class="exp-reason">${esc(c.reasoning.replace(/^---\n[\s\S]*?\n---\n/, '').trim())}</div>` : '';
+  return `<div class="exp-card${isWin ? ' winner' : ''}">
+    <div class="ch"><span class="cid">${esc(c.candidate_id)}</span><span class="role ${c.role === 'primary' ? 'primary' : ''}">${esc(c.role || 'candidate')}</span>${isWin ? '<span class="win-tag">✦ winner</span>' : ''}</div>
+    <div class="exp-kv">${kv.join('')}</div>
+    <button class="exp-trace-btn" data-trace="${traceId}">trace timeline · ${c.trace.length}${c.reasoning ? ' · reasoning' : ''}</button>
+    <div class="exp-trace" id="${traceId}">${traceRows}${cap}${reasoning}</div>
+  </div>`;
+}
+
+function renderExperimentDetail(wsName, d) {
+  const m = d.meta || {};
+  const winnerId = (d.winner && d.winner.candidate_id) || (d.judge && d.judge.winner) || '';
+  // header
+  const sub = [];
+  if (m.task_type) sub.push(`type <code>${esc(m.task_type)}</code>`);
+  if (m.tl_spec) sub.push(`spec <code>${esc(m.tl_spec)}</code>`);
+  if (m.base_commit) sub.push(`base <code>${esc(String(m.base_commit).slice(0, 8))}</code>`);
+  if (m.spec_hash) sub.push(`hash <code>${esc(String(m.spec_hash).slice(0, 8))}</code>`);
+  if (m.judge_agent) sub.push(`judge <code>${esc(m.judge_agent)}</code>`);
+  if (m.replay_of) sub.push(`replay of <code>${esc(m.replay_of)}</code>`);
+
+  // candidate cards
+  const cardsHtml = d.candidates.length
+    ? `<div class="exp-cards">${d.candidates.map(c => candCard(c, winnerId)).join('')}</div>`
+    : '<div class="exp-note">no candidate artifacts yet — queued rows wait for workers.</div>';
+
+  // judge panel
+  let judgeHtml = '<div class="exp-note">no judge evaluation yet — awaiting_evaluation until the judge runs.</div>';
+  if (d.judge) {
+    const j = d.judge;
+    const cands = j.candidates || {};
+    const dims = new Set();
+    Object.values(cands).forEach(cv => Object.keys(cv.scores || {}).forEach(k => dims.add(k)));
+    const dimList = [...dims];
+    const anyGate = Object.values(cands).some(cv => cv.hard_gates_passed);
+    const gateHtml = `<div class="exp-gate ${anyGate ? 'pass' : 'fail'}">${anyGate ? '✓' : '✗'} hard gates${anyGate ? ' — at least one candidate passed' : ' — no candidate passed'}</div>`;
+    const rows = Object.entries(cands).map(([cid, cv]) => {
+      const cells = dimList.map(dm => `<td>${cv.scores && cv.scores[dm] != null ? esc(cv.scores[dm]) : '—'}</td>`).join('');
+      return `<tr class="${cid === j.winner ? 'win' : ''}"><td>${esc(cid)}</td><td>${cv.hard_gates_passed ? '✓' : '✗'}</td>${cells}<td>${cv.utility != null ? esc(cv.utility) : '—'}</td></tr>`;
+    }).join('');
+    const head = `<tr><th>candidate</th><th>gates</th>${dimList.map(dm => `<th>${esc(dm.replace(/_/g, ' '))}</th>`).join('')}<th>utility</th></tr>`;
+    const override = j.winner_set_by === 'human' ? ' <span style="color:var(--accent)">(human override)</span>' : '';
+    judgeHtml = `${gateHtml}
+      <table class="exp-scores">${head}${rows}</table>
+      <div class="exp-rat"><b>winner:</b> ${esc(j.winner || '—')} · set by ${esc(j.winner_set_by || '—')}${override}<br>${esc(j.rationale || '')}</div>`;
+  }
+
+  // winner / application panel
+  const w = d.winner || {};
+  let winnerHtml;
+  if (w.candidate_id) {
+    const state = w.apply_state || 'selected';
+    const parts = [`<div class="wln">selected: <b>${esc(w.candidate_id)}</b> <span class="${expStClass(state)}">${esc(state)}</span></div>`];
+    if (w.patch_path) parts.push(`<div class="exp-rat">patch: <code>${esc(w.patch_path)}</code></div>`);
+    if (w.human_override) parts.push(`<div class="exp-rat" style="color:var(--accent)">winner set by human override</div>`);
+    if (w.apply_error) parts.push(`<div class="exp-note warn">apply error: ${esc(w.apply_error)}</div>`);
+    if (!w.apply_state) parts.push(`<div class="exp-note">not yet applied — applying a winning patch is an explicit later action; TL review still owns acceptance to done/.</div>`);
+    winnerHtml = parts.join('');
+  } else {
+    winnerHtml = '<div class="exp-note">no winner selected yet.</div>';
+  }
+
+  // headless-reality note driven by status/tool
+  const status = m.status || '';
+  const closedCursor = d.candidates.some(c => (c.agent_tool || '').toLowerCase() === 'cursor');
+  let realityHtml = '';
+  if (status === 'queued') realityHtml = `<div class="exp-note warn">queued — waiting for a worker to pick this up. The UI requests experiments; it does not run them.</div>`;
+  else if (closedCursor) realityHtml = `<div class="exp-note warn">a Cursor IDE-closed candidate needs Cursor SDK/cloud/worker support to run headless.</div>`;
+
+  // task summary (1–2 sentences) — an optional `summary` field, else the first body paragraph.
+  // Kept short and labellable so experiments can be classified/grouped later.
+  const rawSummary = (m.summary && String(m.summary).trim())
+    || ((d.body || '').replace(/^#.*$/gm, '').split(/\n\s*\n/).map(s => s.trim().replace(/\s+/g, ' ')).find(Boolean) || '');
+  const summary2 = rawSummary.split(/(?<=\.)\s+/).slice(0, 2).join(' ').slice(0, 240);
+  const summaryHtml = summary2 ? `<div class="exp-summary">${esc(summary2)}</div>` : '';
+  const labels = Array.isArray(m.labels) ? m.labels : (m.labels ? [String(m.labels)] : []);
+  const labelsHtml = labels.length ? `<div class="exp-labels">${labels.map(l => `<span class="exp-label">${esc(l)}</span>`).join('')}</div>` : '';
+
+  // side-by-side variant diffs — each candidate's PATCH.diff, colored by +/- lines
+  const withPatch = d.candidates.filter(c => c.patch);
+  const diffsHtml = withPatch.length
+    ? `<div class="exp-diffs">${withPatch.map(c => {
+        const body = c.patch.split('\n').map(ln => {
+          const cls = /^\+(?!\+\+)/.test(ln) ? 'add' : /^-(?!--)/.test(ln) ? 'del' : /^@@/.test(ln) ? 'hunk' : '';
+          return `<div class="dl ${cls}">${esc(ln) || '&nbsp;'}</div>`;
+        }).join('');
+        const cap = c.patch_capped ? `<div class="cap">first ${c.patch.split('\n').length} of ${c.patch_total} lines (capped)</div>` : '';
+        return `<div class="exp-diff-col${c.candidate_id === winnerId ? ' winner' : ''}"><div class="ddh">${esc(c.candidate_id)}${c.candidate_id === winnerId ? ' ✦' : ''}</div><div class="dbody">${body}</div>${cap}</div>`;
+      }).join('')}</div>`
+    : '<div class="exp-note">no diffs captured — candidates wrote no PATCH.diff.</div>';
+
+  $('expDetail').innerHTML = `
+    <div class="exp-hd">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">
+        <h2>${esc(d.id)}</h2><span class="${expStClass(status)}">${esc(status || 'unknown')}</span>
+        <button class="exp-variant" title="spin off a variant — tweak the setup (models, judge, changes), then queue a new run"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h5"/><path d="M9 12l8-6"/><path d="M13 6h4v4"/><path d="M9 12l8 6"/><path d="M13 18h4v-4"/></svg>variant</button>
+      </div>
+      <div class="sub">${sub.join('')}</div>
+      ${summaryHtml}
+      ${labelsHtml}
+    </div>
+    ${realityHtml}
+    <div class="exp-sec"><h3>Candidates</h3>${cardsHtml}</div>
+    <div class="exp-sec"><h3>Diffs — side by side</h3>${diffsHtml}</div>
+    <div class="exp-sec"><h3>Judge</h3><div class="exp-judge">${judgeHtml}</div></div>
+    <div class="exp-sec"><h3>Winner</h3><div class="exp-winner">${winnerHtml}</div></div>`;
+
+  $('expDetail').querySelectorAll('.exp-trace-btn').forEach(b => {
+    b.onclick = () => { const t = $(b.dataset.trace); if (t) t.classList.toggle('open'); };
+  });
+  // variant ⑂ — open the queue form pre-filled from this experiment so you can
+  // instill changes (models, judge, free-text tweaks) before queuing the new run
+  const varBtn = $('expDetail').querySelector('.exp-variant');
+  if (varBtn) varBtn.onclick = () => openExperimentQueueForm(wsName, m.tl_spec || '', {
+    variantOf: d.id,
+    runtime: m.runtime || 'fixture',
+    primary: m.primary_agent || '',
+    shadows: (m.shadow_agents || []).join(', '),
+    judge: m.judge_agent || '',
+    models: (d.candidates || []).reduce((o, c) => { if (c.candidate_id && c.agent_model) o[c.candidate_id] = c.agent_model; return o; }, {}),
+  });
+}
+
+// queue-experiment form — writes a single config file via /api/experiment-queue (never shells out)
+function openExperimentQueueForm(wsName, spec, prefill = {}) {
+  const dr = $('drawer');
+  const pf = prefill || {};
+  const variant = !!pf.variantOf;
+  const models = pf.models || {};
+  const pModel = models[pf.primary] || '';
+  const jModel = models[pf.judge] || '';
+  const sel = (v, opt) => v === opt ? ' selected' : '';
+  dr.innerHTML = `
+    <div class="path">${esc(wsName)} / _experiments/queue/</div>
+    <h2>${variant ? 'Spin off a variant' : 'Queue an experiment'}</h2>
+    ${variant
+      ? `<div class="exp-note" style="margin-bottom:12px">Variant of <code>${esc(pf.variantOf)}</code> — change anything below to evolve what you're testing, then queue. The original run is untouched.</div>`
+      : `<div class="exp-note" style="margin-bottom:14px">Drops a request into <code>_experiments/queue/</code> for a worker to run. The UI never executes agents.</div>`}
+    <div class="exp-form">
+      <label>runtime</label>
+      <select class="q-runtime"><option value="fixture"${sel(pf.runtime, 'fixture')}>fixture — deterministic local proof</option><option value="local"${sel(pf.runtime, 'local')}>local — a local adapter run</option></select>
+      <label>tl spec (optional)</label>
+      <input class="q-spec" value="${esc(spec || '')}" placeholder="in-progress/some-spec/">
+      <div class="row2">
+        <div><label>primary</label><input class="q-primary" value="${esc(pf.primary || '')}" placeholder="fixture-a"></div>
+        <div><label>judge</label><input class="q-judge" value="${esc(pf.judge || '')}" placeholder="fixture-judge"></div>
+      </div>
+      <label>shadows (comma-separated)</label>
+      <input class="q-shadows" value="${esc(pf.shadows || '')}" placeholder="fixture-b, fixture-c">
+      ${variant ? `
+      <label>model overrides (optional — evolve what competes)</label>
+      <div class="row2">
+        <div><label class="sub2">primary model</label><input class="q-pmodel" list="tl-models" value="${esc(pModel)}" placeholder="(keep)"></div>
+        <div><label class="sub2">judge model</label><input class="q-jmodel" list="tl-models" value="${esc(jModel)}" placeholder="(keep)"></div>
+      </div>
+      <datalist id="tl-models"><option value="claude-opus-4-8"></option><option value="claude-sonnet-4-6"></option><option value="gpt-5-codex"></option><option value="gemini-2.5-pro"></option></datalist>
+      <label>changes to instill</label>
+      <textarea class="q-notes" rows="3" placeholder="what to evolve this run — e.g. tighten the acceptance criteria, require tests, try a stricter judge rubric"></textarea>` : ''}
+      <div class="row2">
+        <div><label>budget (USD)</label><input class="q-budget" type="number" min="0" step="0.5" placeholder="none"></div>
+        <div><label>timeout (min)</label><input class="q-timeout" type="number" min="0" step="1" placeholder="none"></div>
+      </div>
+      <div class="hint">${variant ? "A variant queues a fresh request tagged replay_of — traceable to its origin. Your model, judge, and change tweaks ride along for the worker." : 'Leave primary/judge blank to use fixture defaults. Fixture runtime produces a deterministic proof without calling any provider.'}</div>
+      <div class="exp-actions"><button class="q-cancel">cancel</button><button class="q-save">${variant ? 'queue variant →' : 'queue →'}</button></div>
+    </div>`;
+  dr.querySelector('.q-cancel').onclick = () => document.body.classList.remove('open');
+  dr.querySelector('.q-save').onclick = async () => {
+    const body = {
+      ws: wsName,
+      runtime: dr.querySelector('.q-runtime').value,
+      spec: dr.querySelector('.q-spec').value.trim(),
+      primary: dr.querySelector('.q-primary').value.trim(),
+      judge: dr.querySelector('.q-judge').value.trim(),
+      shadows: dr.querySelector('.q-shadows').value.split(',').map(s => s.trim()).filter(Boolean),
+      budget_usd: dr.querySelector('.q-budget').value.trim(),
+      timeout_minutes: dr.querySelector('.q-timeout').value.trim(),
+    };
+    if (variant) {
+      body.replay_of = pf.variantOf;
+      const notes = dr.querySelector('.q-notes').value.trim();
+      if (notes) body.variant_notes = notes;
+      const pm = dr.querySelector('.q-pmodel').value.trim();
+      const jm = dr.querySelector('.q-jmodel').value.trim();
+      const mo = {};
+      if (pm && body.primary) mo[body.primary] = pm;
+      if (jm && body.judge) mo[body.judge] = jm;
+      if (Object.keys(mo).length) body.models = mo;
+    }
+    try {
+      await postJSON('/api/experiment-queue', body);
+      document.body.classList.remove('open');
+      if (expVisible()) renderExperimentList();
+    } catch (e) { alert(e.message); }
+  };
+  document.body.classList.add('open');
 }
 
 /* ── file tree ── */
@@ -1588,6 +2315,7 @@ async function showFile(ws, path, addedSet) {
 
 /* ── events ── */
 let refreshTimer = null;
+let agentPulseTimer = null;
 function connectEvents() {
   const es = new EventSource('/api/events');
   es.onopen = () => { $('termDot').classList.remove('off'); logLine(new Date().toLocaleTimeString('en-GB', { hour12: false }), 'WATCH', '#8a8070', 'watching for changes…', ''); };
@@ -1596,11 +2324,19 @@ function connectEvents() {
   es.onmessage = ev => {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     if (!e.path && !e.log) return;
+    // any workspace file change = agents at work → pulse the Agent tab dot, decaying when quiet
+    const agentDot = document.querySelector('#liveTab .live-dot');
+    if (agentDot) { agentDot.classList.add('on'); clearTimeout(agentPulseTimer); agentPulseTimer = setTimeout(() => agentDot.classList.remove('on'), 4000); }
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
       const editing = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT');
       if (!editing) loadSelected();
       loadTrees();
+      // keep the experiments dashboard live when a queue/artifact file changes
+      if (/_experiments\//.test(e.path || '')) {
+        if (expVisible() && !editing) renderExperimentList();
+        else refreshExpLive();   // update the tab's running dot even from another tab
+      }
     }, 600);
     if (e.exists && /\.(md|yml|yaml|jsonl)$/.test(e.path || '') && !e.change) return;
 
@@ -1630,16 +2366,19 @@ function connectEvents() {
   };
 }
 
-/* ── modes: human · split · agent ── */
-const agentVisible = () => !document.body.classList.contains('m-human');
+/* ── modes: human · split · agent · experiments ── */
+const agentVisible = () => document.body.classList.contains('m-agent') || document.body.classList.contains('m-split');
+const expVisible = () => document.body.classList.contains('m-experiments');
 function setMode(mode) {
-  if (!['human', 'split', 'agent'].includes(mode)) mode = 'human';
-  document.body.classList.remove('m-human', 'm-split', 'm-agent');
+  if (!['human', 'split', 'agent', 'experiments'].includes(mode)) mode = 'human';
+  document.body.classList.remove('m-human', 'm-split', 'm-agent', 'm-experiments');
   document.body.classList.add('m-' + mode);
   document.querySelectorAll('.bar .tab').forEach(b => b.classList.toggle('active', b.dataset.view === mode));
   localStorage.setItem('tl-view', mode);
-  if (mode !== 'human') { $('liveTab').classList.remove('unseen'); renderTree(); }
+  if (mode === 'agent' || mode === 'split') { $('liveTab').classList.remove('unseen'); renderTree(); }
+  if (mode === 'experiments') renderExperimentList();
 }
+$('expNew').onclick = () => openExperimentQueueForm(selected[0]);
 document.querySelectorAll('.bar .tab').forEach(btn => { btn.onclick = () => setMode(btn.dataset.view); });
 
 /* ── selection + boot ── */
@@ -1667,7 +2406,9 @@ function buildPanel() {
       else selected = selected.filter(n => n !== w.name);
       if (!selected.length) { selected = [w.name]; e.target.checked = true; return; }
       localStorage.setItem('tl-sel', JSON.stringify(selected));
+      expActiveId = null;   // experiments are per-workspace — reset the selection
       loadSelected(); loadTrees();
+      if (expVisible()) renderExperimentList();
     };
     $('wsPanel').appendChild(l);
   });
@@ -1692,6 +2433,7 @@ async function boot() {
   await seedChanges();
   await loadSelected();
   await loadTrees();
+  refreshExpLive();   // seed the Experiments tab running-dot on startup
   const saved = localStorage.getItem('tl-view');
   setMode(saved === 'live' ? 'agent' : saved === 'resume' ? 'human' : saved || 'human');
 }

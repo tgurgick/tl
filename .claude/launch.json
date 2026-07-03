@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["ui/server.js", "--port", "4400"],
       "port": 4400
+    },
+    {
+      "name": "tl-ui-preview",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["ui/server.js", "--port", "4401"],
+      "port": 4401
     }
   ]
 }

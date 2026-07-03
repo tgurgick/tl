@@ -1,0 +1,34 @@
+{
+  "name": "tl",
+  "version": "0.1.0",
+  "description": "Markdown-native project management: human intents, agent-ready specs, and scheduled triage driven by a config you own.",
+  "author": {
+    "name": "Trevor Gurgick"
+  },
+  "homepage": "https://github.com/tgurgick/tl",
+  "repository": "https://github.com/tgurgick/tl",
+  "keywords": [
+    "throughline",
+    "project-management",
+    "specs",
+    "agents"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Throughline",
+    "shortDescription": "Intent-driven markdown project management for agent work.",
+    "longDescription": "Throughline turns human intents into agent-ready specs, ranks the backlog with local markdown config, and preserves decisions and follow-ups as threads.",
+    "developerName": "Trevor Gurgick",
+    "category": "Productivity",
+    "capabilities": [
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Run the next Throughline spec.",
+      "Show my Throughline workspace status.",
+      "Capture this as a Throughline thread."
+    ],
+    "brandColor": "#426B55"
+  }
+}

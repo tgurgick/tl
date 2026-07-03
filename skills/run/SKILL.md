@@ -15,6 +15,10 @@ This runs work and edits the repo — directly for a single spec, via concurrent
 
 Same as `/tl triage`: the argument is a workspace name under `projects/` or a path; one workspace → use it; else ask. One workspace per run; never claim across workspaces.
 
+## 0. Resume in-progress first (when applicable)
+
+Before claiming from `ready/`, check `in-progress/` for work already claimed — especially specs with **`NOTES.md`** (human kickback from `/tl review` or cockpit mid-flight feedback). If the human or a dispatch continuation points at an in-progress spec, **read `NOTES.md` first** (binding), then `SPEC.md`, then any existing `outcome/` artifacts. Continue that spec's procedure from its current folder (`in-progress/` or `tests/`) rather than claiming fresh ready work. A kickback note in `NOTES.md` outranks stale `FEEDBACK.md` claims.
+
 ## 1. Select the batch
 
 The **`ready/` stage is the queue** — every spec there is authorized and priority-ranked. If the argument names a spec, that's the batch (just it). Otherwise read the ready specs and evaluate conflicts to find the largest set safe to run **together**:
@@ -22,6 +26,8 @@ The **`ready/` stage is the queue** — every spec there is authorized and prior
 - **Read-only specs** (`type: research`, or no writing `Files to touch`) → never conflict; all eligible.
 - **Code specs** → eligible only if their `Files to touch` are **disjoint** from every spec already in the batch *and* every `depends_on` is in `done/`. Same-file specs conflict — at most one this round.
 - **Undeclared scope** (a code spec with no `Files to touch`) → can't be proven disjoint, so it conflicts with all other code specs. A missing-scope smell — name it (fix: declare the scope, or batch these into one spec via `/tl groom`).
+
+**Active-work conflicts (not just within-batch).** Disjointness is checked against work *already underway*, not only the specs you're selecting this round. The runner builds an **active conflict set** from the `Files to touch` of every spec in `in-progress/`, `tests/`, and `in-review/` (work claimed but not yet accepted), plus — when the workspace's `repo` is this TL checkout and `git status` is available — the current **dirty git paths**. A ready spec whose scope overlaps that set is **held back with a concrete reason** (e.g. `conflicts with in-progress/foo on bin/tl.js`, or `conflicts with dirty git on lib/batch.js`), so a fresh run never claims a spec that collides with an agent already mid-flight or with uncommitted edits. Read-only specs still never conflict (they lock nothing). Undeclared-scope code specs stay conservative: if *any* code work is active, they're held with a missing-scope reason. This is a **guardrail, not a scheduler** — it explains the conflict and defers the spec; it never tries to resolve the overlap automatically. A **named-spec run** (`tl run <ws> <spec>`) applies the same guard: it refuses to claim a spec whose scope collides with active work (no override flag exists yet).
 
 **Agent routing (heterogeneous fan-out).** A spec may carry an optional `agent:` lane (`any | claude | codex | cursor | gemini`, default `any`). When you're running as a specific agent (`tl run --agent <name>`), consider only specs whose `agent` is `<name>` or `any` — specs in another agent's lane are held for that agent. Because the claim is a folder move (`specs/ → in-progress/`), Claude, Codex, and Cursor can each drain their own lane **concurrently** over one throughline with no central orchestrator — whoever moves the folder first owns the spec. The file-conflict rules above still apply within and across lanes: never two units at the same file.
 
@@ -33,6 +39,8 @@ Report the batch — and what was held back and why — before working.
 
 Move every spec in the batch `ready → in-progress` (set `status: in-progress`) before any work begins. The folder move is the claim — two runs can't pick up the same spec because it's no longer in `ready/`.
 
+**Sign the claim.** The folder move alone is anonymous, so also stamp **`claimed_by: <your agent>`** (`claude | codex | cursor | gemini`) and **`claimed_at: <today>`** in the spec's frontmatter as you claim it. This is what lets the cockpit show *which* agent has picked up *which* task when several drain the queue concurrently — and it's the `builder` the TESTS-gate verifier must differ from (d). Stamp your own identity honestly; if you don't know your agent name, leave it unset rather than guess.
+
 ## 3. Work each spec — the per-spec procedure
 
 Apply this to every spec in the batch. With **one** spec, do it inline in this session. With **several**, spawn one subagent per spec, **concurrently**, each running this same procedure for *its* spec only (disjoint-file code agents may use worktree isolation). Never let two units touch the same file.
@@ -42,20 +50,23 @@ For a spec:
 - **b. Do the work** in the spec's `repo`, within `Files to touch`; treat `Do not touch` as a hard boundary. An out-of-scope discovery → capture a thread (c); if it blocks you, fail *this* spec (g) — don't sink the batch.
 - **c. Capture threads** for anything worth not losing — decision, follow-up, risk, discovery (`../capture/SKILL.md`). Undocumented discoveries are a leak.
 - **d. The tests gate — the cross-model loop.** Move the spec `in-progress → tests` (`status: tests`), run the acceptance-criteria tests / verification, and self-check against the review gates (`_patterns/review-gates.md`). Anything red — a failed test — fails this spec (g): leave it in `tests/` as `status: blocked` with what broke. On green, hand to a **cross-model check** before review:
-  - **Pick a verifier != the builder.** The builder is the spec's `agent:` lane (also its FEEDBACK `agent_tool`); choose a *different* agent to verify (e.g. builder `claude` → verifier `codex`). A different model catches blind spots the builder is worst at seeing. If no other agent is available, self-verify but note it as the builder in the record — the human is the real second set of eyes then.
+  - **Pick a verifier != the builder.** The builder is the spec's `claimed_by` (who claimed and worked it; falls back to the `agent:` lane / FEEDBACK `agent_tool` if unstamped); choose a *different* agent to verify (e.g. builder `claude` → verifier `codex`). A different model catches blind spots the builder is worst at seeing. If no other agent is available, self-verify but note it as the builder in the record — the human is the real second set of eyes then.
   - **Verify.** The verifier reviews the **diff** against the **acceptance criteria**, the parent **intent's Outcome**, and the **review gates** (`_patterns/review-gates.md`), and returns a verdict: **pass**, or **concerns-with-specifics**.
   - **Remediate — bounded.** On concerns, send the specifics **back to the builder** for a fix pass, then re-verify. Cap at **~2 rounds** so it can't spin.
   - **Advance.** On convergence (verifier passes), or when the cap trips, write `outcome/ALIGNMENT.md` (schema in `../../_templates/SCHEMA.md`): `builder`, `verifier`, `rounds`, `verdict` (`pass` or `residual-concerns`), `residual_concerns`, and one section per round (what was raised, how addressed). If the cap trips with concerns unresolved, still advance but set `verdict: residual-concerns` and list the open items — they surface at review for the human to weigh. The check is advisory-with-remediation; it never blocks the human gate, only better-informs it.
-- **e. Hand to review.** Once the cross-model check has converged (or the cap tripped): write `outcome/FEEDBACK.md` (template: `../../_templates/FEEDBACK.md`) alongside the `outcome/ALIGNMENT.md` from (d), then move the spec `tests → in-review` (`status: in-review`). **Never move it to `done/`** — an agent doesn't sign off its own work; the human accepts it (`/tl review`, or the cockpit's accept button), and any `residual-concerns` in ALIGNMENT are flagged there.
+- **e. Hand to review — honoring `auto_review`.** Once the cross-model check has converged (or the cap tripped): write `outcome/FEEDBACK.md` (template: `../../_templates/FEEDBACK.md`) alongside the `outcome/ALIGNMENT.md` from (d), then move the spec `tests → in-review` (`status: in-review`). Before the move, check the workspace's `TRIAGE.yml` `auto_review` map (schema in `../../_templates/SCHEMA.md`) against this spec's `type`:
+  - **`auto_review[spec.type]` is `true`** (an autonomy-dial fast-track): the spec is still carried to `in-review`, but stamp `auto_reviewed: true` in its frontmatter so `/tl review` and the cockpit surface it as a low-risk, lighter-touch candidate. `FEEDBACK.md` and `ALIGNMENT.md` are still **required** first — auto-review lightens the *review*, it never skips the FEEDBACK artifact.
+  - **`auto_review[spec.type]` is `false` or absent** (the default, and every type not in the map): unchanged — stamp `auto_reviewed: false` and land in `in-review` as normal.
+  - **Never move it to `done/`** — `auto_review` **does not** authorize agent → done. An agent doesn't sign off its own work even when the type is fast-tracked; the human accepts it (`/tl review`, or the cockpit's accept button), and any `residual-concerns` in ALIGNMENT are flagged there. (The original spec proposed `auto_review: true` landing specs directly in `done/`; that is capped here at `in-review` — the human gate is never removed, only lightened. The `to_done` guard in `TRIAGE.yml` stays `false`; there is no agent path past the gate.)
 - **g. On failure** — leave the spec where it stopped (`status: blocked` if genuinely blocked); explain what stopped you and what would unblock it.
 
 ## 4. Report — the ledger
 
-Per spec: solo or parallel, final state (in-review / failed), threads captured. Then: what now waits in `in-review/` for `/tl review`, and what's still queued for the next run.
+Per spec: solo or parallel, final state (in-review / failed), threads captured, and — if `auto_review` fast-tracked it — call it out: "auto-reviewed: research-whisper-edge (research, auto_review: true)". Then: what now waits in `in-review/` for `/tl review`, and what's still queued for the next run. Each completed spec's `cycle-log.jsonl` line carries `"auto_reviewed": true/false` so the impact of the dial is measurable.
 
 ## Guardrails
 
-- Every spec lands in `in-review` — **never `done`**. `/tl review` (or the cockpit's accept button) is the only path to done; the gate is what makes parallel fan-out safe.
+- Every spec lands in `in-review` — **never `done`**, including `auto_review`-fast-tracked ones. `/tl review` (or the cockpit's accept button) is the only path to done; the gate is what makes parallel fan-out safe. `auto_review: true` only stamps `auto_reviewed: true` for a lighter-touch review — it never authorizes agent → done.
 - Run only provably-conflict-free specs together; never two units at the same file (same-file specs serialize across runs, or get batched into one spec via `/tl groom`). Undeclared scope → assume conflict.
 - Cap the width — calm over swarm. Defer the overflow and say so.
 - `run` consumes the `ready/` queue; it never authorizes work. A spec you're not ready to run belongs in `triage/`, not `ready/`.

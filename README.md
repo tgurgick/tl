@@ -34,7 +34,7 @@ Prefer to clone? Work inside the repo — your workspaces live in the gitignored
 A local web view of your workspaces — zero dependencies, no build step. The tabs:
 
 - **Human** (default) — the desk you return to. The goal in focus (inline-editable: statement, weight, key results), the one recommended next action with its reason, the capped decay inbox (≤3 asks, each with resolve / park / research), and a counts row that expands into the two roadmap lenses — **Horizon** (a forward timeline of upcoming work, sized by effort) and **Map** (the throughline as a dependency DAG — specs as nodes laid out by dependency depth with edges drawn, each tinted by the goal it serves, every break flagged) — plus the ranked backlog, decisions, and parked threads. Warm paper, calm by design. The edits a human makes live here — capture, edit scope, change a priority, resolve a loop — and each writes the markdown directly.
-- **Agent** — mission control for watching agents work: intent swimlanes by stage, the file tree with change badges and heat, a terminal-style activity feed narrating every file event, and a live file viewer that follows each write and highlights the added lines. Warm charcoal.
+- **Agent** — mission control for watching agents work: intent swimlanes by stage (including **TRIAGE** held-for-release and **READY**), the file tree with change badges and heat, a terminal-style activity feed narrating every file event, and a live file viewer that follows each write and highlights the added lines. TRIAGE cards support **release → ready** (symmetric to in-review accept). Warm charcoal.
 - **Split** — Human as a narrow sidebar beside the full Agent board, so you can steer and watch at once.
 
 ```
@@ -52,12 +52,14 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, promote, groom, decompose, run, review, map, triage, reflect, dedup, bug-capture, goal, ui
+├── skills/                     # /tl new, resume, capture, promote, groom, decompose, run, review, recall, map, triage, reflect, dedup, bug-capture, goal, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
 ├── ui/                         # local web UI — Human / Split / Agent (zero-dep node)
 ├── docs/                       # design process docs
+│   ├── agent-experiments.md    # portable task/candidate/judge model + TL mapping
+│   └── repo-split.md
 │
 └── projects/                   # your workspaces (gitignored, private)
     └── <project>/
@@ -68,14 +70,15 @@ throughline/                    # the tool (this repo, public)
         ├── specs/              # agent-ready specifications (folders)
         ├── in-progress/        # specs being worked
         ├── done/               # completed, with feedback
-        ├── triage/             # ideas being evaluated
+        ├── triage/             # ranked specs held for human release (not the run queue)
         ├── threads/            # what not to lose — parked ideas, decisions, open questions
+        ├── _experiments/       # shadow candidate runs (see docs/agent-experiments.md)
         └── _metrics/           # JSONL logs from skill runs
 ```
 
 To start a new workspace, run `/tl:new` for a guided setup — or copy `examples/sample-project/` into `projects/<name>/` and edit `TRIAGE.yml` by hand. The frontmatter contract every file follows is `_templates/SCHEMA.md`.
 
-**Naming convention:** ALL-CAPS files are tl's — fixed names, one per location (`SPEC.md`, `PROJECT.md`, `TRIAGE.yml`, `PRIORITIES.md`, `FEEDBACK.md`). Lowercase files are yours — you name them (intents, threads, context docs). Machine logs (`_metrics/*.jsonl`) stay lowercase; they're data, not documents.
+**Naming convention:** ALL-CAPS files are tl's — fixed names, one per location (`SPEC.md`, `PROJECT.md`, `TRIAGE.yml`, `PRIORITIES.md`, `FEEDBACK.md`, `EXPERIMENT.md`). Lowercase files are yours — you name them (intents, threads, context docs). Machine logs (`_metrics/*.jsonl`) stay lowercase; they're data, not documents.
 
 ## The model
 
@@ -85,7 +88,7 @@ Spec-driven development assumes you start with a spec. Throughline goes one step
 
 **Specs** are written in execution language: "create `auth-stack.ts` with Cognito user pool, ensure `cdk synth` passes." They have acceptance criteria with test commands, file scope boundaries, context folders with crash reports or code excerpts, and implementation hints. An intent decomposes into one or more specs. Each spec is a folder — the self-contained context package an agent receives.
 
-**Triage** is the intake. Raw ideas, bug reports, problems, opportunities. Anything that needs more thought before it becomes an intent or spec. Some items graduate to intents (they need scoping). Some go directly to specs (the intent is obvious, the work just needs to be specified). Some get killed.
+**Triage** is the release-hold stage. `/tl triage` scores and ranks specs there, but they are not runnable until a human releases them to `specs/` (the cockpit's **release → ready** button, or a folder move). The `specs/` folder is the ready queue — what `/tl run` claims. Parked ideas and open questions still live in `threads/`; raw intake that needs more thought graduates to intents or specs through `/tl promote` and `/tl decompose`.
 
 **Threads** are everything worth remembering that isn't active work: parked ideas, recorded decisions, open questions, discovered risks, future cleanup. Agents generate discoveries constantly; without a home they become scope creep or get lost. Threads are that home — and open loops, idea lists, and decision history are just filtered views over them, never new object types.
 
@@ -111,6 +114,7 @@ Each workspace has its own `TRIAGE.yml` — one file encoding that project's pro
 - **Goals** with weights — what matters now, scored against every spec
 - **Allocation targets** — target split across bugs, features, tech debt, research
 - **Priority rules** — automatic overrides (regressions → P0, widespread crashes → P0, stale bugs → flag)
+- **`auto_review`** (optional) — per-type fast-track dial: when `true` for a spec's `type`, `/tl run` still lands it in `in-review` but stamps `auto_reviewed: true` for a lighter-touch human review. Never skips the human gate or `FEEDBACK.md`.
 
 Edit the config when goals change. The backlog re-sorts on the next triage run. Because the config is per-project, two workspaces can run completely different priorities side by side.
 
@@ -146,7 +150,7 @@ The rung between deciding and building. Where `/tl promote` turns a thread into 
 
 ### /tl run
 
-The dispatch consumer. The cockpit's dispatch button only *writes* a queue file (`_dispatch/<slug>.json`) — it never executes. `/tl run` is what does the work, in a session you control. It works **as many pending specs as are safe to run together**: it evaluates the queue for conflicts (read-only research never conflicts → unlimited parallel; code specs parallelize only when their declared file scopes are disjoint; undeclared scope is treated as a conflict), claims the largest conflict-free batch (capped ~4, calm over swarm), and works each — a single safe spec inline, several as concurrent subagents. Each spec is assembled fresh from its spec + intent + goal, worked within its file scope, passed through the tests gate, and landed in `in-review` (**never `done`** — an agent doesn't sign off its own work). Same-file specs serialize or get batched via `/tl groom`; status transitions only, never deletes. "Run the next one" and "fan out the queue" are the same command.
+The dispatch consumer. The cockpit's dispatch button only *writes* a queue file (`_dispatch/<slug>.json`) — it never executes. `/tl run` is what does the work, in a session you control. It works **as many pending specs as are safe to run together**: it evaluates the queue for conflicts (read-only research never conflicts → unlimited parallel; code specs parallelize only when their declared file scopes are disjoint; undeclared scope is treated as a conflict), claims the largest conflict-free batch (capped ~4, calm over swarm), and works each — a single safe spec inline, several as concurrent subagents. Each spec is assembled fresh from its spec + intent + goal, worked within its file scope, passed through the tests gate, and landed in `in-review` (**never `done`** — an agent doesn't sign off its own work). Spec types with `auto_review: true` in `TRIAGE.yml` are still carried to `in-review`, but stamped `auto_reviewed: true` so `/tl review` can treat them as low-risk fast-tracks. Same-file specs serialize or get batched via `/tl groom`; status transitions only, never deletes. "Run the next one" and "fan out the queue" are the same command.
 
 ### /tl new
 
@@ -154,11 +158,15 @@ Guided workspace setup. Interviews you for goals (with observable key results), 
 
 ### /tl triage
 
-Ranks the backlog. Scores every spec against the weighted goals in `TRIAGE.yml`, applies the priority rules (first match wins), checks allocation drift, and rewrites `PRIORITIES.md`. Detects priorities a human changed by hand since the last run and records them in `override-log.jsonl`. Never creates, executes, or deletes specs, and never re-scores a human-set priority — only an explicit rule can change one.
+Ranks the backlog. Scores every spec against the weighted goals in `TRIAGE.yml`, applies the priority rules (first match wins), checks allocation drift, and rewrites `PRIORITIES.md`. Inventory includes `triage/` (held for release) and `specs/` (ready queue) separately — held specs are ranked but not runnable until released. Detects priorities a human changed by hand since the last run and records them in `override-log.jsonl`. Never creates, executes, or deletes specs, and never re-scores a human-set priority — only an explicit rule can change one.
 
 ### /tl review
 
 The human gate between `in-review` and `done`. `/tl run` carries work to `in-review/` but never signs it off — `/tl review` is where a person makes the call. For each spec waiting, it assembles the evidence (acceptance criteria, the worker's `FEEDBACK.md`, and the actual `git diff` — checked against the claims, optionally via `/code-review`), then accepts it to `done` or kicks it back to `in-progress` with a written reason (a captured thread). This gate is what makes parallel fan-out safe: many agents pool their output in `in-review/`, and you clear it in a batch instead of merging blind.
+
+### /tl recall
+
+The "didn't we already discuss this?" answer. One query across a workspace's whole memory — intents, specs at every stage, threads, and `done/*/outcome/` files — so a decision doesn't get re-made or an open question re-opened. `tl recall <workspace> <query>` prints a deterministic snapshot: the matching files ranked (title/frontmatter hits over body hits, newer breaking ties), grouped by kind (decision, open thread, ready/active spec, done outcome, recommendation), each with the snippet that matched. Read-only, local, zero-dependency — the markdown files are the corpus, no index or embeddings.
 
 ### /tl map
 
@@ -201,8 +209,20 @@ Append-only JSONL logs from every skill run, kept in the workspace's `_metrics/`
 | `dedup-log.jsonl` | dedup | Daily: merges, auto-closes, flags, open bug count |
 | `triage-log.jsonl` | triage | Daily: counts by priority/type, allocation %, goal progress |
 | `cycle-log.jsonl` | on completion | Spec lifecycle: created, started, completed, duration, feedback score |
+| `candidate-run-log.jsonl` | experiment runs | Candidate attempts: task hash, runtime fingerprint, status, metrics |
+| `judge-log.jsonl` | experiment judge | Scores, hard gates, winner, rationale |
+| `experiment-log.jsonl` | experiment cohort | Experiment lifecycle events |
+| `routing-priors.jsonl` | routing updates | Prior updates from experiment outcomes |
+| `replay-log.jsonl` | replay suites | Historical reruns against new runtimes |
+| `trace-features.jsonl` | trace extraction | Observable action features for learning |
 
 Plus human-readable `triage-{date}.md` summaries. A UI layer reads the JSONL files directly for charts.
+
+## Agent experiments
+
+TL can compare multiple agent tools or models on the same task, judge outputs with a repeatable rubric, and store machine-readable evidence for routing and replay. Experiments are **shadow attempts** — artifacts live under `_experiments/` until a winner is explicitly applied; canonical specs and source files are not mutated by judging alone.
+
+The portable model (task, candidate, judge, experiment, runtime fingerprint) and TL adapter mapping are documented in [`docs/agent-experiments.md`](docs/agent-experiments.md). Field definitions for `EXPERIMENT.md`, candidate/evaluation folders, and experiment metric logs are in [`_templates/SCHEMA.md`](_templates/SCHEMA.md#experiments-_experiments). A deterministic proof slice ships as `tl experiment fixture <workspace>` — two fixture candidates, a judge, winner selection, and metric rows, with no provider calls.
 
 ## Feedback
 

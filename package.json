@@ -4,5 +4,8 @@
   "description": "tl — the throughline CLI: deterministic file work, then prints the matching SKILL as a prompt for the running agent.",
   "bin": {
     "tl": "bin/tl.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
   }
 }

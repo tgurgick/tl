@@ -1,5 +1,12 @@
 #!/usr/bin/env node
-// tl UI server — zero dependencies, read-only.
+// tl UI server — zero dependencies (Node stdlib only).
+//
+// GET serves the cockpit read-only. A small set of localhost POST actions
+// (capture, priority override, thread status, research, review accept/kick,
+// notes) mutate the markdown workspace. Trust model: the server binds to
+// 127.0.0.1 for a single local user — there is no auth. Every write resolves
+// through safePath (can't escape the workspace) and mutates records via
+// lib/frontmatter (scoped, sanitized — no whole-file string surgery).
 // Usage: node ui/server.js [--port 4400] [--root <repo root>]
 
 const http = require('http');
@@ -14,117 +21,14 @@ function arg(name, fallback) {
 const PORT = parseInt(arg('port', '4400'), 10);
 const ROOT = path.resolve(arg('root', process.cwd()));
 
-// ---------- tiny YAML subset parser (maps, lists, scalars, inline arrays) ----------
-
-function stripComment(line) {
-  let inS = false, inD = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === "'" && !inD) inS = !inS;
-    else if (c === '"' && !inS) inD = !inD;
-    else if (c === '#' && !inS && !inD && (i === 0 || /\s/.test(line[i - 1]))) {
-      return line.slice(0, i).replace(/\s+$/, '');
-    }
-  }
-  return line.replace(/\s+$/, '');
-}
-
-function parseScalar(s) {
-  s = s.trim();
-  if (s === '' || s === '~' || s === 'null') return null;
-  if ((s[0] === '"' && s.endsWith('"')) || (s[0] === "'" && s.endsWith("'"))) return s.slice(1, -1);
-  if (s.startsWith('[') && s.endsWith(']')) {
-    const inner = s.slice(1, -1).trim();
-    if (!inner) return [];
-    return inner.split(',').map(parseScalar);
-  }
-  if (s === 'true') return true;
-  if (s === 'false') return false;
-  if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
-  return s;
-}
-
-function parseYaml(text) {
-  const lines = [];
-  for (const raw of String(text).split('\n')) {
-    const line = stripComment(raw);
-    if (!line.trim()) continue;
-    lines.push({ indent: line.match(/^ */)[0].length, content: line.trim() });
-  }
-  function parseBlock(idx, indent) {
-    if (idx >= lines.length) return [null, idx];
-    if (lines[idx].content.startsWith('- ') || lines[idx].content === '-') {
-      return parseList(idx, lines[idx].indent);
-    }
-    return parseMap(idx, lines[idx].indent);
-  }
-  function parseList(idx, indent) {
-    const out = [];
-    while (idx < lines.length && lines[idx].indent === indent && (lines[idx].content.startsWith('- ') || lines[idx].content === '-')) {
-      const rest = lines[idx].content.replace(/^-\s*/, '');
-      const kv = rest.match(/^([\w][\w.-]*):(?:\s+(.*))?$/);
-      if (kv) {
-        const obj = {};
-        idx++;
-        if (kv[2] !== undefined && kv[2] !== '') obj[kv[1]] = parseScalar(kv[2]);
-        else if (idx < lines.length && lines[idx].indent > indent) {
-          const [v, ni] = parseBlock(idx, lines[idx].indent);
-          obj[kv[1]] = v; idx = ni;
-        } else obj[kv[1]] = null;
-        while (idx < lines.length && lines[idx].indent > indent && !lines[idx].content.startsWith('- ')) {
-          const m = lines[idx].content.match(/^([\w][\w.-]*):(?:\s+(.*))?$/);
-          if (!m) break;
-          const childIndent = lines[idx].indent;
-          if (m[2] !== undefined && m[2] !== '') { obj[m[1]] = parseScalar(m[2]); idx++; }
-          else {
-            idx++;
-            if (idx < lines.length && lines[idx].indent > childIndent) {
-              const [v, ni] = parseBlock(idx, lines[idx].indent);
-              obj[m[1]] = v; idx = ni;
-            } else obj[m[1]] = null;
-          }
-        }
-        out.push(obj);
-      } else {
-        out.push(parseScalar(rest));
-        idx++;
-      }
-    }
-    return [out, idx];
-  }
-  function parseMap(idx, indent) {
-    const obj = {};
-    while (idx < lines.length && lines[idx].indent === indent && !lines[idx].content.startsWith('- ')) {
-      const m = lines[idx].content.match(/^([\w][\w.-]*):(?:\s+(.*))?$/);
-      if (!m) { idx++; continue; }
-      if (m[2] !== undefined && m[2] !== '') { obj[m[1]] = parseScalar(m[2]); idx++; }
-      else {
-        idx++;
-        if (idx < lines.length && lines[idx].indent > indent) {
-          const [v, ni] = parseBlock(idx, lines[idx].indent);
-          obj[m[1]] = v; idx = ni;
-        } else obj[m[1]] = null;
-      }
-    }
-    return [obj, idx];
-  }
-  return parseBlock(0, 0)[0];
-}
-
-function parseFrontmatter(text) {
-  const m = String(text).match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!m) return { meta: {}, body: String(text) };
-  let meta;
-  try { meta = parseYaml(m[1]) || {}; } catch { meta = {}; }
-  return { meta, body: m[2] };
-}
+// Shared parsing, path-guard, and frontmatter helpers live in lib/ — the same
+// modules the CLI (bin/tl.js) uses, so parsing and mutation rules can't drift.
+const { parseYaml, parseFrontmatter } = require('../lib/parse');
+const { safeRead, readFirst, isDir, mtime, safePath: libSafePath } = require('../lib/workspace');
+const { fmValue, setFrontmatterField } = require('../lib/frontmatter');
+const { buildProjectInsights, taskTitleFromBody, firstParagraph } = require('../lib/project-insights');
 
 // ---------- workspace reading ----------
-
-function safeRead(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } }
-function readFirst(...paths) { for (const p of paths) { const t = safeRead(p); if (t !== null) return t; } return null; }
-function isDir(p) { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
-function mtime(p) { try { return fs.statSync(p).mtimeMs; } catch { return 0; } }
 
 function listWorkspaces() {
   const out = [];
@@ -235,9 +139,194 @@ function readWorkspace(ws) {
   return {
     name: ws.name, example: ws.example,
     config, intents, specs, threads, metrics,
+    insights: buildProjectInsights({
+      wsDir: dir,
+      specs,
+      metrics,
+      experiments: readExperiments(ws),
+    }),
     priorities: readFirst(path.join(dir, 'PRIORITIES.md'), path.join(dir, 'priorities.md')),
     project: parseFrontmatter(safeRead(path.join(dir, 'PROJECT.md')) || '').meta,
   };
+}
+
+// ---------- experiments (read-only observation of _experiments/ + _metrics/) ----------
+//
+// The UI reads experiment artifacts; it never executes agents. Artifacts follow
+// docs/agent-experiments.md: _experiments/<id>/EXPERIMENT.md (index frontmatter),
+// candidates/<cid>/{METRICS.json,PATCH.diff,TRACE.jsonl,FEEDBACK.md,REASONING.md},
+// evaluation/<jid>/{SCORES.json,EVALUATION.md}. Markdown is human narrative; JSON/JSONL
+// is the learning surface — so we read the JSON for structure and only surface prose on demand.
+
+const TRACE_CAP = 200;      // hard cap on trace rows returned — large traces are capped, not streamed
+const PATCH_CAP = 600;      // hard cap on diff lines returned per candidate — big patches are capped, not streamed
+const SECRET_RE = /(sk-[A-Za-z0-9]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{12,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}|(?:api[_-]?key|secret|token|password|bearer)["'\s:=]+[A-Za-z0-9._\-]{8,})/gi;
+
+// scrub anything that looks like a credential from trace/reasoning text before it leaves the server
+function redact(s) {
+  return String(s == null ? '' : s).replace(SECRET_RE, '[redacted]');
+}
+
+function readJsonFile(p) {
+  const t = safeRead(p);
+  if (t == null) return null;
+  try { return JSON.parse(t); } catch { return null; }
+}
+
+// one experiment's index-level summary (cheap — used for the queue list)
+function experimentSummary(expDir, id) {
+  const raw = safeRead(path.join(expDir, 'EXPERIMENT.md')) || '';
+  const { meta, body } = parseFrontmatter(raw);
+  const candDir = path.join(expDir, 'candidates');
+  const candidates = isDir(candDir) ? fs.readdirSync(candDir).filter(c => !c.startsWith('.') && isDir(path.join(candDir, c))).sort() : [];
+  // winner comes from the judge's SCORES.json (the learning surface), not prose
+  let winner = '', winnerSetBy = '', judgeStatus = '', rationale = '';
+  const evalDir = path.join(expDir, 'evaluation');
+  if (isDir(evalDir)) {
+    for (const jid of fs.readdirSync(evalDir).sort()) {
+      const scores = readJsonFile(path.join(evalDir, jid, 'SCORES.json'));
+      if (scores) {
+        winner = scores.winner || '';
+        winnerSetBy = scores.winner_set_by || '';
+        judgeStatus = scores.status || '';
+        rationale = scores.rationale || '';
+        break;
+      }
+    }
+  }
+  let winnerTool = '', winnerModel = '';
+  if (winner && isDir(candDir)) {
+    const wm = readJsonFile(path.join(candDir, winner, 'METRICS.json'));
+    if (wm) {
+      winnerTool = wm.agent_tool || '';
+      winnerModel = wm.agent_model || '';
+    }
+  }
+  const taskTitle = taskTitleFromBody(body);
+  const summary = meta.summary || firstParagraph(body) || taskTitle;
+  // "running" = something is actively moving in shadow — the experiment status is
+  // an active state, or any candidate's METRICS.json reports one. Drives the live
+  // dot on the Experiments tab so it only shows while a test is in flight.
+  const ACTIVE = new Set(['running', 'in-progress', 'in_progress', 'working', 'started', 'evaluating']);
+  let running = ACTIVE.has(String(meta.status || '').toLowerCase());
+  if (!running && isDir(candDir)) {
+    for (const c of candidates) {
+      const cm = readJsonFile(path.join(candDir, c, 'METRICS.json'));
+      if (cm && ACTIVE.has(String(cm.status || '').toLowerCase())) { running = true; break; }
+    }
+  }
+  return {
+    id,
+    status: meta.status || 'unknown',
+    running,
+    task_type: meta.task_type || '',
+    tl_spec: meta.tl_spec || '',
+    summary,
+    task_title: taskTitle,
+    primary_agent: meta.primary_agent || '',
+    shadow_agents: meta.shadow_agents || [],
+    judge_agent: meta.judge_agent || '',
+    created: meta.created || '',
+    replay_of: meta.replay_of || '',
+    winner, winner_set_by: winnerSetBy, judge_status: judgeStatus, rationale,
+    winner_tool: winnerTool, winner_model: winnerModel,
+    candidate_count: candidates.length,
+    mtime: mtime(path.join(expDir, 'EXPERIMENT.md')),
+  };
+}
+
+// list every experiment under a workspace's _experiments/, newest first
+function readExperiments(ws) {
+  const base = path.join(ws.dir, '_experiments');
+  if (!isDir(base)) return [];
+  const out = [];
+  for (const id of fs.readdirSync(base).sort()) {
+    if (id.startsWith('.') || !isDir(path.join(base, id))) continue;
+    out.push(experimentSummary(path.join(base, id), id));
+  }
+  return out.sort((a, b) => (b.created || '').localeCompare(a.created || '') || b.mtime - a.mtime);
+}
+
+// one candidate's full record: metrics fields + a capped, redacted trace + reasoning presence
+function readCandidate(candDir, cid) {
+  const metrics = readJsonFile(path.join(candDir, 'METRICS.json')) || {};
+  const traceRaw = safeRead(path.join(candDir, 'TRACE.jsonl')) || '';
+  const traceLines = traceRaw.split('\n').filter(l => l.trim());
+  const total = traceLines.length;
+  const rows = [];
+  for (const line of traceLines.slice(0, TRACE_CAP)) {
+    try {
+      const r = JSON.parse(line);
+      rows.push({ ts: r.ts || '', type: r.type || '', status: r.status || '', summary: redact(r.summary || r.message || '') });
+    } catch { /* skip bad trace line */ }
+  }
+  const reasoningRaw = safeRead(path.join(candDir, 'REASONING.md'));
+  // the candidate's diff, for side-by-side comparison — secret-redacted and line-capped like the trace
+  const patchRaw = safeRead(path.join(candDir, 'PATCH.diff'));
+  const patchLines = patchRaw ? redact(patchRaw).split('\n') : [];
+  return {
+    candidate_id: cid,
+    role: metrics.role || '',
+    status: metrics.status || 'unknown',
+    agent_tool: metrics.agent_tool || '',
+    agent_model: metrics.agent_model || '',
+    agent_model_auto: !!metrics.agent_model_auto,
+    agent_model_source: metrics.agent_model_source || 'unknown',
+    runtime_version: metrics.runtime_version || '',
+    framework: metrics.framework || '',
+    cost_usd: metrics.cost_usd ?? null,
+    duration_minutes: metrics.duration_minutes ?? null,
+    tokens_used: metrics.tokens_used ?? null,
+    task_complete: metrics.task_complete ?? null,
+    fault: metrics.fault ?? null,
+    has_patch: patchLines.length > 0,
+    patch: patchLines.length ? patchLines.slice(0, PATCH_CAP).join('\n') : null,
+    patch_capped: patchLines.length > PATCH_CAP,
+    patch_total: patchLines.length,
+    trace: rows,
+    trace_total: total,
+    trace_capped: total > TRACE_CAP,
+    reasoning: reasoningRaw ? redact(reasoningRaw) : null,
+  };
+}
+
+// full detail for one experiment: index, candidates, judge scores, winner/apply state
+function readExperimentDetail(ws, id) {
+  const expDir = path.join(ws.dir, '_experiments', id);
+  if (!isDir(expDir)) return null;
+  const { meta, body } = parseFrontmatter(safeRead(path.join(expDir, 'EXPERIMENT.md')) || '');
+  const candDir = path.join(expDir, 'candidates');
+  const candidates = [];
+  if (isDir(candDir)) {
+    for (const cid of fs.readdirSync(candDir).sort()) {
+      if (cid.startsWith('.') || !isDir(path.join(candDir, cid))) continue;
+      candidates.push(readCandidate(path.join(candDir, cid), cid));
+    }
+  }
+  // sort primary first, then shadows, then anything else
+  candidates.sort((a, b) => (a.role === 'primary' ? -1 : b.role === 'primary' ? 1 : 0));
+  let judge = null;
+  const evalDir = path.join(expDir, 'evaluation');
+  if (isDir(evalDir)) {
+    for (const jid of fs.readdirSync(evalDir).sort()) {
+      const scores = readJsonFile(path.join(evalDir, jid, 'SCORES.json'));
+      if (!scores) continue;
+      judge = { judge_id: jid, ...scores, evaluation: safeRead(path.join(evalDir, jid, 'EVALUATION.md')) };
+      break;
+    }
+  }
+  // winner / application state — reserved application fields (docs/agent-experiments.md)
+  // live in an optional WINNER.json; degrade to just the judge's pick when absent.
+  const winnerFile = readJsonFile(path.join(expDir, 'WINNER.json')) || {};
+  const winner = {
+    candidate_id: winnerFile.candidate_id || (judge && judge.winner) || '',
+    set_by: winnerFile.set_by || (judge && judge.winner_set_by) || '',
+    apply_state: winnerFile.apply_state || '',
+    patch_path: winnerFile.patch_path || '',
+    apply_error: winnerFile.apply_error || '',
+    human_override: winnerFile.human_override ?? (judge && judge.winner_set_by === 'human') ?? false,
+  };
+  return { id, meta, body, candidates, judge, winner };
 }
 
 // ---------- change tracking (snapshot diffs — workspaces aren't in git) ----------
@@ -426,10 +515,14 @@ function readBody(req) {
 }
 
 // resolve a workspace-relative path, refusing anything that escapes the workspace
-function safePath(ws, rel) {
-  const full = path.resolve(ws.dir, rel);
-  if (full !== path.resolve(ws.dir) && !full.startsWith(path.resolve(ws.dir) + path.sep)) return null;
-  return full;
+function safePath(ws, rel) { return libSafePath(ws.dir, rel); }
+
+// replace-or-insert status: in a spec's SPEC.md frontmatter
+function setSpecStatus(dir, st) {
+  const f = path.join(dir, 'SPEC.md');
+  const t = safeRead(f);
+  if (t == null) return;
+  fs.writeFileSync(f, setFrontmatterField(t, 'status', st));
 }
 
 function slugify(s) {
@@ -504,6 +597,20 @@ const server = http.createServer((req, res) => {
       json(res, 200, { path: rel, content });
     } else if (u.pathname === '/api/workspaces') {
       json(res, 200, listWorkspaces().map(w => ({ name: w.name, example: w.example })));
+    } else if (u.pathname === '/api/experiments') {
+      const ws = listWorkspaces().find(w => w.name === u.searchParams.get('ws'));
+      if (!ws) return json(res, 404, { error: 'unknown workspace' });
+      json(res, 200, readExperiments(ws));
+    } else if (u.pathname === '/api/experiment') {
+      const ws = listWorkspaces().find(w => w.name === u.searchParams.get('ws'));
+      if (!ws) return json(res, 404, { error: 'unknown workspace' });
+      const id = u.searchParams.get('id') || '';
+      // id is a single path segment — guard against traversal into the experiment folder
+      if (!id || /[\\/]/.test(id) || id.startsWith('.')) return json(res, 400, { error: 'bad experiment id' });
+      if (!safePath(ws, path.join('_experiments', id))) return json(res, 400, { error: 'bad path' });
+      const detail = readExperimentDetail(ws, id);
+      if (!detail) return json(res, 404, { error: 'experiment not found' });
+      json(res, 200, detail);
     } else if (u.pathname.startsWith('/api/ws/')) {
       const name = decodeURIComponent(u.pathname.slice('/api/ws/'.length));
       const ws = listWorkspaces().find(w => w.name === name);
@@ -517,104 +624,116 @@ const server = http.createServer((req, res) => {
   }
 });
 
-function handlePost(pathname, body, res) {
-  const ws = listWorkspaces().find(w => w.name === body.ws);
-  if (!ws) return json(res, 404, { error: 'unknown workspace' });
+// ---------- POST write handlers (one per route) ----------
+// Each takes the resolved workspace, the parsed body, and res. Writes stay
+// inside the workspace via safePath and mutate frontmatter via lib/frontmatter
+// (scoped + sanitized) rather than whole-file string surgery.
 
-  if (pathname === '/api/capture') {
-    const text = String(body.text || '').trim();
-    if (!text) return json(res, 400, { error: 'empty thought' });
-    const inf = inferThread(text);
-    const type = body.type || inf.type;
-    const status = body.status || inf.status;
-    const file = `threads/${isoDate()}-${slugify(text)}.md`;
-    const full = safePath(ws, file);
-    if (!full) return json(res, 400, { error: 'bad path' });
-    if (fs.existsSync(full)) return json(res, 409, { error: 'thread already exists' });
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    const q = s => String(s).replace(/"/g, "'");
-    const fm = `---\ntitle: "${q(text)}"\ncreated: ${isoDate()}\ntype: "${type}"\nstatus: "${status}"\norigin: "${q(body.origin || 'captured in Resume')}"\nlinked_intent: "${q(body.linked_intent || '')}"\nlinked_spec: "${q(body.linked_spec || '')}"\n---\n\n# ${text}\n`;
-    fs.writeFileSync(full, fm);
-    return json(res, 200, { ok: true, path: file, type, status });
+function hCapture(ws, body, res) {
+  const text = String(body.text || '').trim();
+  if (!text) return json(res, 400, { error: 'empty thought' });
+  const inf = inferThread(text);
+  const type = body.type || inf.type;
+  const status = body.status || inf.status;
+  const file = `threads/${isoDate()}-${slugify(text)}.md`;
+  const full = safePath(ws, file);
+  if (!full) return json(res, 400, { error: 'bad path' });
+  if (fs.existsSync(full)) return json(res, 409, { error: 'thread already exists' });
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  // sanitize every value so a newline / quote / stray `---` in user text can't
+  // break the frontmatter open; the heading is the first line of the thought.
+  const heading = text.split('\n')[0].trim();
+  const fm = `---\ntitle: "${fmValue(text)}"\ncreated: ${isoDate()}\ntype: "${fmValue(type)}"\nstatus: "${fmValue(status)}"\norigin: "${fmValue(body.origin || 'captured in Resume')}"\nlinked_intent: "${fmValue(body.linked_intent || '')}"\nlinked_spec: "${fmValue(body.linked_spec || '')}"\n---\n\n# ${heading}\n`;
+  fs.writeFileSync(full, fm);
+  return json(res, 200, { ok: true, path: file, type, status });
+}
+
+function hGoal(ws, body, res) {
+  const full = safePath(ws, 'TRIAGE.yml');
+  const alt = safePath(ws, 'triage.yml');
+  let yml = readFirst(full, alt);
+  const target = fs.existsSync(full) ? full : alt;
+  if (yml == null) return json(res, 404, { error: 'no TRIAGE.yml' });
+  const oldV = String(body.old ?? ''), newV = String(body.new ?? '');
+  // TRIAGE.yml is hand-authored with comments a full parse→serialize round-trip
+  // would strip, so edit the exact line — but only when the old value occurs
+  // exactly once. Ambiguous or missing => refuse (no silent wrong-goal edit).
+  const occ = (hay, needle) => hay.split(needle).length - 1;
+  let replaced = false;
+  if (body.field === 'description') {
+    const needle = `description: "${oldV}"`;
+    const n = occ(yml, needle);
+    if (n > 1) return json(res, 409, { error: 'ambiguous — description not unique' });
+    if (n === 1) { yml = yml.replace(needle, `description: "${fmValue(newV)}"`); replaced = true; }
+  } else if (body.field === 'weight') {
+    const esc = oldV.replace(/[.]/g, '\\.');
+    const all = yml.match(new RegExp(`weight:\\s*${esc}(\\s|$)`, 'gm')) || [];
+    if (all.length > 1) return json(res, 409, { error: 'ambiguous — weight not unique' });
+    const nw = newV.trim();
+    if (!/^-?\d+(\.\d+)?$/.test(nw)) return json(res, 400, { error: 'weight must be a number' });
+    const re = new RegExp(`weight:\\s*${esc}(\\s|$)`, 'm');
+    if (re.test(yml)) { yml = yml.replace(re, `weight: ${nw}$1`); replaced = true; }
+  } else if (body.field === 'kr') {
+    const needle = `- "${oldV}"`;
+    const n = occ(yml, needle);
+    if (n > 1) return json(res, 409, { error: 'ambiguous — key result not unique' });
+    if (n === 1) { yml = yml.replace(needle, `- "${fmValue(newV)}"`); replaced = true; }
   }
+  if (!replaced) return json(res, 409, { error: 'value not found — may have changed' });
+  fs.writeFileSync(target, yml);
+  return json(res, 200, { ok: true });
+}
 
-  if (pathname === '/api/goal') {
-    const full = safePath(ws, 'TRIAGE.yml');
-    let yml = readFirst(full, safePath(ws, 'triage.yml'));
-    const target = fs.existsSync(full) ? full : safePath(ws, 'triage.yml');
-    if (yml == null) return json(res, 404, { error: 'no TRIAGE.yml' });
-    const oldV = String(body.old ?? ''), newV = String(body.new ?? '');
-    let replaced = false;
-    if (body.field === 'description') {
-      const needle = `description: "${oldV}"`;
-      if (yml.includes(needle)) { yml = yml.replace(needle, `description: "${newV.replace(/"/g, "'")}"`); replaced = true; }
-    } else if (body.field === 'weight') {
-      const re = new RegExp(`weight:\\s*${oldV.replace(/[.]/g, '\\.')}(\\s|$)`, 'm');
-      if (re.test(yml)) { yml = yml.replace(re, `weight: ${newV}$1`); replaced = true; }
-    } else if (body.field === 'kr') {
-      const needle = `- "${oldV}"`;
-      if (yml.includes(needle)) { yml = yml.replace(needle, `- "${newV.replace(/"/g, "'")}"`); replaced = true; }
-    }
-    if (!replaced) return json(res, 409, { error: 'value not found — may have changed' });
-    fs.writeFileSync(target, yml);
-    return json(res, 200, { ok: true });
+function hPriority(ws, body, res) {
+  const rel = String(body.spec || '');
+  const full = safePath(ws, rel.endsWith('.md') ? rel : rel.replace(/\/$/, '') + '/SPEC.md');
+  if (!full || !fs.existsSync(full)) return json(res, 404, { error: 'spec not found' });
+  const p = String(body.priority || '').toLowerCase();
+  if (!/^p[0-3]$/.test(p)) return json(res, 400, { error: 'bad priority' });
+  let text = safeRead(full);
+  const fm0 = text.match(/^priority:\s*"?(p[0-3])"?/m);
+  const from = fm0 ? fm0[1] : String(body.from || '').toLowerCase();
+  text = setFrontmatterField(text, 'priority', p);
+  text = setFrontmatterField(text, 'priority_set_by', 'human');
+  fs.writeFileSync(full, text);
+  // contrast memory: a human override is a 'this, not that' training example
+  if (from && from !== p) {
+    try {
+      const md = path.join(ws.dir, '_metrics');
+      fs.mkdirSync(md, { recursive: true });
+      fs.appendFileSync(path.join(md, 'override-log.jsonl'),
+        JSON.stringify({ date: isoDate(), spec: rel, from, to: p, reason: String(body.reason || ''), source: 'resume-ui' }) + '\n');
+    } catch {}
   }
+  return json(res, 200, { ok: true, from });
+}
 
-  if (pathname === '/api/priority') {
-    const rel = String(body.spec || '');
-    const full = safePath(ws, rel.endsWith('.md') ? rel : rel.replace(/\/$/, '') + '/SPEC.md');
-    if (!full || !fs.existsSync(full)) return json(res, 404, { error: 'spec not found' });
-    const p = String(body.priority || '').toLowerCase();
-    if (!/^p[0-3]$/.test(p)) return json(res, 400, { error: 'bad priority' });
-    let text = safeRead(full);
-    const fm0 = text.match(/^priority:\s*"?(p[0-3])"?/m);
-    const from = fm0 ? fm0[1] : String(body.from || '').toLowerCase();
-    text = /^priority:.*$/m.test(text)
-      ? text.replace(/^priority:.*$/m, `priority: "${p}"`)
-      : text.replace(/^---\n/, `---\npriority: "${p}"\n`);
-    text = /^priority_set_by:.*$/m.test(text)
-      ? text.replace(/^priority_set_by:.*$/m, 'priority_set_by: "human"')
-      : text.replace(/^(priority:.*\n)/m, '$1priority_set_by: "human"\n');
-    fs.writeFileSync(full, text);
-    // contrast memory: a human override is a 'this, not that' training example
-    if (from && from !== p) {
-      try {
-        const md = path.join(ws.dir, '_metrics');
-        fs.mkdirSync(md, { recursive: true });
-        fs.appendFileSync(path.join(md, 'override-log.jsonl'),
-          JSON.stringify({ date: isoDate(), spec: rel, from, to: p, reason: String(body.reason || ''), source: 'resume-ui' }) + '\n');
-      } catch {}
-    }
-    return json(res, 200, { ok: true, from });
-  }
+function hThreadStatus(ws, body, res) {
+  const rel = String(body.path || '');
+  if (!/^(threads|intents)\//.test(rel) || !rel.endsWith('.md')) return json(res, 400, { error: 'not a thread or intent' });
+  const full = safePath(ws, rel);
+  if (!full || !fs.existsSync(full)) return json(res, 404, { error: 'file not found' });
+  const st = String(body.status || '');
+  if (!['open', 'parked', 'promoted', 'closed', 'draft', 'approved', 'decomposed', 'done'].includes(st)) return json(res, 400, { error: 'bad status' });
+  const text = setFrontmatterField(safeRead(full), 'status', st);
+  fs.writeFileSync(full, text);
+  return json(res, 200, { ok: true });
+}
 
-  if (pathname === '/api/thread-status') {
-    const rel = String(body.path || '');
-    if (!/^(threads|intents)\//.test(rel) || !rel.endsWith('.md')) return json(res, 400, { error: 'not a thread or intent' });
-    const full = safePath(ws, rel);
-    if (!full || !fs.existsSync(full)) return json(res, 404, { error: 'file not found' });
-    const st = String(body.status || '');
-    if (!['open', 'parked', 'promoted', 'closed', 'draft', 'approved', 'decomposed', 'done'].includes(st)) return json(res, 400, { error: 'bad status' });
-    let text = safeRead(full);
-    text = /^status:.*$/m.test(text) ? text.replace(/^status:.*$/m, `status: "${st}"`) : text.replace(/^---\n/, `---\nstatus: "${st}"\n`);
-    fs.writeFileSync(full, text);
-    return json(res, 200, { ok: true });
-  }
-
-  if (pathname === '/api/research') {
-    const title = String(body.title || '').trim();
-    if (!title) return json(res, 400, { error: 'empty topic' });
-    const slug = 'research-' + slugify(title);
-    const dir = safePath(ws, 'specs/' + slug);
-    if (!dir) return json(res, 400, { error: 'bad path' });
-    if (fs.existsSync(dir)) return json(res, 409, { error: 'research spec already exists' });
-    fs.mkdirSync(dir, { recursive: true });
-    const q = s => String(s).replace(/"/g, "'");
-    const src = body.source ? String(body.source) : '';
-    const spec = `---
-title: "Research: ${q(title)}"
+function hResearch(ws, body, res) {
+  const title = String(body.title || '').trim();
+  if (!title) return json(res, 400, { error: 'empty topic' });
+  const slug = 'research-' + slugify(title);
+  const dir = safePath(ws, 'specs/' + slug);
+  if (!dir) return json(res, 400, { error: 'bad path' });
+  if (fs.existsSync(dir)) return json(res, 409, { error: 'research spec already exists' });
+  fs.mkdirSync(dir, { recursive: true });
+  const src = body.source ? String(body.source) : '';
+  const heading = title.split('\n')[0].trim();
+  const spec = `---
+title: "Research: ${fmValue(title)}"
 created: ${isoDate()}
-project: "${ws.name}"
+project: "${fmValue(ws.name)}"
 intent: ""
 type: "research"
 status: "ready"
@@ -624,10 +743,10 @@ size: "small"
 depends_on: []
 blocks: []
 tags: [research]
-origin: "${q(src || 'dispatched from resume')}"
+origin: "${fmValue(src || 'dispatched from resume')}"
 ---
 
-# Research: ${title}
+# Research: ${heading}
 
 ## Objective
 
@@ -635,7 +754,7 @@ Investigate this question and recommend a direction — do not implement. Produc
 
 ## Question
 
-${title}
+${heading}
 
 ## Deliverable
 
@@ -643,64 +762,138 @@ ${title}
 - Options considered and why the recommended one wins
 - Anything that would change the recommendation
 `;
-    fs.writeFileSync(path.join(dir, 'SPEC.md'), spec);
-    if (src && /^threads\//.test(src)) {
-      const tf = safePath(ws, src);
-      if (tf && fs.existsSync(tf)) {
-        let t = safeRead(tf);
-        if (/^status:.*$/m.test(t)) { t = t.replace(/^status:.*$/m, 'status: "promoted"'); fs.writeFileSync(tf, t); }
-      }
+  fs.writeFileSync(path.join(dir, 'SPEC.md'), spec);
+  if (src && /^threads\//.test(src)) {
+    const tf = safePath(ws, src);
+    if (tf && fs.existsSync(tf)) fs.writeFileSync(tf, setFrontmatterField(safeRead(tf), 'status', 'promoted'));
+  }
+  return json(res, 200, { ok: true, path: 'specs/' + slug + '/' });
+}
+
+function hReview(ws, body, res) {
+  // the human gate, from the browser: accept an in-review spec to done, or kick it back with a note
+  const rel = String(body.spec || '').replace(/\/$/, '');
+  const action = String(body.action || '');
+  if (!/^in-review\//.test(rel)) return json(res, 400, { error: 'only in-review specs can be reviewed' });
+  const slug = rel.split('/').pop();
+  const srcDir = safePath(ws, rel);
+  if (!srcDir || !isDir(srcDir)) return json(res, 404, { error: 'spec not in review' });
+  if (action === 'accept') {
+    const dest = safePath(ws, 'done/' + slug); if (!dest) return json(res, 400, { error: 'bad path' });
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(srcDir, dest); setSpecStatus(dest, 'done');
+    return json(res, 200, { ok: true, path: 'done/' + slug + '/' });
+  }
+  if (action === 'reject') {
+    const note = String(body.note || '').trim();
+    const dest = safePath(ws, 'in-progress/' + slug); if (!dest) return json(res, 400, { error: 'bad path' });
+    if (note) fs.appendFileSync(path.join(srcDir, 'NOTES.md'), `\n## ${isoDate()} — kicked back\n${note}\n`);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(srcDir, dest); setSpecStatus(dest, 'in-progress');
+    return json(res, 200, { ok: true, path: 'in-progress/' + slug + '/' });
+  }
+  return json(res, 400, { error: 'action must be accept or reject' });
+}
+
+function hRelease(ws, body, res) {
+  // the triage gate, from the browser: release a triage spec to the ready queue.
+  // symmetric to hReview's accept — moves triage/<slug>/ → specs/<slug>/ and flips status: ready.
+  const rel = String(body.spec || '').replace(/\/$/, '');
+  if (!/^triage\//.test(rel)) return json(res, 400, { error: 'only triage specs can be released' });
+  const slug = rel.split('/').pop();
+  const srcDir = safePath(ws, rel);
+  if (!srcDir || !isDir(srcDir)) return json(res, 404, { error: 'spec not in triage' });
+  const dest = safePath(ws, 'specs/' + slug); if (!dest) return json(res, 400, { error: 'bad path' });
+  if (fs.existsSync(dest)) return json(res, 409, { error: 'spec already in ready queue' });
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.renameSync(srcDir, dest); setSpecStatus(dest, 'ready');
+  return json(res, 200, { ok: true, path: 'specs/' + slug + '/' });
+}
+
+function hNote(ws, body, res) {
+  // leave feedback on any spec, in any stage — appended to its NOTES.md so it travels with the spec.
+  // an optional `anchor` ties the note to a section of the spec (inline, PR-review style).
+  const rel = String(body.spec || '').replace(/\/$/, '');
+  const text = String(body.text || '').trim();
+  const anchor = String(body.anchor || '').replace(/\n/g, ' ').trim();
+  if (!text) return json(res, 400, { error: 'empty note' });
+  const dir = safePath(ws, rel);
+  if (!dir || !isDir(dir) || !fs.existsSync(path.join(dir, 'SPEC.md'))) return json(res, 404, { error: 'spec not found' });
+  const entry = `\n## ${isoDate()} — note\n` + (anchor ? `> on: ${anchor}\n` : '') + text + '\n';
+  fs.appendFileSync(path.join(dir, 'NOTES.md'), entry);
+  return json(res, 200, { ok: true });
+}
+
+function hExperimentQueue(ws, body, res) {
+  // Queue a fixture/local experiment by writing ONE config file the queue workers pick up.
+  // The UI never executes agents or shells out — it only drops a request into _experiments/queue/.
+  const spec = String(body.spec || '').replace(/\/$/, '').trim();
+  const runtime = String(body.runtime || 'fixture').toLowerCase();
+  if (!['fixture', 'local'].includes(runtime)) return json(res, 400, { error: 'runtime must be fixture or local' });
+  // candidate roles: one primary, zero or more shadows — sanitized to safe slugs
+  const slug = s => String(s || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  const primary = slug(body.primary) || (runtime === 'fixture' ? 'fixture-a' : '');
+  if (!primary) return json(res, 400, { error: 'a primary candidate is required' });
+  const shadows = (Array.isArray(body.shadows) ? body.shadows : [])
+    .map(slug).filter(Boolean).slice(0, 8);
+  const judge = slug(body.judge) || (runtime === 'fixture' ? 'fixture-judge' : 'judge');
+  const budgetUsd = Number.isFinite(+body.budget_usd) && +body.budget_usd >= 0 ? +body.budget_usd : null;
+  const timeoutMin = Number.isFinite(+body.timeout_minutes) && +body.timeout_minutes >= 0 ? +body.timeout_minutes : null;
+  // one config file per request, named by timestamp so concurrent queues don't collide
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const rel = `_experiments/queue/${stamp}-${slug(spec) || runtime}.json`;
+  const full = safePath(ws, rel);
+  if (!full) return json(res, 400, { error: 'bad path' });
+  if (fs.existsSync(full)) return json(res, 409, { error: 'a request with this name already exists' });
+  // an optional variant/repeat pointer — set when this request re-runs an existing experiment
+  const replayOf = String(body.replay_of || '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 80);
+  // a variant can instill changes: free-text tweaks + per-role model overrides
+  const variantNotes = String(body.variant_notes || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 500);
+  const modelSlug = s => String(s || '').trim().replace(/[^A-Za-z0-9._-]/g, '').slice(0, 60);
+  const models = {};
+  if (body.models && typeof body.models === 'object') {
+    for (const [role, mdl] of Object.entries(body.models)) {
+      const rk = String(role).replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
+      const mv = modelSlug(mdl);
+      if (rk && mv) models[rk] = mv;
     }
-    return json(res, 200, { ok: true, path: 'specs/' + slug + '/' });
   }
+  const config = {
+    requested_at: new Date().toISOString(),
+    status: 'queued',              // queue workers advance this; the UI only requests
+    source: 'ui-dashboard',
+    runtime,                       // fixture = deterministic proof; local = a local adapter run
+    tl_spec: spec,
+    primary, shadows, judge,
+    budget_usd: budgetUsd,
+    timeout_minutes: timeoutMin,
+    ...(replayOf ? { replay_of: replayOf } : {}),
+    ...(variantNotes ? { variant_notes: variantNotes } : {}),
+    ...(Object.keys(models).length ? { models } : {}),
+  };
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, JSON.stringify(config, null, 2) + '\n');
+  return json(res, 200, { ok: true, path: rel, queued: config });
+}
 
-  // helper: replace-or-insert a frontmatter field in a SPEC.md
-  function setStatus(dir, st) {
-    const f = path.join(dir, 'SPEC.md'); let t = safeRead(f); if (t == null) return;
-    t = /^status:.*$/m.test(t) ? t.replace(/^status:.*$/m, `status: "${st}"`) : t.replace(/^---\n/, `---\nstatus: "${st}"\n`);
-    fs.writeFileSync(f, t);
-  }
+const ROUTES = {
+  '/api/capture': hCapture,
+  '/api/experiment-queue': hExperimentQueue,
+  '/api/goal': hGoal,
+  '/api/priority': hPriority,
+  '/api/thread-status': hThreadStatus,
+  '/api/research': hResearch,
+  '/api/review': hReview,
+  '/api/release': hRelease,
+  '/api/note': hNote,
+};
 
-  if (pathname === '/api/review') {
-    // the human gate, from the browser: accept an in-review spec to done, or kick it back with a note
-    const rel = String(body.spec || '').replace(/\/$/, '');
-    const action = String(body.action || '');
-    if (!/^in-review\//.test(rel)) return json(res, 400, { error: 'only in-review specs can be reviewed' });
-    const slug = rel.split('/').pop();
-    const srcDir = safePath(ws, rel);
-    if (!srcDir || !isDir(srcDir)) return json(res, 404, { error: 'spec not in review' });
-    if (action === 'accept') {
-      const dest = safePath(ws, 'done/' + slug); if (!dest) return json(res, 400, { error: 'bad path' });
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.renameSync(srcDir, dest); setStatus(dest, 'done');
-      return json(res, 200, { ok: true, path: 'done/' + slug + '/' });
-    }
-    if (action === 'reject') {
-      const note = String(body.note || '').trim();
-      const dest = safePath(ws, 'in-progress/' + slug); if (!dest) return json(res, 400, { error: 'bad path' });
-      if (note) fs.appendFileSync(path.join(srcDir, 'NOTES.md'), `\n## ${isoDate()} — kicked back\n${note}\n`);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.renameSync(srcDir, dest); setStatus(dest, 'in-progress');
-      return json(res, 200, { ok: true, path: 'in-progress/' + slug + '/' });
-    }
-    return json(res, 400, { error: 'action must be accept or reject' });
-  }
-
-  if (pathname === '/api/note') {
-    // leave feedback on any spec, in any stage — appended to its NOTES.md so it travels with the spec.
-    // an optional `anchor` ties the note to a section of the spec (inline, PR-review style).
-    const rel = String(body.spec || '').replace(/\/$/, '');
-    const text = String(body.text || '').trim();
-    const anchor = String(body.anchor || '').replace(/\n/g, ' ').trim();
-    if (!text) return json(res, 400, { error: 'empty note' });
-    const dir = safePath(ws, rel);
-    if (!dir || !isDir(dir) || !fs.existsSync(path.join(dir, 'SPEC.md'))) return json(res, 404, { error: 'spec not found' });
-    const entry = `\n## ${isoDate()} — note\n` + (anchor ? `> on: ${anchor}\n` : '') + text + '\n';
-    fs.appendFileSync(path.join(dir, 'NOTES.md'), entry);
-    return json(res, 200, { ok: true });
-  }
-
-  return json(res, 404, { error: 'unknown endpoint' });
+function handlePost(pathname, body, res) {
+  const ws = listWorkspaces().find(w => w.name === body.ws);
+  if (!ws) return json(res, 404, { error: 'unknown workspace' });
+  const handler = ROUTES[pathname];
+  if (!handler) return json(res, 404, { error: 'unknown endpoint' });
+  return handler(ws, body, res);
 }
 
 server.listen(PORT, '127.0.0.1', () => {

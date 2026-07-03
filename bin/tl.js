@@ -20,46 +20,13 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const SKILLS = path.join(ROOT, 'skills');
 
-// ---------- tiny file helpers (mirrors ui/server.js) ----------
-
-function safeRead(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } }
-function readFirst(...paths) { for (const p of paths) { const t = safeRead(p); if (t !== null) return t; } return null; }
-function isDir(p) { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
-function mtime(p) { try { return fs.statSync(p).mtimeMs; } catch { return 0; } }
-
-// Frontmatter: split the leading --- YAML block from the body. We only need a
-// handful of scalar/list fields, so this is a deliberately small parser (not the
-// full YAML subset in ui/server.js — just enough for the fields the skills read).
-function parseFrontmatter(text) {
-  const m = String(text).match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!m) return { meta: {}, body: String(text) };
-  return { meta: parseMeta(m[1]), body: m[2] };
-}
-
-function parseMeta(yaml) {
-  const meta = {};
-  for (const raw of String(yaml).split('\n')) {
-    const line = raw.replace(/\s+$/, '');
-    const m = line.match(/^([\w][\w.-]*):\s*(.*)$/);
-    if (!m) continue;
-    meta[m[1]] = parseScalar(m[2]);
-  }
-  return meta;
-}
-
-function parseScalar(s) {
-  s = s.trim();
-  if (s === '' || s === '~' || s === 'null') return '';
-  if ((s[0] === '"' && s.endsWith('"')) || (s[0] === "'" && s.endsWith("'"))) return s.slice(1, -1);
-  if (s.startsWith('[') && s.endsWith(']')) {
-    const inner = s.slice(1, -1).trim();
-    if (!inner) return [];
-    return inner.split(',').map(x => parseScalar(x));
-  }
-  if (s === 'true') return true;
-  if (s === 'false') return false;
-  return s;
-}
+// Shared logic lives in lib/ so the CLI and ui/server.js can't drift into
+// separate copies of the parser, the batch rules, or the path guard.
+const { parseFrontmatter, parseYaml } = require('../lib/parse');
+const { safeRead, readFirst, isDir, mtime } = require('../lib/workspace');
+const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch } = require('../lib/batch');
+const { runFixtureExperiment } = require('../lib/experiment-fixture');
+const { execFileSync } = require('child_process');
 
 // ---------- workspace resolution (same convention as the skills) ----------
 
@@ -137,6 +104,44 @@ function readAllSpecs(dir) {
   return specs;
 }
 
+// Dirty paths in the TL repo itself — the uncommitted edits an agent may be
+// mid-flight on that no spec has declared yet. Repo-relative, matching how
+// `Files to touch` bullets are written, so they compare directly against a
+// ready spec's declared scope. Only consulted when the workspace's repo IS this
+// TL repo (the guard is about *this* checkout); returns [] if git is
+// unavailable, not a repo, or errors — never throws, never blocks a run.
+function dirtyGitPaths() {
+  try {
+    const raw = execFileSync('git', ['status', '--porcelain'], {
+      cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const paths = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      // porcelain: XY <path> (or `orig -> path` for renames). Take the dest.
+      let p = line.slice(3).trim();
+      const arrow = p.indexOf(' -> ');
+      if (arrow >= 0) p = p.slice(arrow + 4).trim();
+      if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+      if (p) paths.push(p);
+    }
+    return paths;
+  } catch { return []; }
+}
+
+// Does this workspace's `repo` frontmatter point at the current TL repo? Only
+// then do dirty git paths of THIS checkout belong in the conflict set. Best
+// effort: tolerate `~`, trailing slashes, and relative forms.
+function workspaceIsThisRepo(specs) {
+  const repoRef = specs.map(s => s.meta && s.meta.repo).find(Boolean);
+  if (!repoRef) return false;
+  let r = String(repoRef).trim().replace(/\/+$/, '');
+  if (r.startsWith('~')) r = path.join(process.env.HOME || '', r.slice(1));
+  try {
+    return path.resolve(r) === path.resolve(ROOT) || path.basename(path.resolve(r)) === path.basename(ROOT);
+  } catch { return false; }
+}
+
 function readThreads(dir) {
   const out = [];
   const threadsDir = path.join(dir, 'threads');
@@ -147,55 +152,6 @@ function readThreads(dir) {
     out.push({ path: 'threads/' + f, title: meta.title || f, meta, body });
   }
   return out;
-}
-
-// ---------- body section extraction ----------
-
-// Pull one markdown section by its heading (## Foo ... up to the next ## / ###).
-function section(body, heading) {
-  const lines = String(body).split('\n');
-  const norm = heading.toLowerCase();
-  let start = -1, hLevel = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^(#{2,6})\s+(.*)$/);
-    if (m && m[2].trim().toLowerCase().replace(/[:]+$/, '') === norm) { start = i + 1; hLevel = m[1].length; break; }
-  }
-  if (start < 0) return '';
-  const out = [];
-  for (let i = start; i < lines.length; i++) {
-    const m = lines[i].match(/^(#{2,6})\s+/);
-    if (m && m[1].length <= hLevel) break;
-    out.push(lines[i]);
-  }
-  return out.join('\n').trim();
-}
-
-// The declared write scope of a code spec — the `- \`path\`` list under
-// "### Files to touch". Undeclared scope => empty (can't be proven disjoint).
-function filesToTouch(spec) {
-  const scope = section(spec.body, 'Files to touch');
-  const files = [];
-  for (const line of scope.split('\n')) {
-    const m = line.match(/^\s*[-*]\s+`([^`]+)`/);
-    if (!m) continue;
-    // a single bullet may list several comma-separated paths
-    for (const part of m[1].split(',')) {
-      const f = part.trim();
-      if (f) files.push(f);
-    }
-  }
-  return files;
-}
-
-function isReadOnly(spec) {
-  const type = String(spec.meta.type || '').toLowerCase();
-  if (type === 'research') return true;
-  return filesToTouch(spec).length === 0 && !section(spec.body, 'Files to touch');
-}
-
-function priorityRank(p) {
-  const m = String(p || '').toLowerCase().match(/^p([0-3])$/);
-  return m ? Number(m[1]) : 9; // no priority sorts last
 }
 
 // ---------- SKILL printing ----------
@@ -289,23 +245,14 @@ function cmdResume(args) {
   out('The snapshot above is the deterministic read. Now follow the resume SKILL: report Status, Goal in focus, In focus, Open loops (cap 3), Backlog — for workspace "' + ws.name + '".');
 }
 
-// Best-effort: pull the highest-weight goal from TRIAGE.yml by scanning the
-// goals block. (The CLI stays thin; the agent reads the file properly.)
+// The highest-weight goal from TRIAGE.yml, read from the parsed structure (the
+// shared YAML parser) rather than line-scanning.
 function topGoal(triage) {
-  const lines = triage.split('\n');
-  const goals = [];
-  let cur = null;
-  for (const line of lines) {
-    const id = line.match(/^\s*-\s+id:\s*(.+)$/);
-    if (id) { cur = { id: parseScalar(id[1]), weight: 0, description: '' }; goals.push(cur); continue; }
-    if (!cur) continue;
-    const w = line.match(/^\s*weight:\s*([\d.]+)/);
-    if (w) cur.weight = Number(w[1]);
-    const d = line.match(/^\s*description:\s*(.+)$/);
-    if (d) cur.description = parseScalar(d[1]);
-  }
+  let cfg;
+  try { cfg = parseYaml(triage); } catch { return null; }
+  const goals = (cfg && Array.isArray(cfg.goals)) ? cfg.goals : [];
   if (!goals.length) return null;
-  return goals.sort((a, b) => b.weight - a.weight)[0];
+  return goals.slice().sort((a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0))[0];
 }
 
 // ---------- tl run ----------
@@ -324,7 +271,17 @@ function cmdRun(args) {
   printSkill('run');
 
   const specs = readAllSpecs(ws.dir);
-  const doneSet = new Set(specs.filter(s => s.stage === 'done').map(s => s.path));
+  // dependencies are matched by slug, so a dep `specs/foo/` is satisfied once
+  // foo is done (as `done/foo/`) — not by literal path.
+  const doneSlugs = new Set(specs.filter(s => s.stage === 'done').map(s => specSlug(s.path)));
+  // Active conflict set: files already locked by work underway — specs in
+  // in-progress/, tests/, in-review/ (their declared scope) plus the dirty git
+  // tree of THIS repo. A ready spec whose scope overlaps this is held back so a
+  // fresh run won't collide with an agent already mid-flight. This is a
+  // guardrail: it explains the conflict, it does not try to resolve it.
+  const activeSpecs = specs.filter(s => ['in-progress', 'tests', 'in-review'].includes(s.stage));
+  const dirty = workspaceIsThisRepo(specs) ? dirtyGitPaths() : [];
+  const active = activeConflicts(activeSpecs, dirty);
   const allReady = specs.filter(s => s.stage === 'ready');
   // agent routing: a spec's `agent:` (default `any`) must match the running agent's lane.
   const agentOf = s => (s.meta.agent || 'any').toLowerCase();
@@ -345,12 +302,25 @@ function cmdRun(args) {
   // If a spec is named, that's the batch (just it).
   let batch, held = [];
   if (named) {
-    const hit = ready.find(s => s.path === named || s.path === named + '/' || s.path.replace(/\/$/, '') === named.replace(/^specs\//, 'specs/').replace(/\/$/, '') || s.path.includes(named));
+    // match by slug exactly — `foo`, `specs/foo`, `specs/foo/` all name the same
+    // spec; no substring match (which would let `foo` also hit `foo-bar`).
+    const want = specSlug(named);
+    const hit = ready.find(s => specSlug(s.path) === want);
     if (!hit) fail(`Named spec "${named}" not found in ready/. Ready: ${ready.map(s => s.path).join(', ')}`);
+    // Even a named run refuses a spec whose write scope collides with active
+    // work — no override flag exists yet, so a conflict is a hard stop.
+    if (!isReadOnly(hit)) {
+      const files = filesToTouch(hit);
+      if (!files.length && active.codeActive) {
+        fail(`Named spec "${named}" has undeclared scope and code work is already active — declare its Files to touch or wait. Refusing to claim.`);
+      }
+      const clash = files.find(f => active.files.has(f));
+      if (clash) fail(`Named spec "${named}" conflicts with ${active.files.get(clash)} on ${clash}. Refusing to claim (no override).`);
+    }
     batch = [hit];
     held = ready.filter(s => s !== hit).map(s => ({ ...s, holdReason: 'not the named spec' }));
   } else {
-    ({ batch, held } = selectBatch(ready, doneSet));
+    ({ batch, held } = selectBatch(ready, doneSlugs, { active }));
   }
   held = held.concat(otherLane);  // specs in another agent's lane wait for that agent
 
@@ -385,42 +355,6 @@ function cmdRun(args) {
   out('The batch above is conflict-free and claimed-ready. Now follow the run SKILL: claim each spec ready → in-progress, do the work in scope, carry each to in-review (never done). Workspace "' + ws.name + '".');
 }
 
-// Largest conflict-free batch: read-only specs never conflict; code specs are
-// eligible only if their Files to touch are disjoint from every spec already in
-// the batch AND every depends_on is in done/. Prefer higher priority, then
-// oldest. Cap at ~4.
-function selectBatch(ready, doneSet) {
-  const CAP = 4;
-  const sorted = ready.slice().sort((a, b) =>
-    priorityRank(a.meta.priority) - priorityRank(b.meta.priority) || a.mtime - b.mtime);
-
-  const batch = [];
-  const claimed = new Set();   // files claimed by code specs in the batch
-  const held = [];
-
-  for (const s of sorted) {
-    if (batch.length >= CAP) { held.push({ ...s, holdReason: 'batch capped at ' + CAP }); continue; }
-
-    // dependencies must all be in done/
-    const deps = Array.isArray(s.meta.depends_on) ? s.meta.depends_on : (s.meta.depends_on ? [s.meta.depends_on] : []);
-    const unmet = deps.filter(d => d && !doneSet.has(d) && !doneSet.has(d.replace(/\/$/, '') + '/'));
-    if (unmet.length) { held.push({ ...s, holdReason: 'blocked on ' + unmet.join(', ') }); continue; }
-
-    if (isReadOnly(s)) { batch.push(s); continue; } // read-only never conflicts
-
-    const files = filesToTouch(s);
-    if (!files.length) {
-      // undeclared scope — can't prove disjoint; conflicts with all code specs
-      if (batch.some(b => !isReadOnly(b))) { held.push({ ...s, holdReason: 'undeclared scope — conflicts with code specs' }); continue; }
-      batch.push(s); files.forEach(f => claimed.add(f)); continue;
-    }
-    const collision = files.find(f => claimed.has(f));
-    if (collision) { held.push({ ...s, holdReason: 'file conflict on ' + collision }); continue; }
-    batch.push(s); files.forEach(f => claimed.add(f));
-  }
-  return { batch, held };
-}
-
 // ---------- tl review ----------
 
 function cmdReview(args) {
@@ -451,6 +385,156 @@ function cmdReview(args) {
 
   hr();
   out('For each spec: check the diff in its repo against the criteria, then accept (→ done/) or kick back (→ in-progress/ with a thread reason). Workspace "' + ws.name + '".');
+}
+
+// ---------- tl recall ----------
+
+// The intents/ corpus — human objectives, searched by recall.
+function readIntents(dir) {
+  const out = [];
+  const intentsDir = path.join(dir, 'intents');
+  if (!isDir(intentsDir)) return out;
+  for (const f of fs.readdirSync(intentsDir).sort()) {
+    if (!f.endsWith('.md') || f.startsWith('.')) continue;
+    const file = path.join(intentsDir, f);
+    const { meta, body } = parseFrontmatter(safeRead(file) || '');
+    out.push({ path: 'intents/' + f, title: meta.title || f, meta, body, mtime: mtime(file) });
+  }
+  return out;
+}
+
+// The done/*/outcome/ corpus — FEEDBACK.md + ALIGNMENT.md, where completed work
+// recorded what actually happened. One record per outcome file found.
+function readOutcomes(dir) {
+  const out = [];
+  const doneDir = path.join(dir, 'done');
+  if (!isDir(doneDir)) return out;
+  for (const slug of fs.readdirSync(doneDir).sort()) {
+    if (slug.startsWith('.')) continue;
+    const outcomeDir = path.join(doneDir, slug, 'outcome');
+    if (!isDir(outcomeDir)) continue;
+    for (const f of fs.readdirSync(outcomeDir).sort()) {
+      if (!f.endsWith('.md') || f.startsWith('.')) continue;
+      const file = path.join(outcomeDir, f);
+      const { meta, body } = parseFrontmatter(safeRead(file) || '');
+      out.push({
+        path: 'done/' + slug + '/outcome/' + f,
+        title: meta.title || (slug + ' — ' + f.replace(/\.md$/, '')),
+        meta, body, mtime: mtime(file),
+      });
+    }
+  }
+  return out;
+}
+
+// Score a corpus item against the query terms. Title/frontmatter hits weigh more
+// than body hits; a query term must appear somewhere or the item is dropped.
+// Returns { score, snippet } or null when nothing matches. Transparent and
+// case-insensitive — no fuzzy matching, no index.
+function scoreMatch(item, terms) {
+  const title = String(item.title || '').toLowerCase();
+  const front = JSON.stringify(item.meta || {}).toLowerCase();
+  const body = String(item.body || '').toLowerCase();
+  const head = title + '\n' + front;
+
+  let score = 0;
+  for (const t of terms) {
+    if (head.includes(t)) score += 3;      // title/frontmatter hit — highest signal
+    else if (body.includes(t)) score += 1; // body hit
+    else return null;                       // a term with no home anywhere → not a match
+  }
+  return { score, snippet: firstMatchSnippet(item.body, terms) };
+}
+
+// The first body line that contains any query term, trimmed to one line of
+// context — enough to answer without re-opening the file.
+function firstMatchSnippet(body, terms) {
+  for (const raw of String(body).split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const low = line.toLowerCase();
+    if (terms.some(t => low.includes(t))) {
+      return line.length > 160 ? line.slice(0, 157) + '…' : line;
+    }
+  }
+  return '';
+}
+
+// The kind bucket a match belongs to — decision / open thread / active spec /
+// done outcome / recommendation — best-effort from frontmatter + stage.
+function recallKind(item) {
+  const type = String(item.meta.type || '').toLowerCase();
+  const status = String(item.meta.status || '').toLowerCase();
+  if (item.path.startsWith('intents/')) return 'intent';
+  if (item.path.startsWith('done/') && item.path.includes('/outcome/')) return 'done outcome';
+  if (item.path.startsWith('threads/')) {
+    if (type === 'decision') return 'decision';
+    if (status === 'open' || status === 'parked' || type === 'question' || type === 'risk') return 'open thread';
+    return 'thread';
+  }
+  // a spec at some stage
+  if (item.stage === 'done') return type === 'research' ? 'recommendation' : 'done outcome';
+  if (type === 'research') return 'recommendation';
+  return 'ready / active spec';
+}
+
+function cmdRecall(args) {
+  const ws = resolveWorkspace(args[0]);
+  const query = args.slice(1).join(' ').trim();
+  printSkill('recall');
+
+  if (!query) {
+    out('\n===== RECALL: ' + ws.name + ' =====\n');
+    out('No query given. Usage: tl recall ' + ws.name + ' <query>');
+    hr();
+    return;
+  }
+
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+
+  // assemble the full corpus: intents, all spec stages, threads, done outcomes
+  const corpus = [];
+  for (const s of readAllSpecs(ws.dir)) corpus.push(s);
+  for (const t of readThreads(ws.dir)) corpus.push(t);
+  for (const i of readIntents(ws.dir)) corpus.push(i);
+  for (const o of readOutcomes(ws.dir)) corpus.push(o);
+
+  const hits = [];
+  for (const item of corpus) {
+    const m = scoreMatch(item, terms);
+    if (m) hits.push({ item, score: m.score, snippet: m.snippet, kind: recallKind(item) });
+  }
+  // rank: score first, then recency (newer wins ties)
+  hits.sort((a, b) => b.score - a.score || (b.item.mtime || 0) - (a.item.mtime || 0));
+
+  out('\n===== RECALL: ' + ws.name + ' — "' + query + '" =====\n');
+  if (!hits.length) {
+    out('No prior discussion found across intents, specs, threads, or done outcomes.');
+    hr();
+    out('recall found no prior art for "' + query + '" in workspace "' + ws.name + '". Answer: no — proceed, this looks new.');
+    return;
+  }
+
+  // group by kind, preserving the ranked order within each group
+  const order = ['decision', 'recommendation', 'done outcome', 'ready / active spec', 'open thread', 'intent', 'thread'];
+  const byKind = {};
+  for (const h of hits) (byKind[h.kind] = byKind[h.kind] || []).push(h);
+  const kinds = Object.keys(byKind).sort((a, b) => {
+    const ia = order.indexOf(a), ib = order.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+
+  out('## Matches (' + hits.length + ', grouped by kind)');
+  for (const kind of kinds) {
+    out('\n### ' + kind);
+    for (const h of byKind[kind]) {
+      out('- ' + h.item.title + ' (' + h.item.path + ') [score ' + h.score + ']');
+      if (h.snippet) out('    ↳ ' + h.snippet);
+    }
+  }
+
+  hr();
+  out('The matches above are the deterministic read across the workspace corpus. Now follow the recall SKILL: lead with have-we-discussed-this (yes / partially / no), summarize the prior discussion grouped by kind, and recommend the next action. Workspace "' + ws.name + '".');
 }
 
 // ---------- tl sync-rules ----------
@@ -677,25 +761,44 @@ function cmdSyncRules() {
   out('SKILL.md frontmatter is the single source of truth — re-run `tl sync-rules` after editing skills to refresh these.');
 }
 
+// ---------- tl experiment ----------
+
+function cmdExperiment(args) {
+  const [subcmd, ...rest] = args;
+  if (subcmd !== 'fixture') {
+    fail('Usage: tl experiment fixture [workspace]');
+  }
+  const ws = resolveWorkspace(rest[0]);
+  const result = runFixtureExperiment(ws.dir);
+  out('===== tl experiment fixture =====');
+  out(`workspace: ${ws.name}`);
+  out(`experiment: _experiments/${result.experimentId}/`);
+  out(`winner: ${result.winner}`);
+}
+
 // ---------- usage ----------
 
-function usage() {
-  out('tl — the throughline CLI');
-  out('');
-  out('Deterministic file work, then prints the matching SKILL as a prompt for the agent.');
-  out('');
-  out('Usage:');
-  out('  tl resume [workspace]           Reconstruct context — stage counts, ready top, open loops');
-  out('  tl run    [workspace] [spec]    Work the ready queue — pick the conflict-free batch (or a named spec)');
-  out('              [--agent <name>]    Only claim specs in this agent\'s lane (agent: <name> or any) — heterogeneous fan-out');
-  out('  tl review [workspace]           Sign off in-review work — criteria + feedback');
-  out('  tl sync-rules                   Regenerate the per-agent rules files from skills/*/SKILL.md');
-  out('');
-  out('Workspace: an argument names a workspace under projects/; if exactly one exists it is used;');
-  out('otherwise the available workspaces are listed.');
+function usage(stream) {
+  const w = s => (stream || process.stdout).write(s + '\n');
+  w('tl — the throughline CLI');
+  w('');
+  w('Deterministic file work, then prints the matching SKILL as a prompt for the agent.');
+  w('');
+  w('Usage:');
+  w('  tl resume [workspace]           Reconstruct context — stage counts, ready top, open loops');
+  w('  tl run    [workspace] [spec]    Work the ready queue — pick the conflict-free batch (or a named spec)');
+  w('              [--agent <name>]    Only claim specs in this agent\'s lane (agent: <name> or any) — heterogeneous fan-out');
+  w('  tl review [workspace]           Sign off in-review work — criteria + feedback');
+  w('  tl recall [workspace] <query>   Search intents/specs/threads/outcomes — "did we discuss this?"');
+  w('  tl experiment fixture [workspace]');
+  w('                                  Create a deterministic fixture experiment proof');
+  w('  tl sync-rules                   Regenerate the per-agent rules files from skills/*/SKILL.md');
+  w('');
+  w('Workspace: an argument names a workspace under projects/; if exactly one exists it is used;');
+  w('otherwise the available workspaces are listed.');
   const all = listWorkspaces();
-  out('');
-  out('Workspaces: ' + (all.map(w => w.name).join(', ') || '(none under projects/)'));
+  w('');
+  w('Workspaces: ' + (all.map(w2 => w2.name).join(', ') || '(none under projects/)'));
 }
 
 // ---------- dispatch ----------
@@ -706,6 +809,8 @@ function main() {
     case 'resume': return cmdResume(rest);
     case 'run': return cmdRun(rest);
     case 'review': return cmdReview(rest);
+    case 'recall': return cmdRecall(rest);
+    case 'experiment': return cmdExperiment(rest);
     case 'sync-rules': return cmdSyncRules();
     case undefined:
     case 'help':
@@ -713,8 +818,11 @@ function main() {
     case '--help':
       return usage();
     default:
-      out('tl: unknown command "' + cmd + '"\n');
-      return usage();
+      // an unknown command is an error — exit non-zero so automation and shell
+      // pipelines don't read a typo as success. Usage goes to stderr here.
+      process.stderr.write('tl: unknown command "' + cmd + '"\n\n');
+      usage(process.stderr);
+      process.exit(2);
   }
 }
 
