@@ -142,11 +142,12 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 #view-resume { min-height: calc(100vh - 49px); }
 .resume-shell { display: flex; min-height: calc(100vh - 49px - 33px); }
 .insights-rail {
-  display: none; width: 248px; flex-shrink: 0;
-  padding: 28px 20px 48px 28px; border-right: 1px solid var(--line);
+  display: none; width: 384px; flex-shrink: 0;
+  padding: 28px 26px 48px 28px; border-right: 1px solid var(--line);
   background: var(--surface);
   font-family: var(--mono); font-size: .66rem; color: var(--mid);
 }
+@media (max-width: 1000px) { body.m-human .insights-rail { width: 320px; } }
 body.m-human #view-resume { flex-direction: column; }
 body.m-human .resume-shell { width: 100%; }
 body.m-human .insights-rail { display: block; position: sticky; top: 0; align-self: flex-start; height: calc(100vh - 49px - 33px); overflow-y: auto; }
@@ -1176,6 +1177,11 @@ function renderInsightsRail(wss) {
 
   rail.innerHTML = `
     <div class="ins-block">
+      <span class="il">Experiments</span>
+      <p class="ins-sub">${esc(exLine)}</p>
+      ${latestHighlight}
+    </div>
+    <div class="ins-block">
       <span class="il">Agents running</span>
       <p class="ins-stat">${ins.active_agent_count || 0}</p>
       ${agentRows}
@@ -1193,12 +1199,7 @@ function renderInsightsRail(wss) {
       <span class="il">Top tools</span>
       ${toolRows}
     </div>
-    ${modelRows ? `<div class="ins-block"><span class="il">Models</span>${modelRows}</div>` : ''}
-    <div class="ins-block">
-      <span class="il">Experiments</span>
-      <p class="ins-sub">${esc(exLine)}</p>
-      ${latestHighlight}
-    </div>`;
+    ${modelRows ? `<div class="ins-block"><span class="il">Models</span>${modelRows}</div>` : ''}`;
 }
 
 function renderResume(wss) {
