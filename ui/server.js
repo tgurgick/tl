@@ -790,6 +790,18 @@ function hReview(ws, body, res) {
     if (note) fs.appendFileSync(path.join(srcDir, 'NOTES.md'), `\n## ${isoDate()} — kicked back\n${note}\n`);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.renameSync(srcDir, dest); setSpecStatus(dest, 'in-progress');
+    // continuation dispatch (contract in _templates/SCHEMA.md): a file trigger so
+    // the next `tl run` — or a scheduled headless session — resumes this spec
+    // without the human re-assembling context. Still files only, no execution.
+    const dispatchFile = safePath(ws, '_dispatch/' + slug + '.json');
+    if (dispatchFile) {
+      fs.mkdirSync(path.dirname(dispatchFile), { recursive: true });
+      fs.writeFileSync(dispatchFile, JSON.stringify({
+        spec: slug, mode: 'continuation', stage: 'in-progress',
+        notes_path: slug + '/NOTES.md', status: 'pending', created: isoDate(),
+        reason: note ? 'kicked back: ' + note.split('\n')[0].slice(0, 140) : 'kicked back',
+      }, null, 2) + '\n');
+    }
     return json(res, 200, { ok: true, path: 'in-progress/' + slug + '/' });
   }
   return json(res, 400, { error: 'action must be accept or reject' });

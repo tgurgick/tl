@@ -16,6 +16,7 @@ A spec's lifecycle stage is its folder, inside a workspace (`projects/<name>/`):
 | `in-review/` | Tests green, awaiting human sign-off — the human gate, has `outcome/FEEDBACK.md` |
 | `done/` | Reviewed and accepted |
 | `threads/` | Anything worth remembering that isn't active work |
+| `_dispatch/` | Continuation triggers — one JSON file per kicked-back/mid-flight spec awaiting resume (see below) |
 
 If `status` and folder disagree, the folder wins; skills fix the field to match.
 
@@ -344,4 +345,26 @@ Experiment logs are append-only JSONL under `_metrics/`. Markdown artifacts expl
 
 ## Spec notes (`<stage>/<slug>/NOTES.md`, optional)
 
-Append-only human feedback on a spec, left from the cockpit while work is in flight. Each note is a small dated section (`## YYYY-MM-DD — note`, or `— kicked back` for a review rejection). The file lives in the spec's own folder, so it travels with the spec through every stage. `/tl run` reads it as binding context (treat it like the acceptance criteria); `/tl review` surfaces it. There is no queue — the `ready/` stage **is** the queue, the stage folders **are** the status, and the cockpit's write actions are review (accept / kick back) and notes, not dispatch.
+Append-only human feedback on a spec, left from the cockpit while work is in flight. Each note is a small dated section (`## YYYY-MM-DD — note`, or `— kicked back` for a review rejection). The file lives in the spec's own folder, so it travels with the spec through every stage. `/tl run` reads it as binding context (treat it like the acceptance criteria); `/tl review` surfaces it. There is no queue for *new* work — the `ready/` stage **is** the queue, the stage folders **are** the status, and the cockpit's write actions are review (accept / kick back) and notes. The one dispatch artifact that exists is the **continuation** trigger a kickback leaves behind (next section): it resumes already-claimed work, it never starts fresh work.
+
+## Continuation dispatches (`_dispatch/<slug>.json`)
+
+The continuation half of dispatch. When work moves *backwards* (`in-review/ → in-progress/` on a kickback) or is left mid-flight with binding `NOTES.md`, the kickback writes a small JSON trigger so the next `/tl run` — including a scheduled headless session — resumes that spec without a human re-assembling context. Files only; no server-side execution.
+
+```json
+{
+  "spec": "<slug>",
+  "mode": "continuation",
+  "stage": "in-progress",
+  "notes_path": "<slug>/NOTES.md",
+  "status": "pending",
+  "created": "YYYY-MM-DD",
+  "reason": "kicked back: <first line of the note>"
+}
+```
+
+- `mode` is always `"continuation"` — fresh ready work is claimed from `specs/` directly, never via `_dispatch/`.
+- `stage` names the folder the spec now sits in (`in-progress`, or `tests` for a blocked tests-gate handoff); `notes_path` is relative to that stage folder.
+- `status` lifecycle: `pending → claimed → done|failed`. The resuming agent flips it to `claimed` before working, `done` when the spec reaches `in-review/`, `failed` if it ends blocked. Transitions only — never delete the file; `_dispatch/` stays auditable.
+- Idempotent: re-writing the same pending file (a second kickback before anyone resumed) is fine — one file per slug.
+- `/tl run` prefers pending continuations over fresh ready claims: the run banner surfaces the spec and its `NOTES.md` excerpt, and ready specs wait for the next run. A pending continuation whose spec is no longer in `in-progress/` or `tests/` is stale — mark it `done` (accepted meanwhile) or `failed`.

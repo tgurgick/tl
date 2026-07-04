@@ -142,6 +142,50 @@ function workspaceIsThisRepo(specs) {
   } catch { return false; }
 }
 
+// ---------- continuation dispatches (_dispatch/<slug>.json) ----------
+
+// The continuation half of dispatch (contract in _templates/SCHEMA.md): a
+// kickback leaves `_dispatch/<slug>.json` with mode "continuation" and status
+// "pending" so the next run resumes the claimed spec before touching the ready
+// queue. `live` pairs each pending trigger with its in-progress/tests spec;
+// `stale` collects pending triggers whose spec is no longer active (accepted or
+// removed meanwhile) — surfaced so they get marked done/failed, never deleted.
+function readContinuations(dir, specs) {
+  const dDir = path.join(dir, '_dispatch');
+  const live = [], stale = [];
+  if (!isDir(dDir)) return { live, stale };
+  for (const f of fs.readdirSync(dDir).sort()) {
+    if (!f.endsWith('.json') || f.startsWith('.')) continue;
+    let d = null;
+    try { d = JSON.parse(safeRead(path.join(dDir, f)) || ''); } catch {
+      // unparseable is a failure to surface, not to swallow — a corrupt trigger
+      // would otherwise silently never fire.
+      stale.push({ file: '_dispatch/' + f, slug: f.replace(/\.json$/, ''), note: 'unparseable JSON — fix it or mark it failed' });
+      continue;
+    }
+    if (!d || d.mode !== 'continuation' || d.status !== 'pending') continue;
+    const slug = specSlug(d.spec || f.replace(/\.json$/, ''));
+    const spec = specs.find(s => (s.stage === 'in-progress' || s.stage === 'tests') && specSlug(s.path) === slug);
+    if (spec) live.push({ file: '_dispatch/' + f, dispatch: d, spec });
+    else stale.push({ file: '_dispatch/' + f, slug, note: 'no matching in-progress/tests spec — mark it done (accepted meanwhile) or failed; do not delete' });
+  }
+  return { live, stale };
+}
+
+// The tail of NOTES.md — the most recent `## …` section (a kickback note is
+// appended last), capped so the run banner stays a banner.
+function notesExcerpt(notes, maxLines = 8) {
+  if (!notes || !notes.trim()) return '(no NOTES.md — resume from SPEC.md and outcome/)';
+  const lines = notes.trim().split('\n');
+  let start = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^##\s/.test(lines[i])) { start = i; break; }
+  }
+  const excerpt = lines.slice(start, start + maxLines);
+  if (start + maxLines < lines.length) excerpt.push('…');
+  return excerpt.join('\n');
+}
+
 function readThreads(dir) {
   const out = [];
   const threadsDir = path.join(dir, 'threads');
@@ -290,6 +334,38 @@ function cmdRun(args) {
     .map(s => ({ ...s, holdReason: 'assigned to agent "' + agentOf(s) + '"' })) : [];
 
   out('\n===== RUN BRIEF: ' + ws.name + (agent ? ' (agent lane: ' + agent + ')' : '') + ' =====\n');
+
+  // Continuation dispatches outrank fresh claims: kicked-back / mid-flight work
+  // resumes before anything new is started (skills/run step 0). The ready queue
+  // waits for the next run; its specs are listed as held, not claimed.
+  const conts = readContinuations(ws.dir, specs);
+  if (conts.stale.length) {
+    out('## Stale continuation dispatches');
+    for (const c of conts.stale) {
+      out(`- ${c.file} → "${c.slug}" — ${c.note}.`);
+    }
+    out('');
+  }
+  if (conts.live.length && named) {
+    // a named run is an explicit human choice — surface the pending resume, honor the name.
+    out('Note: ' + conts.live.length + ' pending continuation dispatch(es) — kicked-back work is waiting (resume it first unless this named run is intentional).\n');
+  }
+  if (conts.live.length && !named) {
+    out('## Continuation dispatches — resume these before fresh claims (' + conts.live.length + ')');
+    for (const c of conts.live) {
+      out(`\n### ${c.spec.title}  (${c.spec.path}) [${c.file}]`);
+      if (c.dispatch.reason) out('Reason: ' + c.dispatch.reason);
+      out('**NOTES.md excerpt (binding — read the full file first)**');
+      out(notesExcerpt(c.spec.notes));
+    }
+    if (ready.length) {
+      out('\n## Held back for the next run');
+      for (const s of ready) out(`- ${s.title} (${s.path}) — continuation pending, resume in-progress work first`);
+    }
+    hr();
+    out('Follow run SKILL step 0: flip each dispatch to "claimed", read NOTES.md then SPEC.md, and continue the spec from its current folder — never claim fresh ready work while a continuation is pending. Workspace "' + ws.name + '".');
+    return;
+  }
 
   if (!ready.length) {
     out(agent

@@ -25,7 +25,7 @@ Same as `/tl triage`. Read the `in-review/` stage; if it's empty, say so and sto
 
 **3. Make the call** — present each spec with a recommendation, and let the human choose:
 - **Accept** → move `in-review/<slug>/` → `done/<slug>/`, set `status: done`. The throughline is complete.
-- **Kick back** → move `in-review/<slug>/` → `in-progress/<slug>/`, set `status: in-progress`, append the reason to the spec's **`NOTES.md`** (`## YYYY-MM-DD — kicked back`), and **capture a thread** (`../capture/SKILL.md`) with the same reason — so the next `/tl resume` or `/tl run` surfaces it immediately. Never kick back without a written reason on the spec itself.
+- **Kick back** → move `in-review/<slug>/` → `in-progress/<slug>/`, set `status: in-progress`, append the reason to the spec's **`NOTES.md`** (`## YYYY-MM-DD — kicked back`), **write a continuation dispatch** `_dispatch/<slug>.json` (`mode: "continuation"`, `stage: "in-progress"`, `notes_path: "<slug>/NOTES.md"`, `status: "pending"` — contract in `_templates/SCHEMA.md`; re-writing an existing pending file is fine), and **capture a thread** (`../capture/SKILL.md`) with the same reason — so the next `/tl resume` or `/tl run` picks it up programmatically, no human context re-assembly. Never kick back without a written reason on the spec itself.
 
 **4. Report — the ledger.** What you accepted, what you kicked back (with the reason), and what's left in the queue.
 

@@ -17,7 +17,7 @@ Same as `/tl triage`: the argument is a workspace name under `projects/` or a pa
 
 ## 0. Resume in-progress first (when applicable)
 
-Before claiming from `ready/`, check `in-progress/` for work already claimed — especially specs with **`NOTES.md`** (human kickback from `/tl review` or cockpit mid-flight feedback). If the human or a dispatch continuation points at an in-progress spec, **read `NOTES.md` first** (binding), then `SPEC.md`, then any existing `outcome/` artifacts. Continue that spec's procedure from its current folder (`in-progress/` or `tests/`) rather than claiming fresh ready work. A kickback note in `NOTES.md` outranks stale `FEEDBACK.md` claims.
+Before claiming from `ready/`, check for work already claimed — the **programmatic trigger is `_dispatch/<slug>.json`** with `"mode": "continuation"` and `"status": "pending"` (written by a `/tl review` or cockpit kickback; contract in `_templates/SCHEMA.md`), alongside the `in-progress/` folder itself and its **`NOTES.md`**. Folder + NOTES + dispatch together are the resume signal; any one of them pointing at an in-progress spec is enough. To resume: flip the dispatch's `status` to `claimed`, **read `NOTES.md` first** (binding), then `SPEC.md`, then any existing `outcome/` artifacts, and continue that spec's procedure from its current folder (`in-progress/` or `tests/`) rather than claiming fresh ready work. When the spec reaches `in-review/`, set the dispatch `status: done` (`failed` if it ends blocked) — transition it, never delete it. A kickback note in `NOTES.md` outranks stale `FEEDBACK.md` claims. A pending dispatch whose spec is no longer in `in-progress/` or `tests/` is stale — mark it `done` or `failed` and move on.
 
 ## 1. Select the batch
 

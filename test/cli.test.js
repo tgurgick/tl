@@ -75,6 +75,63 @@ test('run: named spec conflicting with active work is refused (non-zero)', () =>
   });
 });
 
+// Write extra workspace files (NOTES.md, _dispatch/*.json) that the scaffold
+// doesn't cover; paths are relative to the workspace dir.
+function writeWorkspaceFile(name, rel, content) {
+  const f = path.join(ROOT, 'projects', name, rel);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, content);
+}
+
+test('run: pending continuation dispatch resumes in-progress work, holds all ready claims', () => {
+  withWorkspace([
+    { slug: 'kicked-one', stage: 'in-progress', files: ['src/a.js'] },
+    { slug: 'ready-conflict', stage: 'ready', files: ['src/a.js'] },
+    { slug: 'ready-free', stage: 'ready', files: ['src/b.js'] },
+  ], name => {
+    writeWorkspaceFile(name, 'in-progress/kicked-one/NOTES.md',
+      '## 2026-07-03 — kicked back\nFix the header casing before resubmitting.\n');
+    writeWorkspaceFile(name, '_dispatch/kicked-one.json', JSON.stringify({
+      spec: 'kicked-one', mode: 'continuation', stage: 'in-progress',
+      notes_path: 'kicked-one/NOTES.md', status: 'pending', created: '2026-07-03',
+      reason: 'kicked back: fix the header casing',
+    }));
+    const r = run('run', name);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /Continuation dispatches — resume these before fresh claims \(1\)/);
+    assert.match(r.stdout, /kicked-one\s+\(in-progress\/kicked-one\/\) \[_dispatch\/kicked-one\.json\]/);
+    // the NOTES.md kickback excerpt is in the run banner
+    assert.match(r.stdout, /Fix the header casing/);
+    // no fresh claim — conflicting AND disjoint ready specs both wait
+    assert.doesNotMatch(r.stdout, /Selected batch/);
+    assert.match(r.stdout, /ready-conflict.*continuation pending/);
+    assert.match(r.stdout, /ready-free.*continuation pending/);
+  });
+});
+
+test('run: stale or non-pending dispatches do not block the ready queue', () => {
+  withWorkspace([
+    { slug: 'ready-four', stage: 'ready', files: ['src/c.js'] },
+  ], name => {
+    // stale: pending but its spec is not in in-progress/ or tests/
+    writeWorkspaceFile(name, '_dispatch/gone-spec.json', JSON.stringify({
+      spec: 'gone-spec', mode: 'continuation', stage: 'in-progress', status: 'pending',
+    }));
+    // settled: claimed dispatches are no longer triggers
+    writeWorkspaceFile(name, '_dispatch/old-claim.json', JSON.stringify({
+      spec: 'old-claim', mode: 'continuation', stage: 'in-progress', status: 'claimed',
+    }));
+    const r = run('run', name);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /Stale continuation dispatches/);
+    assert.match(r.stdout, /gone-spec.*mark it done/);
+    assert.doesNotMatch(r.stdout, /old-claim/);
+    // the ready queue still runs
+    assert.match(r.stdout, /Selected batch \(1\)/);
+    assert.match(r.stdout, /ready-four/);
+  });
+});
+
 test('run: a disjoint ready spec still runs alongside active work', () => {
   withWorkspace([
     { slug: 'active-three', stage: 'in-progress', files: ['src/locked.js'] },
