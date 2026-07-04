@@ -21,7 +21,6 @@ Everything the tool needs to run, and nothing about any particular project.
 | `skills/` | The verbs: new, resume, capture, promote, groom, decompose, run, review, map, triage, reflect, dedup, bug-capture, goal, ui |
 | `_templates/` | `SCHEMA.md` (the frontmatter contract), `intent.md`, `spec/`, `thread.md`, `bug.md`, `FEEDBACK.md` |
 | `_patterns/` | `PATTERNS.md` — the spec-authoring guide |
-| `examples/sample-project/` | A populated workspace to copy from — synthetic, no real work |
 | `ui/` | The local cockpit — zero-dependency node, Human / Split / Agent |
 | `bin/tl.js` | The CLI — deterministic file work, then prints the matching SKILL as a prompt |
 | `AGENTS.md` | Standing instructions for any coding agent (Codex, Cursor, Gemini, Claude) — the cross-agent contract |
@@ -53,7 +52,7 @@ One line does the enforcement:
 /projects/
 ```
 
-The whole `projects/` tree is untracked. You can clone the public repo, create workspaces under `projects/`, and commit tool changes without ever risking a workspace leak — git simply doesn't see them. `examples/sample-project/` lives *outside* `projects/` on purpose: it's a synthetic workspace that ships with the tool as a worked example, so it's committed while every real workspace is not.
+The whole `projects/` tree is untracked. You can clone the public repo, create workspaces under `projects/`, and commit tool changes without ever risking a workspace leak — git simply doesn't see them.
 
 This is the calm version of a hard rule: there's no allowlist to maintain and no per-file decision at commit time. Private-by-default, one glob.
 

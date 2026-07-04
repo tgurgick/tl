@@ -5,7 +5,7 @@ description: Guided setup of a new tl project workspace — interviews for goals
 
 # /tl new
 
-Creates a working workspace through a short interview. Generate real content from the user's answers — never copy the sample project's content, only its shape.
+Creates a working workspace through a short interview. Generate real content from the user's answers — the templates provide the shape, the interview provides the substance.
 
 Templates referenced below live in `_templates/`, resolved relative to this skill file (`../../_templates/`) — that path holds in a clone and in a plugin install.
 

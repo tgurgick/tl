@@ -55,7 +55,6 @@ throughline/                    # the tool (this repo, public)
 ├── skills/                     # /tl new, resume, capture, promote, groom, decompose, run, review, recall, map, triage, reflect, dedup, bug-capture, goal, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
-├── examples/sample-project/    # a populated workspace to copy from
 ├── ui/                         # local web UI — Human / Split / Agent (zero-dep node)
 ├── docs/                       # design process docs
 │   ├── agent-experiments.md    # portable task/candidate/judge model + TL mapping
@@ -76,7 +75,7 @@ throughline/                    # the tool (this repo, public)
         └── _metrics/           # JSONL logs from skill runs
 ```
 
-To start a new workspace, run `/tl:new` for a guided setup — or copy `examples/sample-project/` into `projects/<name>/` and edit `TRIAGE.yml` by hand. The frontmatter contract every file follows is `_templates/SCHEMA.md`.
+To start a new workspace, run `/tl:new` for a guided setup — or scaffold `projects/<name>/` by hand from the templates in `_templates/` and edit `TRIAGE.yml` directly. The frontmatter contract every file follows is `_templates/SCHEMA.md`.
 
 **Naming convention:** ALL-CAPS files are tl's — fixed names, one per location (`SPEC.md`, `PROJECT.md`, `TRIAGE.yml`, `PRIORITIES.md`, `FEEDBACK.md`, `EXPERIMENT.md`). Lowercase files are yours — you name them (intents, threads, context docs). Machine logs (`_metrics/*.jsonl`) stay lowercase; they're data, not documents.
 
@@ -105,7 +104,7 @@ specs/signup-apple-auth/
 
 SPEC.md references shared docs in the project repo by path (e.g. "see ARCHITECTURE.md, Stack Decisions section"). The `context/` folder holds only things the agent can't get from the repo: crash logs, pattern excerpts, third-party API formats.
 
-Templates: `_templates/spec/` (spec folder), `_templates/intent.md`, `_templates/thread.md`, `_templates/bug.md`. Field definitions: `_templates/SCHEMA.md`. A fully worked example: `examples/sample-project/`.
+Templates: `_templates/spec/` (spec folder), `_templates/intent.md`, `_templates/thread.md`, `_templates/bug.md`. Field definitions: `_templates/SCHEMA.md`.
 
 ## The config: TRIAGE.yml
 

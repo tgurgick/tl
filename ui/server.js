@@ -38,8 +38,6 @@ function listWorkspaces() {
       if (isDir(path.join(projects, name))) out.push({ name, dir: path.join(projects, name), example: false });
     }
   }
-  const sample = path.join(ROOT, 'examples', 'sample-project');
-  if (isDir(sample)) out.push({ name: 'sample-project', dir: sample, example: true });
   return out;
 }
 
@@ -492,7 +490,6 @@ watchTree(path.join(ROOT, 'projects'), rel => {
   const ix = rel.indexOf('/');
   return ix < 0 ? { name: rel, rel: '' } : { name: rel.slice(0, ix), rel: rel.slice(ix + 1) };
 });
-watchTree(path.join(ROOT, 'examples', 'sample-project'), rel => ({ name: 'sample-project', rel }));
 primeSnapshots();
 
 // ---------- http ----------
