@@ -56,25 +56,65 @@ body {
 }
 a { color: inherit; }
 
-/* modes: human · split · agent · experiments */
-.stage { display: flex; height: calc(100vh - 49px); }
+/* modes: sliding workspace — human · split · agent · split-exp · experiments */
+.stage { display: flex; height: calc(100vh - 49px); overflow: hidden; background: var(--bg); transition: background .2s ease; }
+/* dark backdrop behind the agent-side panes so a sliding/fading dark pane never
+   reveals the light body background (the white flash between Agent ↔ Experiments) */
+body.m-agent .stage, body.m-split-exp .stage, body.m-experiments .stage { background: #1c1916; }
 .pane { min-width: 0; }
 .human { overflow-y: auto; }
 .agent { display: flex; flex-direction: column; overflow: hidden; }
-/* #view-live and #view-experiments both carry .agent (dark theme); only the
-   active mode's pane shows. Experiments is its own top-level mode. */
-#view-experiments { display: none; }
-body.m-human #view-resume, body.m-agent #view-live, body.m-experiments #view-experiments { display: flex; }
-body.m-human #view-live, body.m-human #view-experiments,
-body.m-agent #view-resume, body.m-agent #view-experiments,
-body.m-experiments #view-resume, body.m-experiments #view-live,
-body.m-split #view-experiments { display: none; }
-body.m-experiments #view-experiments { flex: 1 1 100%; }
-body.m-human .human, body.m-agent .agent { flex: 1 1 100%; }
-body.m-split .human { flex: 0 0 384px; border-right: 1px solid var(--line2); }
-body.m-split .agent { flex: 1 1 auto; }
-body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
-@media (max-width: 1000px) { body.m-split .human { flex-basis: 320px; } }
+#view-resume,
+#view-live,
+#view-experiments {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  transition:
+    flex-basis 0.34s cubic-bezier(.25,.8,.25,1),
+    max-width 0.34s cubic-bezier(.25,.8,.25,1),
+    opacity 0.26s ease,
+    transform 0.34s cubic-bezier(.25,.8,.25,1);
+}
+#view-resume { flex: 1 1 auto; max-width: 100%; opacity: 1; transform: none; }
+#view-live, #view-experiments { flex: 0 0 0; max-width: 0; opacity: 0; pointer-events: none; transform: translateX(10px); }
+
+body.m-human #view-resume { flex: 1 1 100%; max-width: 100%; opacity: 1; pointer-events: auto; transform: none; }
+body.m-human #view-live, body.m-human #view-experiments { flex: 0 0 0; max-width: 0; opacity: 0; pointer-events: none; }
+
+body.m-split #view-resume { flex: 0 0 384px; max-width: 384px; opacity: 1; pointer-events: auto; transform: none; border-right: 1px solid var(--line2); }
+body.m-split #view-live { flex: 1 1 auto; max-width: none; opacity: 1; pointer-events: auto; transform: none; }
+body.m-split #view-experiments { flex: 0 0 0; max-width: 0; opacity: 0; pointer-events: none; }
+
+body.m-agent #view-resume { flex: 0 0 0; max-width: 0; opacity: 0; pointer-events: none; transform: translateX(-14px); }
+body.m-agent #view-live { flex: 1 1 100%; max-width: 100%; opacity: 1; pointer-events: auto; transform: none; }
+body.m-agent #view-experiments { flex: 0 0 0; max-width: 0; opacity: 0; pointer-events: none; }
+
+body.m-split-exp #view-resume { flex: 0 0 0; max-width: 0; opacity: 0; pointer-events: none; transform: translateX(-14px); }
+body.m-split-exp #view-live { flex: 1 1 auto; max-width: none; opacity: 1; pointer-events: auto; transform: none; }
+body.m-split-exp #view-experiments { flex: 0 0 30%; max-width: none; opacity: 1; pointer-events: auto; transform: none; border-left: 1px solid var(--line2); }
+/* narrow experiments (split-exp): drop the queue list, let the detail take the
+   full column and stack its sections so it scrolls instead of cramping */
+body.m-split-exp .exp-queue { display: none; }
+body.m-split-exp .exp-cards { grid-template-columns: 1fr; }
+body.m-split-exp .exp-diffs { flex-direction: column; overflow-x: hidden; }
+body.m-split-exp .exp-diff-col { min-width: 0; }
+
+body.m-experiments #view-resume { flex: 0 0 0; max-width: 0; opacity: 0; pointer-events: none; transform: translateX(-14px); }
+/* the agent pane is an unchanging flex-grow filler (identical flex in both states, so
+   nothing about it snaps) and only experiments' flex-basis animates, 30%->100% — a
+   pure %->% interpolation. the filler tracks 100%-experiments each frame, so there is
+   no dark void. experiments is the last flex child, so its right edge stays pinned and
+   it sweeps open right→left. */
+body.m-experiments #view-live { flex: 1 1 auto; max-width: none; opacity: 0; pointer-events: none; transform: translateX(-14px); }
+body.m-experiments #view-experiments { flex: 0 0 100%; max-width: none; opacity: 1; pointer-events: auto; transform: none; }
+
+@media (max-width: 1000px) {
+  body.m-split #view-resume { flex-basis: 320px; max-width: 320px; }
+  body.m-split-exp #view-experiments { flex-basis: 38%; }
+}
 .mono { font-family: var(--mono); }
 
 @keyframes tl-pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
@@ -89,7 +129,6 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
   background: color-mix(in srgb, var(--bg) 94%, transparent);
   backdrop-filter: blur(8px);
 }
-.bar .tab[data-view="split"] .live-dot { display: none; }
 .bar .word { display: flex; align-items: center; gap: 10px; font-family: var(--mono); }
 .bar .tlmark { font-size: .78rem; color: var(--ink); letter-spacing: -.01em; }
 .bar .sep { color: var(--faint); }
@@ -104,17 +143,15 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
   color: var(--dim); background: transparent; border: none; border-radius: 3px;
   padding: 5px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px;
 }
+.bar .tab[data-view="split"], .bar .tab[data-view="split-exp"] { min-width: 30px; justify-content: center; padding-inline: 8px; font-size: .82rem; color: var(--faint); }
+.bar .tab[data-view="split"]:hover, .bar .tab[data-view="split-exp"]:hover { color: var(--dim); }
+.bar .tab[data-view="split"].active, .bar .tab[data-view="split-exp"].active { color: var(--dim); }
 .bar .tab:hover { color: var(--ink); }
 .bar .tab.active { color: var(--ink); background: rgba(127,127,127,.12); }
-/* tab activity dots — same size/spacing (the tab's flex gap handles it), dim when
-   idle, pulse only when there's activity on that tab. Agent = green (agents
-   working); Experiments = orange (a test running / moving in shadow). */
-.bar .tab .live-dot, .bar .tab .exp-live { width: 6px; height: 6px; border-radius: 50%; opacity: .3; }
+/* tab activity dot — hidden unless agents are actively working, then it pulses. */
+.bar .tab .live-dot { width: 6px; height: 6px; border-radius: 50%; display: none; }
 .bar .tab .live-dot { background: #34d399; }
-.bar .tab .exp-live { background: var(--accent); }
-.bar .tab .live-dot.on, .bar .tab .exp-live.on { opacity: 1; animation: tl-pulse 2s infinite; }
-.bar .tab .dotn { display: none; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
-.bar .tab.unseen .dotn { display: inline-block; }
+.bar .tab .live-dot.on { display: inline-block; animation: tl-pulse 2s infinite; }
 
 /* project picker */
 .msel { position: relative; }
@@ -146,15 +183,19 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
   padding: 28px 26px 48px 28px; border-right: 1px solid var(--line);
   background: var(--surface);
   font-family: var(--mono); font-size: .66rem; color: var(--mid);
+  transition: width 0.34s cubic-bezier(.25,.8,.25,1), opacity 0.24s ease, padding 0.34s ease, border-color 0.24s;
+  overflow: hidden;
 }
 @media (max-width: 1000px) { body.m-human .insights-rail { width: 320px; } }
 body.m-human #view-resume { flex-direction: column; }
-body.m-human .resume-shell { width: 100%; }
+body.m-human .resume-shell { width: 100%; display: flex; }
 body.m-human .insights-rail { display: block; position: sticky; top: 0; align-self: flex-start; height: calc(100vh - 49px - 33px); overflow-y: auto; }
 body.m-human .datestrip > div { max-width: none; margin: 0; padding: 8px 32px; }
 body.m-human .paper { flex: 1 1 auto; max-width: 60rem; margin: 0; padding: 40px 52px 80px; }
+body.m-split #view-resume { flex-direction: column; }
 body.m-split .resume-shell { display: block; }
-body.m-split .insights-rail { display: none !important; }
+body.m-split .insights-rail { width: 0; opacity: 0; padding-left: 0; padding-right: 0; border-color: transparent; pointer-events: none; }
+body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .ins-block + .ins-block { margin-top: 1.35rem; padding-top: 1.1rem; border-top: 1px solid var(--line); }
 .ins-block .il { display: block; font-size: .58rem; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
 .ins-stat { font-size: 1.35rem; color: var(--ink); line-height: 1.1; margin: 0 0 2px; font-weight: 500; }
@@ -450,16 +491,28 @@ body.m-split .insights-rail { display: none !important; }
 .cmt { color: var(--faint); }
 .vpane .empty-state { padding: 30px; font-family: var(--mono); font-size: .65rem; color: var(--faint); }
 
-/* drawer */
-.scrim { position: fixed; inset: 0; background: rgba(10,9,8,.35); opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 40; }
+/* detail modal (was right drawer) */
+.scrim { position: fixed; inset: 0; background: rgba(10,9,8,.42); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40; }
 .drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 92vw); z-index: 41;
-  background: var(--bg); border-left: 1px solid var(--line2);
-  transform: translateX(102%); transition: transform .22s cubic-bezier(.3,.8,.3,1);
-  overflow-y: auto; padding: 30px 34px 60px;
+  position: fixed; left: 50%; top: 50%; right: auto; bottom: auto; z-index: 41;
+  width: min(720px, calc(100vw - 40px));
+  max-height: min(86vh, calc(100vh - 80px));
+  background: var(--bg); border: 1px solid var(--line2); border-radius: 8px;
+  box-shadow: 0 28px 72px rgba(0,0,0,.22);
+  transform: translate(-50%, -46%) scale(.97);
+  transition: transform .22s cubic-bezier(.3,.8,.3,1), opacity .18s;
+  opacity: 0;
+  overflow-y: auto; padding: 34px 38px 52px;
 }
 .open .scrim { opacity: 1; pointer-events: auto; }
-.open .drawer { transform: none; }
+.open .drawer { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+.dr-close {
+  position: absolute; top: 12px; right: 14px; z-index: 2;
+  font-family: var(--mono); font-size: 1.1rem; line-height: 1;
+  color: var(--dim); background: transparent; border: none; border-radius: 4px;
+  width: 28px; height: 28px; cursor: pointer;
+}
+.dr-close:hover { color: var(--ink); background: var(--surface); }
 .drawer .path { font-family: var(--mono); font-size: .62rem; color: var(--faint); margin-bottom: 10px; }
 .drawer h2 { font-family: var(--serif); font-size: 1.25rem; font-weight: 500; margin-bottom: 14px; }
 .drawer .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px; }
@@ -635,9 +688,10 @@ body.m-split .insights-rail { display: none !important; }
   </div>
   <nav>
     <button class="tab active" data-view="human">Human</button>
-    <button class="tab" data-view="split">Split</button>
-    <button class="tab" data-view="agent" id="liveTab"><span class="live-dot"></span>Agent<span class="dotn"></span></button>
-    <button class="tab" data-view="experiments" id="expTab"><span class="exp-live" title="an experiment is running"></span>Experiments</button>
+    <button class="tab" data-view="split" aria-label="Split: Human + Agent" title="Split: Human + Agent">|</button>
+    <button class="tab" data-view="agent" id="liveTab"><span class="live-dot"></span>Agent</button>
+    <button class="tab" data-view="split-exp" aria-label="Split: Agent + Experiments" title="Split: Agent + Experiments">|</button>
+    <button class="tab" data-view="experiments" id="expTab">Experiments</button>
   </nav>
 </header>
 
@@ -682,7 +736,7 @@ body.m-split .insights-rail { display: none !important; }
 </div>
 
 <div class="scrim" id="scrim"></div>
-<aside class="drawer" id="drawer" aria-label="Detail"></aside>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Detail"></aside>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -859,6 +913,7 @@ function openDrawer(item) {
   }
   const decideHtml = decideBtns ? `<div class="dr-decide">${decideBtns}</div>` : '';
   $('drawer').innerHTML = `
+    <button type="button" class="dr-close" aria-label="Close">×</button>
     <div class="path">${esc(item.path || '')}</div>
     <h2>${esc(item.title)}</h2>
     <div class="meta">${pills}</div>
@@ -906,6 +961,7 @@ function openDrawer(item) {
     };
   }
   document.body.classList.add('open');
+  wireModalClose();
 }
 // attach inline notes + a hover "+ note" affordance under each body block (PR-review style)
 function decorateBlocks(bodyEl, item, anchored) {
@@ -936,6 +992,11 @@ function decorateBlocks(bodyEl, item, anchored) {
   });
 }
 $('scrim').onclick = () => document.body.classList.remove('open');
+function wireModalClose() {
+  const btn = $('drawer').querySelector('.dr-close');
+  if (btn) btn.onclick = () => document.body.classList.remove('open');
+}
+addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('open')) document.body.classList.remove('open'); });
 addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('open'); });
 
 /* ════ RESUME ════ */
@@ -1864,16 +1925,6 @@ const fmtTok = v => v == null ? '—' : Number(v).toLocaleString();
 let expActiveId = null;
 let expDetailCache = null;
 
-// the Experiments tab live dot — on only while a test is actually running
-function setExpLive(on) { const d = document.querySelector('#expTab .exp-live'); if (d) d.classList.toggle('on', !!on); }
-async function refreshExpLive() {
-  const wsName = selected[0]; if (!wsName) { setExpLive(false); return; }
-  try {
-    const list = await (await fetch('/api/experiments?ws=' + encodeURIComponent(wsName))).json();
-    setExpLive(Array.isArray(list) && list.some(e => e.running));
-  } catch { /* leave the dot as-is on a transient error */ }
-}
-
 async function renderExperimentList() {
   const box = $('expList');
   // one workspace at a time for experiments — use the first selected
@@ -1882,7 +1933,6 @@ async function renderExperimentList() {
   let list = [];
   try { list = await (await fetch('/api/experiments?ws=' + encodeURIComponent(wsName))).json(); }
   catch { box.innerHTML = '<div class="exp-empty">could not load experiments</div>'; return; }
-  setExpLive(Array.isArray(list) && list.some(e => e.running));
   if (!Array.isArray(list) || !list.length) {
     box.innerHTML = `<div class="exp-empty">no experiments yet — <span style="color:var(--accent);cursor:pointer" id="expEmptyNew">queue one →</span></div>`;
     const b = $('expEmptyNew'); if (b) b.onclick = () => openExperimentQueueForm(wsName);
@@ -2077,6 +2127,7 @@ function openExperimentQueueForm(wsName, spec, prefill = {}) {
   const jModel = models[pf.judge] || '';
   const sel = (v, opt) => v === opt ? ' selected' : '';
   dr.innerHTML = `
+    <button type="button" class="dr-close" aria-label="Close">×</button>
     <div class="path">${esc(wsName)} / _experiments/queue/</div>
     <h2>${variant ? 'Spin off a variant' : 'Queue an experiment'}</h2>
     ${variant
@@ -2139,6 +2190,7 @@ function openExperimentQueueForm(wsName, spec, prefill = {}) {
     } catch (e) { alert(e.message); }
   };
   document.body.classList.add('open');
+  wireModalClose();
 }
 
 /* ── file tree ── */
@@ -2317,6 +2369,12 @@ async function showFile(ws, path, addedSet) {
 /* ── events ── */
 let refreshTimer = null;
 let agentPulseTimer = null;
+let agentWorkActive = false;
+function setAgentLive(active) {
+  agentWorkActive = !!active;
+  const agentDot = document.querySelector('#liveTab .live-dot');
+  if (agentDot) agentDot.classList.toggle('on', agentWorkActive);
+}
 function connectEvents() {
   const es = new EventSource('/api/events');
   es.onopen = () => { $('termDot').classList.remove('off'); logLine(new Date().toLocaleTimeString('en-GB', { hour12: false }), 'WATCH', '#8a8070', 'watching for changes…', ''); };
@@ -2327,7 +2385,11 @@ function connectEvents() {
     if (!e.path && !e.log) return;
     // any workspace file change = agents at work → pulse the Agent tab dot, decaying when quiet
     const agentDot = document.querySelector('#liveTab .live-dot');
-    if (agentDot) { agentDot.classList.add('on'); clearTimeout(agentPulseTimer); agentPulseTimer = setTimeout(() => agentDot.classList.remove('on'), 4000); }
+    if (agentDot) {
+      agentDot.classList.add('on');
+      clearTimeout(agentPulseTimer);
+      agentPulseTimer = setTimeout(() => { if (!agentWorkActive) agentDot.classList.remove('on'); }, 4000);
+    }
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
       const editing = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT');
@@ -2336,7 +2398,7 @@ function connectEvents() {
       // keep the experiments dashboard live when a queue/artifact file changes
       if (/_experiments\//.test(e.path || '')) {
         if (expVisible() && !editing) renderExperimentList();
-        else refreshExpLive();   // update the tab's running dot even from another tab
+        else if (!editing) loadSelected();
       }
     }, 600);
     if (e.exists && /\.(md|yml|yaml|jsonl)$/.test(e.path || '') && !e.change) return;
@@ -2353,7 +2415,6 @@ function connectEvents() {
     if (e.diff && selected.includes(e.ws) && !/\.jsonl$/.test(e.path)) {
       const addedSet = new Set((e.diff.hunks || []).filter(h => h.t === '+').map(h => h.s));
       if (agentVisible()) showFile(e.ws, e.path, addedSet);
-      else $('liveTab').classList.add('unseen');
     }
 
     const c = classify(e);
@@ -2367,17 +2428,18 @@ function connectEvents() {
   };
 }
 
-/* ── modes: human · split · agent · experiments ── */
-const agentVisible = () => document.body.classList.contains('m-agent') || document.body.classList.contains('m-split');
-const expVisible = () => document.body.classList.contains('m-experiments');
+/* ── modes: sliding workspace — human · split · agent · split-exp · experiments ── */
+const MODE_CLASSES = ['m-human', 'm-split', 'm-agent', 'm-split-exp', 'm-experiments'];
+const agentVisible = () => document.body.classList.contains('m-agent') || document.body.classList.contains('m-split') || document.body.classList.contains('m-split-exp');
+const expVisible = () => document.body.classList.contains('m-experiments') || document.body.classList.contains('m-split-exp');
 function setMode(mode) {
-  if (!['human', 'split', 'agent', 'experiments'].includes(mode)) mode = 'human';
-  document.body.classList.remove('m-human', 'm-split', 'm-agent', 'm-experiments');
+  if (!['human', 'split', 'agent', 'split-exp', 'experiments'].includes(mode)) mode = 'human';
+  document.body.classList.remove(...MODE_CLASSES);
   document.body.classList.add('m-' + mode);
   document.querySelectorAll('.bar .tab').forEach(b => b.classList.toggle('active', b.dataset.view === mode));
   localStorage.setItem('tl-view', mode);
-  if (mode === 'agent' || mode === 'split') { $('liveTab').classList.remove('unseen'); renderTree(); }
-  if (mode === 'experiments') renderExperimentList();
+  if (mode === 'agent' || mode === 'split' || mode === 'split-exp') renderTree();
+  if (mode === 'experiments' || mode === 'split-exp') renderExperimentList();
 }
 $('expNew').onclick = () => openExperimentQueueForm(selected[0]);
 document.querySelectorAll('.bar .tab').forEach(btn => { btn.onclick = () => setMode(btn.dataset.view); });
@@ -2393,6 +2455,7 @@ async function loadSelected() {
     fetch('/api/ws/' + encodeURIComponent(n)).then(r => r.json())));
   renderResume(wss);
   renderLanes(wss);
+  setAgentLive(wss.some(w => (w.specs || []).some(s => s.stage === 'in-progress' || s.stage === 'tests')));
   syncButton();
 }
 function buildPanel() {
@@ -2434,9 +2497,9 @@ async function boot() {
   await seedChanges();
   await loadSelected();
   await loadTrees();
-  refreshExpLive();   // seed the Experiments tab running-dot on startup
   const saved = localStorage.getItem('tl-view');
-  setMode(saved === 'live' ? 'agent' : saved === 'resume' ? 'human' : saved || 'human');
+  const mode = saved === 'live' ? 'agent' : saved === 'resume' ? 'human' : saved || 'human';
+  setMode(['human', 'split', 'agent', 'split-exp', 'experiments'].includes(mode) ? mode : 'human');
 }
 boot();
 </script>
