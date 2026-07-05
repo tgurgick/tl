@@ -410,6 +410,11 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lcard .gate { display: flex; align-items: center; gap: 4px; font-family: var(--mono); }
 .gate-tests { color: #6b8fc7; }
 .gate-review { color: #b57fc7; }
+/* verification provenance on in-review/tests cards — independently verified
+   work must not look the same as self-checked or verifier-awaiting work */
+.gate-verified { color: #7fa06a; }
+.gate-selfcheck { color: #c79a5b; }
+.gate-await { color: #c79a5b; }
 .lcard .t { font-size: .78rem; line-height: 1.4; color: var(--ink); }
 .lcard .lc-pri { font-family: var(--mono); font-size: .54rem; font-weight: 600; padding: 1px 5px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; }
 .lc-pri.p0 { color: #a83232; background: rgba(168,50,50,.13); }
@@ -789,6 +794,18 @@ function ownerBadge(s) {
   if (!a || !AGENT_IC[a]) return '';
   return `<span class="lc-owner" title="claimed by ${AGENT_LABEL[a]}">${AGENT_IC[a]('currentColor')}</span>`;
 }
+// Verification provenance for in-review cards, from the frontmatter stamps the
+// verify flow writes (verified_by / verification_type — see SCHEMA.md). An
+// independently verified spec, a self-checked one, and a pre-gate one must be
+// distinguishable at a glance; self-check means the human is the second set of
+// eyes, so it gets the louder mark.
+function verifyBadge(s) {
+  const vt = String(s.meta.verification_type || '').toLowerCase();
+  const by = String(s.meta.verified_by || '').toLowerCase();
+  if (vt === 'self-check') return `<span class="gate gate-selfcheck" title="builder verified itself — you are the second set of eyes">⚠ self-check</span>`;
+  if (by) return `<span class="gate gate-verified" title="independently verified by ${esc(by)}">✓ ${esc(by)}</span>`;
+  return '';
+}
 
 /* ── markdown (drawer) ── */
 // Only http(s) and relative/anchor links become anchors; any other scheme
@@ -896,6 +913,7 @@ function openDrawer(item) {
     </div>` : '';
   // the human gate, in the pop-out: accept → done, or kick back → in-progress with a note
   const reviewHtml = item.stage === 'in-review' ? `
+    ${verifyBadge(item) ? `<div class="dr-review" style="border:0;padding-bottom:0">${verifyBadge(item)}</div>` : ''}
     <div class="dr-review"><button class="dr-accept">accept ✓ → done</button><button class="dr-reject">kick back</button></div>` : '';
   // the triage gate, in the pop-out: release → ready, symmetric to accept above
   const releaseHtml = item.stage === 'triage' ? `
@@ -1901,8 +1919,8 @@ function renderLanes(wss) {
       // no height and never collides with the gate label or the timestamp
       if (stage === 'in-progress') inner += `<div class="pbar"><i></i></div>
         <div class="meta"><span class="lc-status">⚡ active</span><span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
-      if (stage === 'tests') inner += `<div class="meta"><span class="gate gate-tests">⏳ tests</span><span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
-      if (stage === 'in-review') inner += `<div class="meta"><span class="gate gate-review">◆ needs review</span><span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
+      if (stage === 'tests') inner += `<div class="meta"><span class="gate gate-tests">⏳ tests</span>${s.meta.awaiting_verifier === true ? `<span class="gate gate-await" title="stopped at the tests gate — needs a non-builder agent (tl verify)">⊘ awaiting verifier</span>` : ''}<span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
+      if (stage === 'in-review') inner += `<div class="meta"><span class="gate gate-review">◆ needs review</span>${verifyBadge(s)}<span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
       if (showOwner) inner += owner;
       if (s.notes) inner += `<div class="lc-note">✎ ${esc((s.notes.match(/— note\n(.+)/) || s.notes.match(/\n([^\n#].+)/) || [, ''])[1] || 'note').slice(0, 60)}</div>`;
       card.innerHTML = inner;

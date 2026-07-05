@@ -15,7 +15,8 @@ Same as `/tl triage`. Read the `in-review/` stage; if it's empty, say so and sto
 
 **1. List the sign-off queue.** Every spec in `in-review/`, oldest first. Report the count up front — this is a batch.
 
-**2. For each (or one named) spec, assemble the evidence:**
+**2. For each (or one named) spec, assemble the evidence — verification status leads:**
+- **Verification first.** From `outcome/ALIGNMENT.md` (`verification_type` + builder/verifier) say up front which of these this spec is: **Independent check** (built by X, verified by Y — corroborated), **Self-check only** (builder verified itself — flag it prominently; *you* are the second set of eyes, read the diff hardest here), or **No ALIGNMENT** (pre-gate spec, grandfathered — same treatment as self-check). Never present the three as visually equal.
 - the spec's **Acceptance criteria** — the contract to check against
 - `outcome/FEEDBACK.md` — what the worker says it did, and what to watch
 - the actual change — the diff in the spec's `repo` (git diff), so claims are checked against reality, not taken on faith

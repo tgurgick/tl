@@ -109,13 +109,24 @@ The record of the cross-model check at the TESTS gate: a verifier agent **differ
 | Field | Type | Values |
 |-------|------|--------|
 | `spec` | path | the spec being checked |
-| `builder` | string | who built it — the spec's `agent:` lane / FEEDBACK `agent_tool` (e.g. `claude`) |
-| `verifier` | string | the checking agent, **required != `builder`** (e.g. `codex`) |
+| `builder` | string | who built it — the spec's `claimed_by` / `agent:` lane / FEEDBACK `agent_tool` (e.g. `claude`) |
+| `verifier` | string | the checking agent (e.g. `codex`) — must differ from `builder` unless `verification_type: self-check` is policy-allowed |
+| `verification_type` | enum | **required**: `independent` (verifier ≠ builder) or `self-check` — `self-check` is valid **only** when the workspace's `verification.allow_self_check_for` lists the spec's `type` |
 | `rounds` | int | how many advise → remediate → re-check cycles ran (1–2; cap ~2) |
 | `verdict` | enum | `pass` (converged) or `residual-concerns` (cap tripped, unresolved) |
 | `residual_concerns` | list | specifics still open when `verdict: residual-concerns`; `[]` on `pass` |
 
-Body: one short section per round — what the verifier raised, and how the builder addressed it. On `residual-concerns` the open items are the flag the human reads at `/tl review`; the human gate is never removed, only better-informed. Absent = no cross-model check ran (older specs, or a single-agent workspace).
+Body: one short section per round — what the verifier raised, and how the builder addressed it. On `residual-concerns` the open items are the flag the human reads at `/tl review`; the human gate is never removed, only better-informed. Absent = no cross-model check ran (older, pre-gate specs — grandfathered at review, treated like self-check).
+
+**Enforcement (`verification` in `TRIAGE.yml`).** The gate that makes the above policy, not convention (`lib/verification-gate.js` `canAdvanceToReview`; incident: `done/allocation-actionable-prompt` advanced with `builder == verifier == codex`):
+
+```yaml
+verification:
+  require_independent_verifier: true   # builder ≠ verifier required to advance tests → in-review
+  allow_self_check_for: []             # spec types exempt (e.g. [research]); empty = none
+```
+
+When required and no independent verifier is available, the builder **stops at `tests/`** (`status: blocked`) instead of self-verifying: it sets spec frontmatter `awaiting_verifier: true` + `requested_at: YYYY-MM-DD` and writes a minimal `VERIFY.md` request (builder, date, anything to flag) in the spec folder. `tl verify [ws] [--agent <name>]` lists these for any agent that is **not** the builder. The verifier writes ALIGNMENT (`verification_type: independent`), stamps the spec frontmatter — `verified_by: <agent>`, `verification_type`, `awaiting_verifier: false` — and advances the spec to `in-review/`. The cockpit's in-review badge reads those frontmatter stamps (`verified by <agent>` vs `self-check`); a section absent from `TRIAGE.yml` means not enforced (pre-gate workspaces unchanged).
 
 ## Experiments (`_experiments/*`)
 

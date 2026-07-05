@@ -26,6 +26,7 @@ const { parseFrontmatter, parseYaml } = require('../lib/parse');
 const { safeRead, readFirst, isDir, mtime } = require('../lib/workspace');
 const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch } = require('../lib/batch');
 const { runFixtureExperiment } = require('../lib/experiment-fixture');
+const { canAdvanceToReview, verificationPolicy } = require('../lib/verification-gate');
 const { execFileSync } = require('child_process');
 
 // ---------- workspace resolution (same convention as the skills) ----------
@@ -447,9 +448,26 @@ function cmdReview(args) {
     return;
   }
 
+  const triage = parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '');
   out(`## Sign-off queue (${inReview.length}, oldest first)\n`);
   for (const s of inReview) {
     out('### ' + s.title + '  (' + s.path + ')');
+    // verification status leads — self-check work is not visually equal to
+    // independently verified work; the human is the second set of eyes then.
+    const alignRaw = s.dir ? safeRead(path.join(s.dir, 'outcome', 'ALIGNMENT.md')) : null;
+    const align = alignRaw ? parseFrontmatter(alignRaw) : null;
+    if (align) {
+      const am = align.meta;
+      const self = String(am.verification_type || '').toLowerCase() === 'self-check' ||
+        (am.builder && am.builder === am.verifier);
+      out(self
+        ? `⚠ SELF-CHECK ONLY (builder ${am.builder || '?'} verified itself) — you are the second set of eyes`
+        : `✓ Independent check: built by ${am.builder || '?'}, verified by ${am.verifier || '?'} (${am.verdict || 'no verdict'})`);
+      const gate = canAdvanceToReview(s, align, triage);
+      if (!gate.ok) out(`⚠ Gate says this should not have advanced: ${gate.reason}`);
+    } else {
+      out('⚠ No ALIGNMENT.md (pre-gate spec — grandfathered; verify claims yourself)');
+    }
     const acc = section(s.body, 'Acceptance criteria');
     out('\n**Acceptance criteria (the contract to check)**');
     out(acc || '(none declared)');
@@ -461,6 +479,71 @@ function cmdReview(args) {
 
   hr();
   out('For each spec: check the diff in its repo against the criteria, then accept (→ done/) or kick back (→ in-progress/ with a thread reason). Workspace "' + ws.name + '".');
+}
+
+// ---------- tl verify ----------
+
+// The independent-verifier handoff: list specs waiting at the TESTS gate with
+// `awaiting_verifier: true`, excluding any this agent built — a builder never
+// verifies its own work. Prints the verify SKILL plus a per-spec brief
+// (criteria, the builder's FEEDBACK claim, the VERIFY request, gate policy).
+function cmdVerify(args) {
+  let agent = null;
+  const pos = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--agent') agent = String(args[++i] || '').toLowerCase();
+    else if (args[i].startsWith('--agent=')) agent = args[i].slice(8).toLowerCase();
+    else pos.push(args[i]);
+  }
+  const ws = resolveWorkspace(pos[0]);
+  const named = pos[1];
+  printSkill('verify');
+
+  const specs = readAllSpecs(ws.dir);
+  const triage = parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '');
+  const policy = verificationPolicy(triage);
+
+  const builderOf = s => String(s.meta.claimed_by || s.meta.agent || '').toLowerCase();
+  let awaiting = specs.filter(s => ['tests', 'in-progress'].includes(s.stage) && s.meta.awaiting_verifier === true);
+  if (named) {
+    const want = specSlug(named);
+    awaiting = awaiting.filter(s => specSlug(s.path) === want);
+    if (!awaiting.length) fail(`Named spec "${named}" is not awaiting verification. Awaiting: ${specs.filter(s => s.meta.awaiting_verifier === true).map(s => s.path).join(', ') || '(none)'}`);
+  }
+  const mine = agent ? awaiting.filter(s => builderOf(s) === agent) : [];
+  if (agent) awaiting = awaiting.filter(s => builderOf(s) !== agent);
+
+  out('\n===== VERIFY QUEUE: ' + ws.name + (agent ? ' (verifier: ' + agent + ')' : '') + ' =====\n');
+  out('Policy: require_independent_verifier: ' + policy.required +
+    (policy.allowSelfCheckFor.length ? ' · self-check allowed for: ' + policy.allowSelfCheckFor.join(', ') : ' · self-check allowed for: (none)'));
+
+  if (mine.length) {
+    out('\n## Built by you — cannot verify (' + mine.length + ')');
+    for (const s of mine) out(`- ${s.title} (${s.path}) — builder ${builderOf(s)}; another agent must verify`);
+  }
+  if (!awaiting.length) {
+    out('\nNothing awaiting independent verification' + (agent ? ' that you did not build yourself' : '') + '. Stop and say so.');
+    hr();
+    return;
+  }
+
+  out(`\n## Awaiting verification (${awaiting.length}, oldest first)\n`);
+  for (const s of awaiting.sort((a, b) => a.mtime - b.mtime)) {
+    out('### ' + s.title + '  (' + s.path + ')');
+    out(`Builder: ${builderOf(s) || '(unstamped)'} · type: ${s.meta.type || '?'} · requested: ${s.meta.requested_at || '?'}`);
+    const verifyReq = s.dir ? safeRead(path.join(s.dir, 'VERIFY.md')) : null;
+    if (verifyReq) { out('\n**VERIFY.md (the request)**'); out(verifyReq.trim()); }
+    const acc = section(s.body, 'Acceptance criteria');
+    if (acc) { out('\n**Acceptance criteria (verify against the diff, not the claim)**'); out(acc); }
+    if (s.feedback) { out('\n**outcome/FEEDBACK.md (the builder\'s claim)**'); out(s.feedback.trim()); }
+    const alignment = s.dir ? safeRead(path.join(s.dir, 'outcome', 'ALIGNMENT.md')) : null;
+    const gate = canAdvanceToReview(s, alignment ? parseFrontmatter(alignment) : null, triage);
+    out(`\nGate now: ${gate.ok ? 'would advance' : 'held'} — ${gate.reason}`);
+    out('');
+  }
+
+  hr();
+  out('Follow the verify SKILL: review each diff against criteria + review gates, remediate with the builder (bounded), write outcome/ALIGNMENT.md (verification_type: independent), stamp the spec frontmatter (verified_by, verification_type, awaiting_verifier: false), then advance it tests → in-review. Workspace "' + ws.name + '".');
 }
 
 // ---------- tl recall ----------
@@ -865,6 +948,8 @@ function usage(stream) {
   w('  tl run    [workspace] [spec]    Work the ready queue — pick the conflict-free batch (or a named spec)');
   w('              [--agent <name>]    Only claim specs in this agent\'s lane (agent: <name> or any) — heterogeneous fan-out');
   w('  tl review [workspace]           Sign off in-review work — criteria + feedback');
+  w('  tl verify [workspace] [spec]    Independent-verifier queue — specs awaiting a non-builder check');
+  w('              [--agent <name>]    Verify as this agent; specs you built are excluded');
   w('  tl recall [workspace] <query>   Search intents/specs/threads/outcomes — "did we discuss this?"');
   w('  tl experiment fixture [workspace]');
   w('                                  Create a deterministic fixture experiment proof');
@@ -885,6 +970,7 @@ function main() {
     case 'resume': return cmdResume(rest);
     case 'run': return cmdRun(rest);
     case 'review': return cmdReview(rest);
+    case 'verify': return cmdVerify(rest);
     case 'recall': return cmdRecall(rest);
     case 'experiment': return cmdExperiment(rest);
     case 'sync-rules': return cmdSyncRules();
