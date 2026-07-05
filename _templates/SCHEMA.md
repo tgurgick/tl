@@ -379,3 +379,28 @@ The continuation half of dispatch. When work moves *backwards* (`in-review/ → 
 - `status` lifecycle: `pending → claimed → done|failed`. The resuming agent flips it to `claimed` before working, `done` when the spec reaches `in-review/`, `failed` if it ends blocked. Transitions only — never delete the file; `_dispatch/` stays auditable.
 - Idempotent: re-writing the same pending file (a second kickback before anyone resumed) is fine — one file per slug.
 - `/tl run` prefers pending continuations over fresh ready claims: the run banner surfaces the spec and its `NOTES.md` excerpt, and ready specs wait for the next run. A pending continuation whose spec is no longer in `in-progress/` or `tests/` is stale — mark it `done` (accepted meanwhile) or `failed`.
+
+## Headless lanes (`lanes:` in `TRIAGE.yml`, `bin/tl-worker.js`)
+
+The scheduling half of cross-agent dispatch: `node bin/tl-worker.js <workspace> --agent <lane>` performs **one worker tick** — if the lane has eligible run work (a pending continuation it owns first, then at most one conflict-free ready spec in its lane), it launches the lane's configured agent CLI once with the `tl run` brief as the prompt, logs the session, and exits. Cron/launchd owns the interval; the driver never moves a spec, never advances a stage, and the spawned session stops at `in-review/` as always. v1 schedules the **run lane only** — verifier scheduling (`tl verify`) is a separate tick. Recipes and the operational model live in `docs/headless-lanes.md`.
+
+**`lanes:` config.** A lane is any shell command — tl ships no provider integrations. Per-lane keys are path-safe lane names matching spec `agent:` / `claimed_by` values: lowercase letters, numbers, dots, underscores, and hyphens only.
+
+```yaml
+lanes:
+  claude:
+    command: "claude -p {prompt_file}"    # {prompt_file} → path to the brief temp file
+    lock_timeout_minutes: 120             # optional — stale-lock takeover threshold (default 120)
+  codex:
+    command: "codex exec --sandbox workspace-write -"   # no placeholder → brief arrives on stdin
+```
+
+Prompt delivery, in order: `{prompt_file}` in the command is substituted with the shell-escaped path of the brief written to `_metrics/worker-prompts/<lane>-<timestamp>.txt`; `{prompt}` is substituted with a shell-escaped **single-line** form of the brief (lossy — prefer `{prompt_file}`); a command with neither placeholder receives the brief bytes on stdin. Workspace artifacts (prompts, locks, logs) live under `projects/<name>/`, which is already gitignored. An unconfigured lane is a hard error: exit `1`, nothing executes.
+
+**Continuation ownership (lane filter).** A pending continuation is eligible for lane `<lane>` only when ownership matches: if the linked spec has `claimed_by`, that value must equal `<lane>` — `agent: any` never overrides an existing claim. Only when unclaimed does the routing lane (`agent: <lane>` or `any`) decide. While another lane's continuation is pending, a tick claims **no** fresh ready work (matching `/tl run`, which holds the ready queue behind any pending continuation) and exits `0` with reason `no_continuation`.
+
+**Safety.** A workspace-root `PAUSE` file halts all lanes (exit `2`, no spawn). A per-lane JSON lock at `_metrics/locks/<lane>.lock` — containing at least `date`, `workspace`, `lane`, `pid`, `picked`, `prompt_path` — is created immediately before the spawn and removed after the child exits (success or failure); a lock younger than the stale timeout means exit `2` without spawning, an older one is taken over (logged). Staleness is judged by file mtime, so a corrupt lock still times out. `--dry-run` prints the exact command and prompt delivery, exits `0`, and writes **nothing** — no prompt file, no lock, no log line.
+
+**Exit codes.** `0` — no work (quiet cron) or child exited 0; `1` — lane misconfigured, `tl run` subprocess failure, spawn failure, or child exited non-zero; `2` — `PAUSE` present or lock held.
+
+**`worker-log.jsonl`** (`_metrics/worker-log.jsonl`, append-only): one line per non-dry tick — `date`, `workspace`, `lane`, `picked` (spec path, `_dispatch/<slug>.json`, or `none`), `spawned` (bool), `exit_code` (the tick's exit code), `duration_seconds`, and `reason` when not spawned (`no_continuation` `no_ready` `paused` `locked` `lane_unconfigured` `tl_run_failed` `spawn_failed`). Extra fields appear when relevant (`child_exit_code`, `stale_lock_takeover`); a lock-cleanup failure appends its own `event: lock_cleanup_failed` line. As everywhere: never edit existing lines.
