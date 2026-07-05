@@ -23,7 +23,8 @@ function withWorkspace(specs, fn) {
       fs.mkdirSync(specDir, { recursive: true });
       const status = s.stage && s.stage !== 'ready' ? s.stage : 'ready';
       const files = (s.files || []).map(f => `- \`${f}\``).join('\n');
-      const fm = `---\ntitle: "${s.slug}"\ntype: feature\nstatus: ${status}\n---\n\n## Objective\nx\n\n## Scope\n\n### Files to touch\n${files}\n`;
+      const priority = s.priority ? `priority: "${s.priority}"\n` : '';
+      const fm = `---\ntitle: "${s.slug}"\ntype: feature\nstatus: ${status}\n${priority}---\n\n## Objective\nx\n\n## Scope\n\n### Files to touch\n${files}\n`;
       fs.writeFileSync(path.join(specDir, 'SPEC.md'), fm);
     }
     return fn(name);
@@ -141,5 +142,73 @@ test('run: a disjoint ready spec still runs alongside active work', () => {
     assert.equal(r.status, 0);
     assert.match(r.stdout, /Selected batch \(1\)/);
     assert.match(r.stdout, /ready-three/);
+  });
+});
+
+// ---------- fan-out: batch width, holdbacks, cap config, dispatch ordering ----------
+
+test('run: disjoint ready specs fan out together, whole batch claimed before work', () => {
+  withWorkspace([
+    { slug: 'fan-a', stage: 'ready', files: ['src/a.js'] },
+    { slug: 'fan-b', stage: 'ready', files: ['src/b.js'] },
+  ], name => {
+    const r = run('run', name);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /Selected batch \(2\)/);
+    // the claim block lists every folder move, before the per-spec brief
+    assert.match(r.stdout, /Claim the whole batch first/);
+    assert.match(r.stdout, /specs\/fan-a\/ → in-progress\/fan-a\//);
+    assert.match(r.stdout, /specs\/fan-b\/ → in-progress\/fan-b\//);
+    assert.ok(r.stdout.indexOf('Claim the whole batch first') < r.stdout.indexOf('Per-spec brief'));
+  });
+});
+
+test('run: same-file ready specs — the loser is held with a reason naming the winner', () => {
+  withWorkspace([
+    { slug: 'dup-a', stage: 'ready', files: ['src/dup.js'] },
+    { slug: 'dup-b', stage: 'ready', files: ['src/dup.js'] },
+  ], name => {
+    const r = run('run', name);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /Selected batch \(1\)/);
+    assert.match(r.stdout, /Held back for the next run/);
+    assert.match(r.stdout, /dup-b.*file conflict on src\/dup\.js with dup-a/);
+  });
+});
+
+test('run: TRIAGE.yml run.cap bounds the batch width', () => {
+  withWorkspace([
+    { slug: 'cap-a', stage: 'ready', files: ['src/a.js'] },
+    { slug: 'cap-b', stage: 'ready', files: ['src/b.js'] },
+    { slug: 'cap-c', stage: 'ready', files: ['src/c.js'] },
+  ], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', 'run:\n  cap: 2\n');
+    const r = run('run', name);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /Selected batch \(2\)/);
+    assert.match(r.stdout, /batch capped at 2/);
+  });
+});
+
+test('run: multiple pending continuations resume as an ordered, conflict-checked batch', () => {
+  withWorkspace([
+    { slug: 'resume-low', stage: 'in-progress', files: ['src/low.js'], priority: 'p2' },
+    { slug: 'resume-hot', stage: 'in-progress', files: ['src/hot.js'], priority: 'p0' },
+    { slug: 'resume-clash', stage: 'tests', files: ['src/hot.js'], priority: 'p2' },
+  ], name => {
+    for (const slug of ['resume-low', 'resume-hot', 'resume-clash']) {
+      writeWorkspaceFile(name, '_dispatch/' + slug + '.json', JSON.stringify({
+        spec: slug, mode: 'continuation', status: 'pending', created: '2026-07-03',
+      }));
+    }
+    const r = run('run', name);
+    assert.equal(r.status, 0);
+    // two resume; the scope-overlapping third is held, its dispatch stays pending
+    assert.match(r.stdout, /Continuation dispatches — resume these before fresh claims \(2\)/);
+    assert.match(r.stdout, /resume-clash.*file conflict on src\/hot\.js with resume-hot.*dispatch stays pending/);
+    // dispatch ordering: the p0 continuation outranks the p2 one
+    assert.ok(r.stdout.indexOf('### resume-hot') < r.stdout.indexOf('### resume-low'));
+    // continuations still outrank fresh claims entirely
+    assert.doesNotMatch(r.stdout, /Selected batch/);
   });
 });

@@ -3,6 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const {
   filesToTouch, isReadOnly, specSlug, dependencySatisfied, activeConflicts, selectBatch,
+  calmCap, selectContinuations,
 } = require('../lib/batch');
 
 // build a spec object shaped like readStage produces
@@ -173,4 +174,91 @@ test('selectBatch: no active set behaves exactly as before (back-compat)', () =>
   ], new Set());
   assert.equal(batch.length, 2);
   assert.equal(held.length, 0);
+});
+
+// ---------- fan-out: configured cap, concrete conflict reasons, continuation batches ----------
+
+test('calmCap: reads run.cap from the triage config, falls back to 4', () => {
+  assert.equal(calmCap(null), 4);
+  assert.equal(calmCap({}), 4);
+  assert.equal(calmCap({ run: { cap: 2 } }), 2);
+  assert.equal(calmCap({ run: { cap: 7 } }), 7);
+  // non-sensical values never disable the cap
+  assert.equal(calmCap({ run: { cap: 0 } }), 4);
+  assert.equal(calmCap({ run: { cap: -3 } }), 4);
+  assert.equal(calmCap({ run: { cap: 'lots' } }), 4);
+  assert.equal(calmCap({ run: { cap: 2.5 } }), 4);
+  assert.equal(calmCap({ run: {} }), 4);
+});
+
+test('selectBatch: honors a configured cap via opts.cap', () => {
+  const specs = ['a', 'b', 'c'].map((s, i) => mk(s, { files: [s + '.js'], mtime: i }));
+  const { batch, held } = selectBatch(specs, new Set(), { cap: 2 });
+  assert.equal(batch.length, 2);
+  assert.equal(held.length, 1);
+  assert.match(held[0].holdReason, /batch capped at 2/);
+});
+
+test('selectBatch: within-batch file conflict names the winning spec', () => {
+  const { held } = selectBatch([
+    mk('winner', { files: ['shared.js'], mtime: 1 }),
+    mk('loser', { files: ['shared.js'], mtime: 2 }),
+  ], new Set());
+  assert.match(held[0].holdReason, /file conflict on shared\.js with winner/);
+});
+
+// A live continuation entry as readContinuations shapes it: dispatch file +
+// parsed dispatch JSON + the in-progress/tests spec it resumes.
+function cont(slug, specOpts = {}, dispatch = {}) {
+  return {
+    file: '_dispatch/' + slug + '.json',
+    dispatch: { spec: slug, mode: 'continuation', status: 'pending', ...dispatch },
+    spec: mk(slug, { stage: 'in-progress', ...specOpts }),
+  };
+}
+
+test('selectContinuations: orders by spec priority, then oldest kickback', () => {
+  const { batch, held } = selectContinuations([
+    cont('late-p2', { priority: 'p2', files: ['a.js'] }, { created: '2026-07-01' }),
+    cont('urgent', { priority: 'p0', files: ['b.js'] }, { created: '2026-07-03' }),
+    cont('old-p2', { priority: 'p2', files: ['c.js'] }, { created: '2026-06-28' }),
+  ]);
+  assert.equal(held.length, 0);
+  assert.deepEqual(batch.map(c => specSlug(c.spec.path)), ['urgent', 'old-p2', 'late-p2']);
+});
+
+test('selectContinuations: overlapping resumed scopes serialize with a concrete reason', () => {
+  const { batch, held } = selectContinuations([
+    cont('first', { priority: 'p1', files: ['src/x.js'] }, { created: '2026-07-01' }),
+    cont('second', { priority: 'p2', files: ['src/x.js', 'src/y.js'] }, { created: '2026-07-02' }),
+  ]);
+  assert.equal(batch.length, 1);
+  assert.equal(held.length, 1);
+  assert.match(held[0].holdReason, /file conflict on src\/x\.js with first/);
+});
+
+test('selectContinuations: caps the resume batch, overflow stays pending', () => {
+  const live = ['a', 'b', 'c'].map((s, i) => cont(s, { files: [s + '.js'] }, { created: '2026-07-0' + (i + 1) }));
+  const { batch, held } = selectContinuations(live, { cap: 2 });
+  assert.equal(batch.length, 2);
+  assert.equal(held.length, 1);
+  assert.match(held[0].holdReason, /batch capped at 2/);
+});
+
+test('selectContinuations: read-only continuations never conflict', () => {
+  const { batch, held } = selectContinuations([
+    cont('code', { files: ['a.js'] }),
+    cont('research', { type: 'research', readonlyBody: true }),
+  ]);
+  assert.equal(batch.length, 2);
+  assert.equal(held.length, 0);
+});
+
+test('selectContinuations: undeclared scope conflicts with other resumed code work', () => {
+  const { batch, held } = selectContinuations([
+    cont('code', { priority: 'p1', files: ['a.js'] }),
+    cont('vague', { priority: 'p2', files: undefined }),   // heading present, no bullets
+  ]);
+  assert.equal(batch.length, 1);
+  assert.match(held[0].holdReason, /undeclared scope/);
 });

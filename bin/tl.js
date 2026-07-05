@@ -24,7 +24,7 @@ const SKILLS = path.join(ROOT, 'skills');
 // separate copies of the parser, the batch rules, or the path guard.
 const { parseFrontmatter, parseYaml } = require('../lib/parse');
 const { safeRead, readFirst, isDir, mtime } = require('../lib/workspace');
-const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch } = require('../lib/batch');
+const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch, calmCap, selectContinuations } = require('../lib/batch');
 const { runFixtureExperiment } = require('../lib/experiment-fixture');
 const { canAdvanceToReview, verificationPolicy } = require('../lib/verification-gate');
 const { execFileSync } = require('child_process');
@@ -327,6 +327,9 @@ function cmdRun(args) {
   const activeSpecs = specs.filter(s => ['in-progress', 'tests', 'in-review'].includes(s.stage));
   const dirty = workspaceIsThisRepo(specs) ? dirtyGitPaths() : [];
   const active = activeConflicts(activeSpecs, dirty);
+  // The calm cap is a workspace dial (TRIAGE.yml `run: cap:`), default 4 — it
+  // bounds both fresh fan-out and how many continuations resume together.
+  const cap = calmCap(parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || ''));
   const allReady = specs.filter(s => s.stage === 'ready');
   // agent routing: a spec's `agent:` (default `any`) must match the running agent's lane.
   const agentOf = s => (s.meta.agent || 'any').toLowerCase();
@@ -352,19 +355,25 @@ function cmdRun(args) {
     out('Note: ' + conts.live.length + ' pending continuation dispatch(es) — kicked-back work is waiting (resume it first unless this named run is intentional).\n');
   }
   if (conts.live.length && !named) {
-    out('## Continuation dispatches — resume these before fresh claims (' + conts.live.length + ')');
-    for (const c of conts.live) {
+    // Several kickbacks can be pending at once — they fan out like a fresh
+    // batch: ordered (priority, then oldest kickback), capped at the calm cap,
+    // and conflict-checked against each other so two resumed specs never share
+    // a file. Held continuations stay pending for the next run, with a reason.
+    const resumed = selectContinuations(conts.live, { cap });
+    out('## Continuation dispatches — resume these before fresh claims (' + resumed.batch.length + ')');
+    for (const c of resumed.batch) {
       out(`\n### ${c.spec.title}  (${c.spec.path}) [${c.file}]`);
       if (c.dispatch.reason) out('Reason: ' + c.dispatch.reason);
       out('**NOTES.md excerpt (binding — read the full file first)**');
       out(notesExcerpt(c.spec.notes));
     }
-    if (ready.length) {
+    if (resumed.held.length || ready.length) {
       out('\n## Held back for the next run');
+      for (const c of resumed.held) out(`- ${c.spec.title} (${c.spec.path}) [${c.file}] — ${c.holdReason} (dispatch stays pending)`);
       for (const s of ready) out(`- ${s.title} (${s.path}) — continuation pending, resume in-progress work first`);
     }
     hr();
-    out('Follow run SKILL step 0: flip each dispatch to "claimed", read NOTES.md then SPEC.md, and continue the spec from its current folder — never claim fresh ready work while a continuation is pending. Workspace "' + ws.name + '".');
+    out('Follow run SKILL step 0: flip each selected dispatch to "claimed" BEFORE any work begins, read NOTES.md then SPEC.md, and continue each spec from its current folder (' + (resumed.batch.length > 1 ? 'in parallel — their scopes are disjoint' : 'inline') + ') — never claim fresh ready work while a continuation is pending. Workspace "' + ws.name + '".');
     return;
   }
 
@@ -397,7 +406,7 @@ function cmdRun(args) {
     batch = [hit];
     held = ready.filter(s => s !== hit).map(s => ({ ...s, holdReason: 'not the named spec' }));
   } else {
-    ({ batch, held } = selectBatch(ready, doneSlugs, { active }));
+    ({ batch, held } = selectBatch(ready, doneSlugs, { active, cap }));
   }
   held = held.concat(otherLane);  // specs in another agent's lane wait for that agent
 
@@ -415,6 +424,16 @@ function cmdRun(args) {
     }
   }
 
+  // The claim comes before any work: moving every selected folder out of
+  // specs/ up front is what makes the batch atomic — a second run (or another
+  // agent) that starts mid-flight finds nothing claimable it could collide on.
+  if (batch.length) {
+    out('\n## Claim the whole batch first (folder moves before any work)');
+    for (const s of batch) {
+      out(`- ${s.path} → in-progress/${specSlug(s.path)}/  (set status: in-progress, stamp claimed_by + claimed_at)`);
+    }
+  }
+
   // The per-spec brief the agent works from.
   out('\n## Per-spec brief');
   for (const s of batch) {
@@ -429,7 +448,7 @@ function cmdRun(args) {
   }
 
   hr();
-  out('The batch above is conflict-free and claimed-ready. Now follow the run SKILL: claim each spec ready → in-progress, do the work in scope, carry each to in-review (never done). Workspace "' + ws.name + '".');
+  out('The batch above is conflict-free and claimed-ready. Now follow the run SKILL: claim the WHOLE batch first (every folder move above, before any work begins), then do each spec\'s work in scope and carry it to in-review (never done). Workspace "' + ws.name + '".');
 }
 
 // ---------- tl review ----------
