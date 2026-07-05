@@ -126,6 +126,8 @@ All tool commands live under the `/tl` prefix (as a Cowork plugin today; the fut
 
 The full algorithm for each skill lives in its `skills/<name>/SKILL.md` — that file is the source of truth, not this README.
 
+Maintenance: run `tl sync-rules` after editing skills to refresh generated agent rule files, or `tl sync-rules --check` in verification to fail when those files drift from `skills/*/SKILL.md`.
+
 Run them on demand from any Claude Code session, or schedule them as routines — triage and dedup need no network, so a local scheduled task (or a cron'd headless run, e.g. `claude -p "/tl triage my-app"`) covers the core loop. The intended cadence: bug-capture every 15 minutes, dedup daily at 6am, triage daily at 8am — sweep before you rank.
 
 ### /tl resume

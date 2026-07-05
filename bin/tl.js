@@ -724,12 +724,13 @@ function cmdRecall(args) {
 
 // Read every skills/<name>/SKILL.md and pull its name + description from the
 // frontmatter. Sorted by name for a stable, diff-friendly output.
-function readSkills() {
-  if (!isDir(SKILLS)) return [];
+function readSkills(root = ROOT) {
+  const skillsDir = path.join(root, 'skills');
+  if (!isDir(skillsDir)) return [];
   const out = [];
-  for (const name of fs.readdirSync(SKILLS).sort()) {
+  for (const name of fs.readdirSync(skillsDir).sort()) {
     if (name.startsWith('.')) continue;
-    const file = path.join(SKILLS, name, 'SKILL.md');
+    const file = path.join(skillsDir, name, 'SKILL.md');
     const text = safeRead(file);
     if (text === null) continue;
     const { meta } = parseFrontmatter(text);
@@ -912,15 +913,41 @@ function genGemini(skills) {
   ].join('\n');
 }
 
-function cmdSyncRules() {
-  const skills = readSkills();
+function syncRulesRoot() {
+  return path.resolve(process.env.TL_SYNC_RULES_ROOT || ROOT);
+}
+
+function syncRuleTargets(root, skills) {
+  return [
+    { path: path.join(root, 'AGENTS.md'), content: genAgents(skills) },
+    { path: path.join(root, '.cursor', 'rules', 'tl.mdc'), content: genCursor(skills) },
+    { path: path.join(root, 'GEMINI.md'), content: genGemini(skills) },
+  ];
+}
+
+function cmdSyncRules(args = []) {
+  const check = args.includes('--check');
+  const unknown = args.filter(a => a !== '--check');
+  if (unknown.length) fail('Usage: tl sync-rules [--check]');
+
+  const root = syncRulesRoot();
+  const skills = readSkills(root);
   if (!skills.length) fail('No skills found under skills/*/SKILL.md — nothing to generate from.');
 
-  const targets = [
-    { path: path.join(ROOT, 'AGENTS.md'), content: genAgents(skills) },
-    { path: path.join(ROOT, '.cursor', 'rules', 'tl.mdc'), content: genCursor(skills) },
-    { path: path.join(ROOT, 'GEMINI.md'), content: genGemini(skills) },
-  ];
+  const targets = syncRuleTargets(root, skills);
+
+  if (check) {
+    const drifted = targets
+      .filter(t => safeRead(t.path) !== t.content)
+      .map(t => path.relative(root, t.path));
+    if (!drifted.length) {
+      out('tl sync-rules --check: generated rule files are up to date.');
+      return;
+    }
+    process.stderr.write('tl sync-rules --check: generated rule files are out of date:\n');
+    for (const rel of drifted) process.stderr.write('  ' + rel + '\n');
+    process.exit(1);
+  }
 
   out('===== tl sync-rules =====');
   out(`Source: ${skills.length} skill${skills.length === 1 ? '' : 's'} under skills/*/SKILL.md`);
@@ -972,7 +999,7 @@ function usage(stream) {
   w('  tl recall [workspace] <query>   Search intents/specs/threads/outcomes — "did we discuss this?"');
   w('  tl experiment fixture [workspace]');
   w('                                  Create a deterministic fixture experiment proof');
-  w('  tl sync-rules                   Regenerate the per-agent rules files from skills/*/SKILL.md');
+  w('  tl sync-rules [--check]         Regenerate per-agent rules, or check for generated-rule drift');
   w('');
   w('Workspace: an argument names a workspace under projects/; if exactly one exists it is used;');
   w('otherwise the available workspaces are listed.');
@@ -992,7 +1019,7 @@ function main() {
     case 'verify': return cmdVerify(rest);
     case 'recall': return cmdRecall(rest);
     case 'experiment': return cmdExperiment(rest);
-    case 'sync-rules': return cmdSyncRules();
+    case 'sync-rules': return cmdSyncRules(rest);
     case undefined:
     case 'help':
     case '-h':

@@ -3,11 +3,16 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const BIN = path.join(ROOT, 'bin', 'tl.js');
 const run = (...a) => spawnSync(process.execPath, [BIN, ...a], { encoding: 'utf8' });
+const runWithEnv = (env, ...a) => spawnSync(process.execPath, [BIN, ...a], {
+  encoding: 'utf8',
+  env: { ...process.env, ...env },
+});
 
 // Scaffold a throwaway workspace under projects/ (gitignored) with the given
 // specs, run the callback with the workspace name, then remove it. Each spec is
@@ -210,5 +215,65 @@ test('run: multiple pending continuations resume as an ordered, conflict-checked
     assert.ok(r.stdout.indexOf('### resume-hot') < r.stdout.indexOf('### resume-low'));
     // continuations still outrank fresh claims entirely
     assert.doesNotMatch(r.stdout, /Selected batch/);
+  });
+});
+
+function withSyncRulesFixture(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-sync-rules-'));
+  try {
+    const skillDir = path.join(dir, 'skills', 'sample');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), [
+      '---',
+      'name: sample',
+      'description: Sample skill does one thing. Extra routing details are ignored.',
+      '---',
+      '',
+      '# /tl sample',
+      '',
+    ].join('\n'));
+    return fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function readRealRuleFiles() {
+  return {
+    agents: fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8'),
+    cursor: fs.readFileSync(path.join(ROOT, '.cursor', 'rules', 'tl.mdc'), 'utf8'),
+    gemini: fs.readFileSync(path.join(ROOT, 'GEMINI.md'), 'utf8'),
+  };
+}
+
+test('sync-rules --check succeeds when generated fixture outputs match without mutating repo rule files', () => {
+  withSyncRulesFixture(root => {
+    const before = readRealRuleFiles();
+    const write = runWithEnv({ TL_SYNC_RULES_ROOT: root }, 'sync-rules');
+    assert.equal(write.status, 0, write.stderr);
+    assert.ok(fs.existsSync(path.join(root, 'AGENTS.md')));
+    assert.ok(fs.existsSync(path.join(root, '.cursor', 'rules', 'tl.mdc')));
+    assert.ok(fs.existsSync(path.join(root, 'GEMINI.md')));
+
+    const check = runWithEnv({ TL_SYNC_RULES_ROOT: root }, 'sync-rules', '--check');
+    assert.equal(check.status, 0, check.stderr);
+    assert.match(check.stdout, /generated rule files are up to date/);
+    assert.deepEqual(readRealRuleFiles(), before);
+  });
+});
+
+test('sync-rules --check exits non-zero and lists changed or missing generated files', () => {
+  withSyncRulesFixture(root => {
+    const write = runWithEnv({ TL_SYNC_RULES_ROOT: root }, 'sync-rules');
+    assert.equal(write.status, 0, write.stderr);
+    fs.appendFileSync(path.join(root, 'AGENTS.md'), '\nmanual drift\n');
+    fs.rmSync(path.join(root, 'GEMINI.md'));
+
+    const check = runWithEnv({ TL_SYNC_RULES_ROOT: root }, 'sync-rules', '--check');
+    assert.notEqual(check.status, 0);
+    assert.match(check.stderr, /generated rule files are out of date/);
+    assert.match(check.stderr, /AGENTS\.md/);
+    assert.match(check.stderr, /GEMINI\.md/);
+    assert.doesNotMatch(check.stderr, /\.cursor\/rules\/tl\.mdc/);
   });
 });
