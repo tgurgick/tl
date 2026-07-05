@@ -187,7 +187,9 @@ body.m-experiments #view-experiments { flex: 0 0 100%; max-width: none; opacity:
   overflow: hidden;
 }
 @media (max-width: 1000px) { body.m-human .insights-rail { width: 320px; } }
-body.m-human #view-resume { flex-direction: column; }
+/* the human pane scrolls — the #view-resume overflow:hidden above is for the slide
+   animation; without this override, expanded content is cut off at the viewport */
+body.m-human #view-resume { flex-direction: column; overflow-y: auto; }
 body.m-human .resume-shell { width: 100%; display: flex; }
 body.m-human .insights-rail { display: block; position: sticky; top: 0; align-self: flex-start; height: calc(100vh - 49px - 33px); overflow-y: auto; }
 body.m-human .datestrip > div { max-width: none; margin: 0; padding: 8px 32px; }
@@ -349,6 +351,11 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .dec-row:hover { background: var(--surface); }
 .dec-row .txt { flex: 1; font-family: var(--serif); font-style: italic; font-size: .86rem; line-height: 1.5; }
 .dec-row .age { font-family: var(--mono); font-size: .6rem; color: var(--dim); flex: none; }
+/* inline thread body under a clicked decisions/parked row */
+.row-body { display: none; padding: 4px 2px 12px 30px; border-bottom: 1px solid var(--line); }
+.row-body.open { display: block; }
+.row-body .path { font-family: var(--mono); font-size: .58rem; color: var(--faint); margin-bottom: 6px; }
+.row-body .md { font-size: .8rem; color: var(--mid); }
 .footnote { margin-top: 46px; text-align: center; font-family: var(--mono); font-size: .62rem; color: var(--faint); }
 .fn-cmds { margin-top: 8px; font-size: .58rem; color: var(--faint); opacity: .7; letter-spacing: .02em; }
 .empty { font-size: .78rem; color: var(--dim); padding: 8px 0; }
@@ -1281,6 +1288,10 @@ function renderInsightsRail(wss) {
     ${modelRows ? `<div class="ins-block"><span class="il">Models</span>${modelRows}</div>` : ''}`;
 }
 
+// human-tab open-state that must survive re-renders — SSE refreshes rebuild the paper
+// every few seconds while agents work; without this, a clicked-open decisions/parked
+// list (and any row expanded within it) snaps shut before it can be read
+const resumeOpen = { counts: {}, rows: new Set() };
 function renderResume(wss) {
   $('dsProj').textContent = wss.map(w => w.name).join(' · ');
   $('dsDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -1511,6 +1522,18 @@ function renderResume(wss) {
     const counts = document.createElement('div'); counts.className = 'bp-counts';
     counts.innerHTML = `<span class="ci" data-x="hz">horizon</span><span class="ci" data-x="mp">map</span><span class="ci" data-x="bl">backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">parked <b>${parked.length}</b></span>`;
     const countsEx = document.createElement('div'); countsEx.className = 'expand';
+
+    // a decisions/parked row toggles the thread body inline beneath it — click to read, click to collapse
+    const expandableRow = (r, t) => {
+      const key = ws.name + '|' + t.path;
+      const bodyEl = document.createElement('div'); bodyEl.className = 'row-body';
+      const src = (t.body || '').replace(/^\s*# .*\n+/, '').trim();
+      bodyEl.innerHTML = `<div class="path">${esc(t.path)}</div>` +
+        (src ? `<div class="md">${md(src)}</div>` : '<div class="empty">nothing beneath — the title is the whole note</div>');
+      if (resumeOpen.rows.has(key)) bodyEl.classList.add('open');
+      r.onclick = () => { const open = bodyEl.classList.toggle('open'); resumeOpen.rows[open ? 'add' : 'delete'](key); };
+      countsEx.appendChild(r); countsEx.appendChild(bodyEl);
+    };
 
     const builders = {
       mp: () => {
@@ -1836,24 +1859,32 @@ function renderResume(wss) {
       dc: () => {
         countsEx.innerHTML = '';
         if (!decs.length) { countsEx.innerHTML = '<div class="empty">no decisions recorded</div>'; return; }
-        decs.forEach(d => { const r = document.createElement('div'); r.className = 'dec-row'; r.innerHTML = `${IC.check('#3a7d55')}<p class="txt">${esc(d.title)}</p><span class="age">${rel(d.mtime)}</span>`; r.onclick = () => openDrawer(d); countsEx.appendChild(r); });
+        decs.forEach(d => { const r = document.createElement('div'); r.className = 'dec-row'; r.innerHTML = `${IC.check('#3a7d55')}<p class="txt">${esc(d.title)}</p><span class="age">${rel(d.mtime)}</span>`; expandableRow(r, d); });
       },
       pk: () => {
         countsEx.innerHTML = '';
         if (!parked.length) { countsEx.innerHTML = '<div class="empty">nothing parked</div>'; return; }
-        parked.forEach(t => { const r = document.createElement('div'); r.className = 'loop-row'; r.innerHTML = `${IC.archive('#8a8070')}<div class="txt"><div class="t">${esc(t.title)}</div><div class="sub">${(t.meta.type || '').toUpperCase()} · ${rel(t.mtime)}</div></div>`; r.onclick = () => openDrawer(t); countsEx.appendChild(r); });
+        parked.forEach(t => { const r = document.createElement('div'); r.className = 'loop-row'; r.innerHTML = `${IC.archive('#8a8070')}<div class="txt"><div class="t">${esc(t.title)}</div><div class="sub">${(t.meta.type || '').toUpperCase()} · ${rel(t.mtime)}</div></div>`; expandableRow(r, t); });
       },
     };
     let openCount = null;
     counts.querySelectorAll('.ci').forEach(ci => {
       ci.onclick = () => {
         const x = ci.dataset.x;
-        if (openCount === x) { countsEx.classList.remove('open'); ci.classList.remove('open'); openCount = null; return; }
-        openCount = x;
+        if (openCount === x) { countsEx.classList.remove('open'); ci.classList.remove('open'); openCount = null; resumeOpen.counts[ws.name] = null; return; }
+        openCount = x; resumeOpen.counts[ws.name] = x;
         counts.querySelectorAll('.ci').forEach(c => c.classList.toggle('open', c === ci));
         builders[x](); countsEx.classList.add('open');
       };
     });
+    // re-open whichever section was open before this re-render, so reading isn't interrupted
+    const prevCount = resumeOpen.counts[ws.name];
+    if (prevCount && builders[prevCount]) {
+      openCount = prevCount;
+      const ci = counts.querySelector(`.ci[data-x="${prevCount}"]`);
+      if (ci) ci.classList.add('open');
+      builders[prevCount](); countsEx.classList.add('open');
+    }
     block.appendChild(counts); block.appendChild(countsEx);
 
     // ── park a thought (prominent, at the bottom) ──
