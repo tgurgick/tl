@@ -21,10 +21,17 @@ Same as `/tl triage`: argument is a workspace name under `projects/` or a path; 
 
 **1. Gather signals.**
 - `_metrics/override-log.jsonl` — human priority overrides, each with `from`, `to`, and (when present) a `reason`. This is the contrast memory: "this, not that."
+- `_metrics/goal-log.jsonl` — goal weight shifts from `/tl goal`, each with `action`, `goal`, `weight`, `rebalanced`, and (when present) a `reason` and optional `epoch`.
 - `done/*/outcome/FEEDBACK.md` — `scores` (correctness / completeness / scope_discipline) and `priority_was_right`.
 - `_metrics/triage-log.jsonl`, `_metrics/cycle-log.jsonl` — ranking history and durations.
-- `TRIAGE.yml` — the current goals, weights, allocation, rules.
+- `TRIAGE.yml` — the current goals, weights, allocation, rules, and optional `focus` (the active epoch label).
 - Every spec's frontmatter and body — for the dependency and file-scope scan in step 4.
+
+**1b. Narrate priority epochs.** When `goal-log.jsonl` or `override-log.jsonl` lines carry an `epoch` label (or when `TRIAGE.yml` `focus` is set), group related lines by that label and narrate the span in the reflect proposal:
+- For each distinct `epoch`, find the earliest `goal-log.jsonl` line with that label — that date and weight shift is the epoch start.
+- For each `override-log.jsonl` line with the same label, narrate the priority change in context: *"specs/foo moved P3→P1 on 2026-06-26 (partner-launch epoch, started 2026-06-24 when dispatch-work weight went 0.15→0.30)."*
+- Lines without an `epoch` are grouped by date proximity to the nearest labeled rebalance, or listed without epoch context.
+- Include an **Epochs** section in the proposal when any labeled lines exist; skip it when none do. Reflect may *propose* naming an unlabeled cluster ("name this epoch?") but never writes `focus:` or log lines — that stays human-owned via `/tl goal`.
 
 **2. Learn from overrides.** Group overrides by direction and reason. A pattern worth acting on is a *repeated* human correction in the same direction sharing a common thread — same `type`, `tag`, parent intent, or a recurring word in the reasons ("compliance", "deadline", "partner"). For each real pattern:
 - If the reason names a factor the rules don't capture, propose a new priority rule that would have predicted those overrides.
@@ -42,6 +49,7 @@ Cite the FEEDBACK files behind each proposal.
 
 **5. Write the proposal** to `_metrics/reflect-{date}.md`:
 - **Observed** — each pattern found, with its evidence (the override lines / FEEDBACK files).
+- **Epochs** — when labeled lines exist, the epoch-span narratives from step 1b (priority changes read back against their weight-shift context).
 - **Proposed `TRIAGE.yml` changes** — concrete before → after for weights, rules, or allocation. Nothing vague.
 - **Parallel tracks** — the independent chains that can run at once, and which goal each advances.
 - **Serialize** — the collisions to avoid.

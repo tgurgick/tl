@@ -301,6 +301,7 @@ Winner application states are reserved for later workflow specs: `selected`, `ap
 ## Workspace config (`TRIAGE.yml`)
 
 ```yaml
+focus: ""               # optional — human-owned epoch label (set via /tl goal); stamps goal/override logs
 goals:                  # what matters now
   - id: slug
     description: ""
@@ -332,6 +333,8 @@ auto_review:            # optional — per-type autonomy dial for /tl run's gate
 
 `auto_review` **never skips the human gate.** Even with a type set to `true`, `/tl run` lands the spec in `in-review`, not `done` — an agent never signs off its own work. The extra `to_done` guard is a belt-and-suspenders flag: it is `false` and agents must treat it as read-only false; there is no agent path to `done/`. `auto_review: true` means "flagged for a lighter-touch review," not "auto-accepted." (Deviation from the original spec, which proposed `auto_review` landing specs directly in `done/`: capped at `in-review` to keep the human gate intact.)
 
+**Priority epochs (`focus`).** An optional top-level string naming the current priority epoch — a human-owned label tying related weight shifts and overrides together (e.g. `focus: "partner-launch"`). Set via `/tl goal` when rebalancing; absent means no active epoch label. The epoch is **not** a stored period object — it is a join key on append-only logs. When present, `/tl goal` and human priority overrides should stamp the same label on their log lines (`epoch` field, below). `/tl reflect` groups by that label and narrates the span.
+
 ## Metrics (`_metrics/*.jsonl`, per workspace)
 
 Append-only, one JSON object per line. Schemas are defined in each skill's SKILL.md. Never edit existing lines; corrections are new lines.
@@ -339,6 +342,12 @@ Append-only, one JSON object per line. Schemas are defined in each skill's SKILL
 `cycle-log.jsonl` records one line per completed cycle and carries the same four cost signals as FEEDBACK.md, so metrics aggregation reads them from the JSONL without reparsing markdown. Each line includes at least: `spec` (path), `completed` (date), plus the optional `agent_tool` (enum: `claude-code` `cursor` `codex` `windsurf` `other`), `duration_minutes` (number), `cost_usd` (number, estimated), and `tokens_used` (number). Older lines that predate these fields are valid — the fields are optional.
 
 `loop-log.jsonl` (written by `/tl loop`) records one line per loop iteration: `goal` (id), `iteration` (int), `specs_run` (int), `specs_auto_reviewed` (int), `specs_awaiting_review` (int), `key_results_met` (int), `key_results_total` (int). It traces a goal's progress across an autonomous cycle; the human gate still owns `in-review → done`.
+
+`goal-log.jsonl` (written by `/tl goal`) records one line per goal add/rebalance/edit. Fields include: `date`, `action` (`add` `rebalance` `edit`), `goal` (id), `weight` (number — the new weight for the affected goal), `rebalanced` (optional map of goal id → `[old_weight, new_weight]` for every changed goal), `reason` (the human's words), and optional `epoch` (string — join key tying this weight shift to related override lines; defaults to `TRIAGE.yml` `focus` when set). Older lines without `epoch` are valid.
+
+`override-log.jsonl` (written by `/tl triage` on detected human priority changes, and by the cockpit on manual overrides) records one line per override. Fields include: `date`, `spec` (path), `from` (priority), `to` (priority), optional `reason` (the human's why), and optional `epoch` (string — same join key as `goal-log.jsonl`; defaults to `TRIAGE.yml` `focus` when set). Older lines without `epoch` are valid.
+
+The epoch is **derived from shared label + date range**, not declared as a period object. A span is recoverable from `goal-log.jsonl` alone (interval between two rebalances); `epoch` connects an override to the weighting shift that caused it. `/tl reflect` groups lines by `epoch` and narrates priority changes across the span.
 
 Experiment logs are append-only JSONL under `_metrics/`. Markdown artifacts explain what happened for humans; JSON and JSONL records are the learning/querying surface.
 
