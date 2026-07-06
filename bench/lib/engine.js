@@ -1,14 +1,14 @@
-// lib/bench-engine.js — the bench execution engine.
+// lib/engine.js — the bench execution engine.
 //
 // One place to benchmark models and run experiments, as a reactive notebook:
 // marimo's model (cells form a dependency graph; running a cell re-runs its
 // stale ancestors and marks descendants stale) with n8n's cells (each cell is
 // a typed node — dataset, prompt, agent loop, metric, judge, golden set,
 // eval grid, annotation). The engine executes cells (async, because model
-// providers are); lib/bench-notebook.js owns the file format and the graph;
-// lib/bench-providers.js owns model I/O.
+// providers are); lib/notebook.js owns the file format and the graph;
+// lib/providers.js owns model I/O.
 //
-// Everything is files, following tl's rules:
+// Everything is files, one rule per artifact:
 //   _bench/<name>.bench.md                  the notebook (markdown IS the notebook)
 //   _bench/runs/<name>/cells/<id>.json      last output per cell (the reactive state)
 //   _bench/runs/<name>/evals/<run>/         eval grid artifacts (results.jsonl, summary.json)
@@ -28,9 +28,9 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const vm = require('node:vm');
 
-const { parseNotebook, serializeNotebook, buildGraph, runPlan, downstream, slugId } = require('./bench-notebook');
-const { createProviders } = require('./bench-providers');
-const { safeRead, isDir, safePath } = require('./workspace');
+const { parseNotebook, serializeNotebook, buildGraph, runPlan, downstream, slugId } = require('./notebook');
+const { createProviders } = require('./providers');
+const { safeRead, isDir, safePath } = require('./fsutil');
 
 const EXPR_TIMEOUT_MS = 200;   // accident guard for expr metrics/judges/tools
 const DEFAULT_MAX_TURNS = 4;   // agent loop ceiling unless the cell says otherwise

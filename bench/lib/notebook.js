@@ -1,10 +1,9 @@
-// lib/bench-notebook.js — the .bench.md notebook format + the reactive graph.
+// lib/notebook.js — the .bench.md notebook format + the reactive graph.
 //
 // A bench notebook is one markdown file: frontmatter, then a sequence of cells.
 // Typed cells are fenced ```tl-cell blocks whose body is the YAML config the
 // engine executes; any prose between fences is a note cell. The file is the
-// notebook — diffable, portable, no hidden state — following the same rule as
-// the rest of tl: markdown is the database.
+// notebook — diffable, portable, no hidden state: markdown is the database.
 //
 //     ---
 //     notebook: model-compare
@@ -28,10 +27,10 @@
 
 'use strict';
 
-const { parseYaml, parseFrontmatter } = require('./parse');
+const { parseYaml, parseFrontmatter } = require('./yaml');
 
 // The cell types the engine knows how to execute. `note` is prose (never
-// executed); everything else has an executor in lib/bench-engine.js.
+// executed); everything else has an executor in lib/engine.js.
 const CELL_TYPES = ['note', 'data', 'prompt', 'agent', 'metric', 'judge', 'golden', 'eval', 'annotate'];
 
 // Where cell references live, per type. The graph walks exactly these config

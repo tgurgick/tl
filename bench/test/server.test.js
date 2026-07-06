@@ -1,6 +1,6 @@
 'use strict';
 
-// bench/server.js API smoke test: boot the real server on an ephemeral port
+// server.js API smoke test: boot the real server on an ephemeral port
 // against a temp repo root, drive the demo notebook through the HTTP surface
 // (create → run → edit → annotate → golden decisions), and assert the same
 // invariants the UI depends on.
@@ -21,7 +21,7 @@ function tmpRoot() {
 }
 
 async function startServer(root) {
-  const child = spawn(process.execPath, [path.join(ROOT, 'bench', 'server.js'), '--port', '0', '--root', root], {
+  const child = spawn(process.execPath, [path.join(ROOT, 'server.js'), '--port', '0', '--root', root], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   // `--port 0` isn't supported (parseInt gives 0 → ephemeral); read the actual
@@ -107,6 +107,25 @@ test('bench server drives the whole loop over HTTP', async () => {
     assert.ok(bad.error);
     const bad2 = await post(base, '/api/notebook-create', { ws: 'demo', name: '../escape' });
     assert.match(bad2.error, /slug/);
+  } finally {
+    child.kill();
+  }
+});
+
+test('standalone mode: a root without projects/ is itself the workspace', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-bench-solo-'));
+  const { child, base } = await startServer(root);
+  try {
+    const state = await get(base, '/api/state');
+    assert.deepEqual(state.workspaces, [{ name: path.basename(root), example: false }]);
+
+    const ws = path.basename(root);
+    const created = await post(base, '/api/notebook-create', { ws, demo: true });
+    assert.equal(created.name, 'model-compare');
+    const run = await post(base, '/api/run', { ws, nb: 'model-compare', cell: 'seeds' });
+    assert.deepEqual(run.ran, ['seeds']);
+    // artifacts land under the root itself — no projects/ layer
+    assert.ok(fs.existsSync(path.join(root, '_bench', 'runs', 'model-compare', 'cells', 'seeds.json')));
   } finally {
     child.kill();
   }

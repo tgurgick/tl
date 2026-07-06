@@ -5,7 +5,7 @@ const assert = require('node:assert');
 
 const {
   createFixtureProvider, createAnthropicProvider, createOpenAiProvider, createProviders,
-} = require('../lib/bench-providers');
+} = require('../lib/providers');
 
 test('fixture is deterministic: same request, same reply', async () => {
   const p = createFixtureProvider();

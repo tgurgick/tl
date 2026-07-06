@@ -783,8 +783,8 @@ function cmdExperiment(args) {
 // same engine the bench UI drives; `node bench/server.js` is the UI).
 function cmdBench(args) {
   const [subcmd, ...rest] = args;
-  const { createBench } = require('../lib/bench-engine');
-  const { scaffoldDemo, DEMO_NAME } = require('../lib/bench-demo');
+  const { createBench } = require('../bench/lib/engine');
+  const { scaffoldDemo, DEMO_NAME } = require('../bench/lib/demo');
 
   if (subcmd === 'demo') {
     const ws = resolveWorkspace(rest[0]);

@@ -1,9 +1,9 @@
-// lib/bench-providers.js — the model provider seam for the bench.
+// lib/providers.js — the model provider seam for the bench.
 //
 // The bench never talks to a vendor SDK. Every model call goes through one
 // tiny interface, so a deterministic fixture, the Anthropic API, and any
 // OpenAI-compatible endpoint (including a local Ollama) are interchangeable —
-// the same seam philosophy as lib/experiment-adapter.js, one level down:
+// one seam for all model I/O:
 //
 //   provider.name                        'fixture' | 'anthropic' | 'openai'
 //   provider.available()              -> { ok, reason }   (key present, etc.)

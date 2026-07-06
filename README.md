@@ -235,7 +235,9 @@ tl bench run  my-app model-compare   # run it headless
 node bench/server.js --open          # the notebook UI → http://localhost:4460
 ```
 
-Zero dependencies, like everything here: notebooks live in the workspace's `_bench/`, eval artifacts are JSON/JSONL files, and one summary row per candidate lands in `_metrics/bench-log.jsonl`. The `fixture` provider proves the whole loop with no keys and no network; `anthropic` and `openai`-compatible endpoints (including local ones) plug into the same seam. Full reference: [`docs/bench.md`](docs/bench.md).
+Zero dependencies, like everything here: notebooks live in the workspace's `_bench/`, eval artifacts are JSON/JSONL files, and one summary row per candidate lands in `_metrics/bench-log.jsonl`. The `fixture` provider proves the whole loop with no keys and no network; `anthropic` and `openai`-compatible endpoints (including local ones) plug into the same seam.
+
+The bench is a **standalone package incubating under `bench/`** — its own CLI (`bench/bin/bench.js`), tests, and README, with zero imports from tl's `lib/` — slated to split into its own repository; `tl bench` is a thin workspace-aware wrapper around it. Full reference: [`bench/README.md`](bench/README.md); the split plan and TL integration: [`docs/bench.md`](docs/bench.md).
 
 ## Agent experiments
 

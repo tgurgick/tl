@@ -6,8 +6,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { createBench, renderTemplate, templateVars, extractJsonArray, extractJsonObject } = require('../lib/bench-engine');
-const { scaffoldDemo, DEMO_NAME } = require('../lib/bench-demo');
+const { createBench, renderTemplate, templateVars, extractJsonArray, extractJsonObject } = require('../lib/engine');
+const { scaffoldDemo, DEMO_NAME } = require('../lib/demo');
 
 function tmpWs() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tl-bench-'));
@@ -74,7 +74,7 @@ test('reactivity: nothing re-runs when fresh; edits dirty the whole downstream',
   const nb = bench.readNotebookFile(DEMO_NAME);
   const cell = nb.cells.find(c => c.id === 'brevity');
   cell.raw = 'id: brevity\ntype: metric\nkind: expr\nexpr: output.length < 500 ? 1 : 0';
-  const { serializeNotebook } = require('../lib/bench-notebook');
+  const { serializeNotebook } = require('../lib/notebook');
   bench.writeNotebookFile(DEMO_NAME, serializeNotebook(nb));
 
   const view = bench.readNotebook(DEMO_NAME);

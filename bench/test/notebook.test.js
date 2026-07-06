@@ -5,7 +5,7 @@ const assert = require('node:assert');
 
 const {
   parseNotebook, serializeNotebook, buildGraph, downstream, runPlan, cellRefs, slugId,
-} = require('../lib/bench-notebook');
+} = require('../lib/notebook');
 
 const SAMPLE = `---
 notebook: t

@@ -9,7 +9,11 @@ One place to benchmark models and run experiments: a reactive notebook (marimo's
 model — cells form a dependency graph, edits dirty the downstream) whose cells
 are typed nodes (n8n's model — data, prompt, agent loop, metric, judge, golden
 set, eval grid, annotation). The notebook is one markdown file under the
-workspace's `_bench/`; every output is a file. Full reference: `docs/bench.md`.
+workspace's `_bench/`; every output is a file.
+
+The bench is a standalone package under `bench/` (own CLI, tests, README —
+slated for its own repo); `tl bench` is the thin workspace-aware wrapper. Full
+reference: `bench/README.md`; TL integration and split plan: `docs/bench.md`.
 
 ## The verbs
 

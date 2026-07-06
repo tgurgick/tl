@@ -1,13 +1,13 @@
-// lib/bench-demo.js — the deterministic demo notebook.
+// lib/demo.js — the deterministic demo notebook.
 //
-// `tl bench demo <workspace>` scaffolds this notebook into the workspace's
-// _bench/ folder. It exercises the whole bench offline — dataset → prompt →
-// two agent-loop candidates (one with a tool) → metrics → an LLM judge → an
-// eval grid → HITL annotation → synthetic golden generation with its human
-// approval gate — all on the fixture provider, so it proves the loop with
-// zero keys and zero network, the same way `tl experiment fixture` proves the
-// experiments artifact protocol. Swap `provider: fixture` for `anthropic` or
-// `openai` and the same notebook benchmarks real models.
+// `bench demo` (or `tl bench demo <workspace>` inside a throughline checkout)
+// scaffolds this notebook into the root's _bench/ folder. It exercises the
+// whole bench offline — dataset → prompt → two agent-loop candidates (one
+// with a tool) → metrics → an LLM judge → an eval grid → HITL annotation →
+// synthetic golden generation with its human approval gate — all on the
+// fixture provider, so it proves the loop with zero keys and zero network.
+// Swap `provider: fixture` for `anthropic` or `openai` and the same notebook
+// benchmarks real models.
 
 'use strict';
 
