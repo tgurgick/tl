@@ -776,75 +776,6 @@ function cmdExperiment(args) {
   out(`winner: ${result.winner}`);
 }
 
-// ---------- tl bench ----------
-
-// The bench notebook verbs. Everything here is deterministic file work over
-// _bench/ — scaffold the demo, list notebooks, and run cells headless (the
-// same engine the bench UI drives; `node bench/server.js` is the UI).
-function cmdBench(args) {
-  const [subcmd, ...rest] = args;
-  const { createBench } = require('../bench/lib/engine');
-  const { scaffoldDemo, DEMO_NAME } = require('../bench/lib/demo');
-
-  if (subcmd === 'demo') {
-    const ws = resolveWorkspace(rest[0]);
-    const r = scaffoldDemo(ws.dir);
-    out('===== tl bench demo =====');
-    out(`workspace: ${ws.name}`);
-    out(`notebook:  _bench/${r.name}.bench.md`);
-    out('');
-    out(`Run it:    tl bench run ${ws.name} ${DEMO_NAME}`);
-    out('Open it:   node bench/server.js --open');
-    return;
-  }
-
-  if (subcmd === 'list') {
-    const ws = resolveWorkspace(rest[0]);
-    const bench = createBench({ wsDir: ws.dir });
-    const notebooks = bench.listNotebooks();
-    out('===== tl bench list =====');
-    out(`workspace: ${ws.name}`);
-    if (!notebooks.length) { out('no notebooks under _bench/ — start with: tl bench demo ' + ws.name); return; }
-    for (const nb of notebooks) out(`- ${nb.name} — ${nb.title} (${nb.cells} cells)`);
-    const sets = bench.listGoldenSets();
-    if (sets.length) {
-      out('\ngolden sets:');
-      for (const s of sets) out(`- ${s.set}: ${s.approved} approved / ${s.draft} draft / ${s.rejected} rejected`);
-    }
-    return;
-  }
-
-  if (subcmd === 'run') {
-    const ws = resolveWorkspace(rest[0]);
-    const nbName = rest[1];
-    const cellId = rest[2] && !rest[2].startsWith('--') ? rest[2] : null;
-    const force = rest.includes('--force');
-    if (!nbName) fail('Usage: tl bench run <workspace> <notebook> [cell] [--force]');
-    const bench = createBench({ wsDir: ws.dir });
-    const done = r => {
-      out('===== tl bench run =====');
-      out(`workspace: ${ws.name}  notebook: ${nbName}${cellId ? '  cell: ' + cellId : ''}`);
-      out(`ran: ${r.ran.length ? r.ran.join(', ') : '(nothing stale — use --force to re-run)'}`);
-      for (const [id, st] of Object.entries(r.notebook.state)) {
-        if (st.error) out(`! ${id}: ${st.error}`);
-      }
-      const evalCell = r.notebook.cells.find(c => c.type === 'eval' && r.notebook.state[c.id] && r.notebook.state[c.id].output);
-      if (evalCell) {
-        const o = r.notebook.state[evalCell.id].output;
-        out(`\neval ${evalCell.id} → ${o.run_id} (${o.results_path})`);
-        for (const c of (o.summary && o.summary.candidates) || []) {
-          const flags = o.summary.winner === c.candidate ? '  ← winner' : '';
-          out(`  ${c.candidate} [${c.provider}/${c.model}] n=${c.n} judge=${c.judge ? c.judge.overall_mean : '-'} metrics=${JSON.stringify(c.metrics)}${flags}`);
-        }
-      }
-    };
-    const p = cellId ? bench.runCell(nbName, cellId, { force }) : bench.runAll(nbName, { force });
-    return p.then(done).catch(e => fail(String(e && e.message || e)));
-  }
-
-  fail('Usage: tl bench demo|list|run [workspace] …');
-}
-
 // ---------- usage ----------
 
 function usage(stream) {
@@ -861,10 +792,6 @@ function usage(stream) {
   w('  tl recall [workspace] <query>   Search intents/specs/threads/outcomes — "did we discuss this?"');
   w('  tl experiment fixture [workspace]');
   w('                                  Create a deterministic fixture experiment proof');
-  w('  tl bench demo [workspace]       Scaffold the demo bench notebook (offline, fixture provider)');
-  w('  tl bench list [workspace]       List bench notebooks and golden sets');
-  w('  tl bench run  [workspace] <notebook> [cell] [--force]');
-  w('                                  Run a bench notebook (or one cell) headless');
   w('  tl sync-rules                   Regenerate the per-agent rules files from skills/*/SKILL.md');
   w('');
   w('Workspace: an argument names a workspace under projects/; if exactly one exists it is used;');
@@ -884,7 +811,6 @@ function main() {
     case 'review': return cmdReview(rest);
     case 'recall': return cmdRecall(rest);
     case 'experiment': return cmdExperiment(rest);
-    case 'bench': return cmdBench(rest);
     case 'sync-rules': return cmdSyncRules();
     case undefined:
     case 'help':

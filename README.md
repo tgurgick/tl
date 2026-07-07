@@ -52,12 +52,11 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, promote, groom, decompose, run, review, recall, map, triage, reflect, dedup, bug-capture, goal, ui, bench
+├── skills/                     # /tl new, resume, capture, promote, groom, decompose, run, review, recall, map, triage, reflect, dedup, bug-capture, goal, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
 ├── ui/                         # local web UI — Human / Split / Agent (zero-dep node)
-├── bench/                      # the bench — reactive benchmark/eval notebook UI (zero-dep node)
 ├── docs/                       # design process docs
 │   ├── agent-experiments.md    # portable task/candidate/judge model + TL mapping
 │   └── repo-split.md
@@ -74,7 +73,6 @@ throughline/                    # the tool (this repo, public)
         ├── triage/             # ranked specs held for human release (not the run queue)
         ├── threads/            # what not to lose — parked ideas, decisions, open questions
         ├── _experiments/       # shadow candidate runs (see docs/agent-experiments.md)
-        ├── _bench/             # bench notebooks, golden sets, eval runs (see docs/bench.md)
         └── _metrics/           # JSONL logs from skill runs
 ```
 
@@ -190,10 +188,6 @@ Sweeps bug specs before triage ranks them. With error tracking connected it auto
 
 The one skill that needs network. Polls the provider configured in `TRIAGE.yml` `error_tracking`, and turns each new issue into a `specs/bug-*/` folder — spec, full crash report, and affected-code excerpts — that an agent can pick up cold. Leaves priority blank; that's triage's job.
 
-### /tl bench
-
-The model bench (see [The bench](#the-bench) above): scaffold, run, and steer benchmark notebooks — agent loops, eval grids, metrics/judges, golden sets, HITL annotation. Deterministic CLI verbs (`tl bench demo|list|run`) plus the notebook UI (`node bench/server.js --open`). Writes only under `_bench/` and `_metrics/`; the human gates (golden approval, annotation) always stay human.
-
 ## The learning loop
 
 Auto-triage gets smarter from signals the system records as a side effect of normal use:
@@ -215,7 +209,6 @@ Append-only JSONL logs from every skill run, kept in the workspace's `_metrics/`
 | `dedup-log.jsonl` | dedup | Daily: merges, auto-closes, flags, open bug count |
 | `triage-log.jsonl` | triage | Daily: counts by priority/type, allocation %, goal progress |
 | `cycle-log.jsonl` | on completion | Spec lifecycle: created, started, completed, duration, feedback score |
-| `bench-log.jsonl` | bench eval runs | One row per eval-run candidate: judge mean, metric means, tokens, cost, winner |
 | `candidate-run-log.jsonl` | experiment runs | Candidate attempts: task hash, runtime fingerprint, status, metrics |
 | `judge-log.jsonl` | experiment judge | Scores, hard gates, winner, rationale |
 | `experiment-log.jsonl` | experiment cohort | Experiment lifecycle events |
@@ -224,20 +217,6 @@ Append-only JSONL logs from every skill run, kept in the workspace's `_metrics/`
 | `trace-features.jsonl` | trace extraction | Observable action features for learning |
 
 Plus human-readable `triage-{date}.md` summaries. A UI layer reads the JSONL files directly for charts.
-
-## The bench
-
-One place to benchmark models and run experiments — a reactive notebook that combines marimo's model (cells form a dependency graph; edits dirty the downstream) with n8n's typed nodes (data, prompt, **agent loop**, metric, judge, golden set, eval grid, annotation), in one markdown file per notebook. Build agent loops, run eval grids across candidate models, design metrics (code) and judges (LLM or code), generate synthetic golden sets behind a draft → approved human gate, and annotate results (HITL) with judge-agreement calibration.
-
-```
-tl bench demo my-app                 # scaffold the demo notebook (offline, deterministic)
-tl bench run  my-app model-compare   # run it headless
-node bench/server.js --open          # the notebook UI → http://localhost:4460
-```
-
-Zero dependencies, like everything here: notebooks live in the workspace's `_bench/`, eval artifacts are JSON/JSONL files, and one summary row per candidate lands in `_metrics/bench-log.jsonl`. The `fixture` provider proves the whole loop with no keys and no network; `anthropic` and `openai`-compatible endpoints (including local ones) plug into the same seam.
-
-The bench is a **standalone package incubating under `bench/`** — its own CLI (`bench/bin/bench.js`), tests, and README, with zero imports from tl's `lib/` — slated to split into its own repository; `tl bench` is a thin workspace-aware wrapper around it. Full reference: [`bench/README.md`](bench/README.md); the split plan and TL integration: [`docs/bench.md`](docs/bench.md).
 
 ## Agent experiments
 
