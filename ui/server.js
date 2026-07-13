@@ -836,6 +836,135 @@ function hNote(ws, body, res) {
   return json(res, 200, { ok: true });
 }
 
+// ---------- frontmatter list edits (map repair) ----------
+// lib/frontmatter covers single-line scalar fields; the map-repair handler also
+// edits small YAML lists (an intent's `specs:` / `goals:`). Same rules apply:
+// scoped to the leading frontmatter block, values sanitized to one safe line,
+// and the body is never touched. `key` is always a literal from this file.
+
+// append one value to a frontmatter list field — handles a missing key,
+// `key: []`, an inline `key: [a, b]`, or a block list; no-ops if already present.
+function appendToFrontmatterList(text, key, value) {
+  const src = String(text);
+  const m = src.match(/^(---\n)([\s\S]*?)(\n---\n?)/);
+  if (!m) return src;
+  const val = fmValue(value);
+  const unq = s => s.trim().replace(/^["']|["']$/g, '');
+  const lines = m[2].split('\n');
+  const keyRe = new RegExp(`^${key}:(.*)$`);
+  const ki = lines.findIndex(l => keyRe.test(l));
+  const item = `  - "${val}"`;
+  if (ki < 0) lines.unshift(`${key}:`, item);
+  else {
+    const rest = lines[ki].match(keyRe)[1].replace(/\s#.*$/, '').trim();
+    const inline = rest.match(/^\[(.*)\]$/);
+    if (inline && inline[1].trim()) {              // inline list with entries — keep it inline
+      const entries = inline[1].split(',').map(unq);
+      if (entries.includes(val)) return src;
+      lines[ki] = `${key}: [${entries.map(e => `"${e}"`).concat(`"${val}"`).join(', ')}]`;
+    } else if (inline || !rest) {                  // `key: []` or bare `key:` — block form
+      let j = ki + 1;
+      while (j < lines.length && /^\s+-\s/.test(lines[j])) {
+        if (unq(lines[j].replace(/^\s+-\s*/, '')) === val) return src;
+        j++;
+      }
+      lines[ki] = `${key}:`;
+      lines.splice(j, 0, item);
+    } else return src;                             // a scalar where a list should be — refuse
+  }
+  return m[1] + lines.join('\n') + m[3] + src.slice(m[0].length);
+}
+
+// replace-or-insert a frontmatter list field as a one-line inline list,
+// dropping any block items the old value had.
+function setFrontmatterList(text, key, values) {
+  const src = String(text);
+  const m = src.match(/^(---\n)([\s\S]*?)(\n---\n?)/);
+  if (!m) return src;
+  const line = `${key}: [${values.map(fmValue).join(', ')}]`;
+  const lines = m[2].split('\n');
+  const ki = lines.findIndex(l => new RegExp(`^${key}:`).test(l));
+  if (ki < 0) lines.unshift(line);
+  else {
+    let j = ki + 1;
+    while (j < lines.length && /^\s+-\s/.test(lines[j])) j++;   // absorb old block items
+    lines.splice(ki, j - ki, line);
+  }
+  return m[1] + lines.join('\n') + m[3] + src.slice(m[0].length);
+}
+
+function hMapRepair(ws, body, res) {
+  // heal a throughline break from the Map: attach an orphan spec to an existing
+  // intent, create a new goal-carrying intent for it, or point a goal-less
+  // intent at a TRIAGE.yml goal. Files only — frontmatter edits plus one
+  // scaffolded intent from _templates/intent.md; the server never executes.
+  const action = String(body.action || '');
+  let goalIds = [];
+  try {
+    const y = parseYaml(readFirst(path.join(ws.dir, 'TRIAGE.yml'), path.join(ws.dir, 'triage.yml')) || '');
+    goalIds = ((y && y.goals) || []).map(g => String(g && g.id || '')).filter(Boolean);
+  } catch { /* no goals — create/set-goal will refuse below */ }
+
+  // the spec under repair: a folder in a known stage, holding a SPEC.md
+  const specRel = String(body.spec || '').replace(/\/$/, '');
+  const specFile = /^(triage|specs|in-progress|tests|in-review|done)\/[^/]+$/.test(specRel)
+    ? safePath(ws, specRel + '/SPEC.md') : null;
+  const slug = specRel.split('/').pop();
+
+  const intentRel = String(body.intent || '');
+  const intentOk = /^intents\/[^/]+\.md$/.test(intentRel) && !intentRel.includes('..');
+
+  if (action === 'attach') {
+    if (!intentOk) return json(res, 400, { error: 'bad intent path' });
+    if (!specFile || !fs.existsSync(specFile)) return json(res, 404, { error: 'spec not found' });
+    const intentFile = safePath(ws, intentRel);
+    if (!intentFile || !fs.existsSync(intentFile)) return json(res, 404, { error: 'intent not found' });
+    fs.writeFileSync(specFile, setFrontmatterField(safeRead(specFile), 'intent', intentRel));
+    fs.writeFileSync(intentFile, appendToFrontmatterList(safeRead(intentFile), 'specs', 'specs/' + slug + '/'));
+    return json(res, 200, { ok: true, intent: intentRel });
+  }
+
+  if (action === 'create-intent') {
+    const title = String(body.title || '').trim();
+    const goal = String(body.goal || '').trim();
+    if (!title) return json(res, 400, { error: 'empty title' });
+    // the never-write-a-goal-less-intent guard: creating requires a real goal
+    if (!goal) return json(res, 400, { error: 'a goal is required — an intent must ladder to one' });
+    if (!goalIds.includes(goal)) return json(res, 400, { error: 'unknown goal — pick one from TRIAGE.yml' });
+    if (!specFile || !fs.existsSync(specFile)) return json(res, 404, { error: 'spec not found' });
+    const rel = `intents/${isoDate()}-${slugify(title)}.md`;
+    const full = safePath(ws, rel);
+    if (!full) return json(res, 400, { error: 'bad path' });
+    if (fs.existsSync(full)) return json(res, 409, { error: 'an intent with this name already exists' });
+    // scaffold from the shared template so repaired intents match hand-made ones
+    let text = safeRead(path.join(ROOT, '_templates', 'intent.md'))
+      || '---\ntitle: ""\ncreated: YYYY-MM-DD\nproject: ""\nstatus: "draft"\ngoals: []\npriority: ""\ntags: []\nspecs: []\n---\n\n# {title}\n';
+    text = setFrontmatterField(text, 'title', title);
+    text = setFrontmatterField(text, 'created', isoDate());
+    text = setFrontmatterField(text, 'project', ws.name);
+    text = setFrontmatterField(text, 'status', 'draft');
+    text = setFrontmatterList(text, 'goals', [goal]);
+    text = appendToFrontmatterList(text, 'specs', 'specs/' + slug + '/');
+    text = text.replace(/\{title\}/g, title);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, text);
+    fs.writeFileSync(specFile, setFrontmatterField(safeRead(specFile), 'intent', rel));
+    return json(res, 200, { ok: true, path: rel });
+  }
+
+  if (action === 'set-goal') {
+    const goal = String(body.goal || '').trim();
+    if (!intentOk) return json(res, 400, { error: 'bad intent path' });
+    if (!goal || !goalIds.includes(goal)) return json(res, 400, { error: 'a goal from TRIAGE.yml is required' });
+    const intentFile = safePath(ws, intentRel);
+    if (!intentFile || !fs.existsSync(intentFile)) return json(res, 404, { error: 'intent not found' });
+    fs.writeFileSync(intentFile, setFrontmatterList(safeRead(intentFile), 'goals', [goal]));
+    return json(res, 200, { ok: true });
+  }
+
+  return json(res, 400, { error: 'action must be attach, create-intent, or set-goal' });
+}
+
 function hExperimentQueue(ws, body, res) {
   // Queue a fixture/local experiment by writing ONE config file the queue workers pick up.
   // The UI never executes agents or shells out — it only drops a request into _experiments/queue/.
@@ -892,6 +1021,7 @@ const ROUTES = {
   '/api/capture': hCapture,
   '/api/experiment-queue': hExperimentQueue,
   '/api/goal': hGoal,
+  '/api/map-repair': hMapRepair,
   '/api/priority': hPriority,
   '/api/thread-status': hThreadStatus,
   '/api/research': hResearch,

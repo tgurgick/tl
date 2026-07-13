@@ -52,6 +52,117 @@ Exit codes are cron-friendly: `0` no work / child ok, `1` misconfig / spawn
 failure / child non-zero, `2` paused or lock held (an alerting hook for
 launchd or monitoring if you want one).
 
+The examples above are the minimal shapes. Real agent CLIs each have a trap
+or two — read the next three sections before writing a lane for one.
+
+## Per-lane invocation quirks
+
+E2e findings from the first real multi-lane runs. Every one of these
+produced a lane that *looked* correctly configured.
+
+**agy (Antigravity gemini) — flag order is load-bearing.**
+`agy -p --dangerously-skip-permissions "<prompt>"` silently misfires: `-p`
+consumes the *next token* as its prompt value, so the agent receives the
+literal string `--dangerously-skip-permissions` as its task — the first lane
+run produced documentation about the flag instead of doing the work. Exit 0,
+no error, no file touched. Correct order:
+
+```
+agy --dangerously-skip-permissions -p "<prompt>"
+```
+
+A lane template that gets this wrong fails **silently green** — the worst
+failure mode for a cron lane, because every tick reports success while no
+work moves. Today the only tell is human: `_metrics/worker-log.jsonl` shows
+child exit 0 while the picked spec never moved folders. Watch for that
+signature after adding or editing any lane command. (A driver-side sanity
+check — spec unmoved after child exit 0 → log a suspicious-tick warning — is
+a candidate future spec; the driver does not do this yet.)
+
+**gemini CLI proper — not usable headless here yet.** It exits with an
+ineligibility/project-id error (wants `GOOGLE_CLOUD_PROJECT` / a different
+auth tier). The working gemini lane is Antigravity's `agy` — with a trust
+implication: agy's permission model is blunter.
+`--dangerously-skip-permissions` is full YOLO; there are no sandbox tiers
+like codex's `--sandbox workspace-write`. Prefer agy for now, knowing that.
+
+**cursor-agent — bake in `-f`.** `cursor-agent -p "<prompt>"` refuses to run
+in an untrusted directory ("Pass --trust, --yolo, or -f"). The trust flag
+has to live in the lane command:
+
+```
+cursor-agent -f -p "<prompt>"
+```
+
+Unlike agy's misfire this one fails *loudly* — the good failure mode — but a
+lane config that forgets the flag still burns every tick.
+
+**codex — `-p` means profile, not prompt.** Don't pattern-match from the
+other lanes: in `codex exec`, `-p <profile>` selects a config profile and
+the brief arrives on stdin via the trailing `-`. See the writable-roots
+section below for why you'll want a profile at all.
+
+Worked `lanes:` examples, one per lane:
+
+```yaml
+lanes:
+  claude:
+    command: "claude -p {prompt_file}"
+  codex:
+    command: "codex exec --sandbox workspace-write -p todoapp -"  # -p = profile; brief on stdin
+  gemini:
+    command: "agy --dangerously-skip-permissions -p {prompt}"     # flag order is load-bearing
+  cursor:
+    command: "cursor-agent -f -p {prompt}"                        # -f = trust the directory
+```
+
+## No nested quoting in `lanes:` commands
+
+Hard rule: **a lane command must never contain nested quoting or escape
+sequences.** The TRIAGE.yml parser is hand-rolled and keeps backslash
+escapes literal — it does not unescape them the way a full YAML parser
+would. The failure that taught us this was an attempt to pass inline TOML
+to codex:
+
+```
+codex exec ... -c 'sandbox_workspace_write.writable_roots=["…"]'
+```
+
+The escapes survive into the argument as literal characters, producing
+invalid TOML — which codex silently treats as a raw string. No error
+anywhere; the setting just doesn't apply. Anything structured — arrays,
+TOML, JSON, quoted paths — goes in the agent's own config/profile file, and
+the lane command only names the profile.
+
+## Sandboxed lanes and external repos: per-workspace writable roots
+
+`codex exec --sandbox workspace-write` grants write access to its cwd only —
+the tl checkout. A workspace whose `repo` points *outside* the checkout
+blocks on the first write (`mkdir ~/code/todo-app/... Operation not
+permitted`). The failure is at least honest — in the first e2e run codex
+claimed, probed, blocked itself with a clear note, zero partial writes — but
+every sandboxing lane needs the workspace's repo granted explicitly, and
+(per the rule above) that grant cannot ride inline in the lane command.
+
+The pattern is one profile per workspace. For codex:
+
+`~/.codex/<ws>.config.toml`:
+
+```toml
+[sandbox_workspace_write]
+writable_roots = ["/Users/you/code/todo-app"]
+```
+
+Lane command:
+
+```
+codex exec --sandbox workspace-write -p <profile> -
+```
+
+When you add a workspace whose `repo` lives outside the tl checkout, create
+the profile before the lane's first tick — otherwise the first tick burns on
+the permission block.
+
 ## cron recipes
 
 One line per lane. Ticks are cheap when there's no work (exit 0, one log

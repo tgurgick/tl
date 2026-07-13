@@ -7,6 +7,7 @@ goals: []                       # TRIAGE.yml goal id(s) this intent serves — t
 priority: ""                    # p0 | p1 | p2 | p3
 tags: []
 specs: []                       # paths to specs derived from this intent
+jira_key: ""                    # optional — JIRA epic key this intent mirrors; set by /tl sync
 ---
 
 # {title}

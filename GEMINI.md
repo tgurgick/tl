@@ -47,6 +47,7 @@ Each verb is one `skills/<name>/SKILL.md` — read the skill and follow its step
 - `tl resume` — Reconstruct context for a tl workspace after time away — last activity, open loops, recent decisions, and the recommended next action.
 - `tl review` — Sign off the work waiting in a tl workspace's in-review stage — show what each spec changed against its acceptance criteria, then accept it to done or kick it back to in-progress with notes.
 - `tl run` — Work the ready queue — claim the largest conflict-free batch of ready specs and carry each to in-review.
+- `tl sync` — Sync a tl workspace with JIRA — import assigned issues as specs and epics as intents, push TL status and human priority changes back.
 - `tl triage` — Rank a tl workspace's backlog — score specs against the goals, allocation targets, and rules in its TRIAGE.yml, detect human priority overrides, and rewrite PRIORITIES.md.
 - `tl ui` — Start the Throughline web UI and pop it open in the browser — live board, ranked backlog, activity feed, and file changes for watching agents work.
 - `tl verify` — Independently verify specs waiting at the TESTS gate — a non-builder agent reviews the diff against the acceptance criteria and review gates, remediates with the builder (bounded), writes the ALIGNMENT record, and advances the spec to in-review.

@@ -6,7 +6,7 @@ const fs = require('node:fs');
 
 const ROOT = path.join(__dirname, '..');
 const {
-  laneConfig, continuationEligible, pickWork,
+  laneConfig, continuationEligible, pickWork, repoPreflight,
   buildCommand, promptOneLine, checkLock, lockPathFor,
   readWorkspaceSpecs, readPendingContinuations, tick, validLaneName,
 } = require('../lib/worker');
@@ -118,6 +118,68 @@ test('pickWork: empty queue is no_ready', () => {
   assert.equal(pick.reason, 'no_ready');
 });
 
+// ---------- calm cap (TRIAGE.yml run: { cap: N }) ----------
+
+test('pickWork: run cap bounds the fresh batch — cap 1 with 3 eligible ready specs selects 1', () => {
+  const specs = [
+    mk('a', { files: ['a.js'], priority: 'p0' }),
+    mk('b', { files: ['b.js'], priority: 'p1' }),
+    mk('c', { files: ['c.js'], priority: 'p2' }),
+  ];
+  const pick = pickWork({ specs, continuations: [], lane: 'claude', triageCfg: { run: { cap: 1 } } });
+  assert.equal(pick.kind, 'ready');
+  assert.equal(pick.picked, 'specs/a/');       // highest priority still wins the one slot
+  assert.equal(pick.batch.length, 1);          // capped at 1, not the default 4
+});
+
+test('pickWork: missing or garbage run cap falls back to the default 4 (bin/tl.js parity)', () => {
+  const specs = [
+    mk('a', { files: ['a.js'], mtime: 1 }),
+    mk('b', { files: ['b.js'], mtime: 2 }),
+    mk('c', { files: ['c.js'], mtime: 3 }),
+  ];
+  for (const triageCfg of [undefined, null, {}, { run: {} }, { run: { cap: 0 } }, { run: { cap: -2 } }, { run: { cap: 'banana' } }]) {
+    const pick = pickWork({ specs, continuations: [], lane: 'claude', triageCfg });
+    assert.equal(pick.batch.length, 3, 'fallback cap 4 admits all 3 for cfg ' + JSON.stringify(triageCfg));
+  }
+});
+
+// ---------- claim-time asset preflight: repo-held work is not eligible work ----------
+
+// Non-tl workspace stub: nothing is a usable checkout.
+const NO_REPOS = { isRepo: () => false, tlRoot: '/tl/checkout', workspaceRepo: '/repos/proj' };
+
+test('pickWork: a repo-held ready spec is not eligible work', () => {
+  const specs = [mk('void', { files: ['a.js'] })];
+  specs[0].meta.repo = '/repos/missing';
+  const pick = pickWork({ specs, continuations: [], lane: 'claude', preflight: NO_REPOS });
+  assert.equal(pick.picked, null);
+  assert.equal(pick.reason, 'no_ready');
+});
+
+test('pickWork: an eligible continuation whose repo is a void does not spawn — repo_held', () => {
+  const kicked = mk('kicked', { stage: 'in-progress', claimedBy: 'claude', files: ['a.js'] });
+  kicked.meta.repo = '/repos/missing';
+  const pick = pickWork({ specs: [kicked], continuations: [cont(kicked)], lane: 'claude', preflight: NO_REPOS });
+  assert.equal(pick.picked, null);
+  assert.equal(pick.reason, 'repo_held');
+});
+
+test('repoPreflight: reads PROJECT.md repo, checks .git existence via fs', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, 'projects', 'tl-preflight-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'PROJECT.md'), '---\nname: "x"\nrepo: "/some/where"\n---\n');
+    const p = repoPreflight(ROOT, dir);
+    assert.equal(p.tlRoot, ROOT);
+    assert.equal(p.workspaceRepo, '/some/where');
+    assert.equal(p.isRepo(ROOT), true);                          // this checkout has .git
+    assert.equal(p.isRepo(path.join(ROOT, 'lib')), false);       // dir without .git
+    assert.equal(p.isRepo('/nonexistent-tl-preflight'), false);  // missing dir
+    // no PROJECT.md → workspaceRepo null
+    assert.equal(repoPreflight(ROOT, path.join(dir, 'nope')).workspaceRepo, null);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ---------- shell-safe prompt delivery ----------
 
 test('buildCommand: {prompt_file} substitutes the escaped temp-file path', () => {
@@ -174,6 +236,12 @@ function withWorkspace(opts, fn) {
   try {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'TRIAGE.yml'), opts.triage !== undefined ? opts.triage : LANES_YML);
+    // Default identity: a tl-developing-tl workspace (PROJECT.md repo points at
+    // this checkout), so the claim-time containment guard is exempt and the
+    // scaffold's repo-less code specs stay eligible. Pass projectRepo to make
+    // the workspace target another repo instead.
+    fs.writeFileSync(path.join(dir, 'PROJECT.md'),
+      `---\nname: "${name}"\nrepo: "${opts.projectRepo || ROOT}"\n---\n`);
     for (const s of opts.specs || []) {
       const folder = (s.stage && s.stage !== 'ready') ? s.stage : 'specs';
       const specDir = path.join(dir, folder, s.slug);
@@ -181,6 +249,7 @@ function withWorkspace(opts, fn) {
       const fm = ['---', `title: "${s.slug}"`, 'type: feature', `status: ${s.stage || 'ready'}`]
         .concat(s.agent ? [`agent: ${s.agent}`] : [])
         .concat(s.claimedBy ? [`claimed_by: ${s.claimedBy}`] : [])
+        .concat(s.repo ? [`repo: "${s.repo}"`] : [])
         .concat(['---', '', '## Objective', 'x', '', '## Scope', '', '### Files to touch',
           ...(s.files || []).map(f => `- \`${f}\``), '']).join('\n');
       fs.writeFileSync(path.join(specDir, 'SPEC.md'), fm);
@@ -409,6 +478,61 @@ test('tick: continuation lane mismatch end-to-end — codex tick exits 0 no_cont
     const claude = runTick(ws);
     assert.equal(claude.result.spawned, true);
     assert.equal(readLog(ws).pop().picked, '_dispatch/kicked.json');
+  });
+});
+
+test('tick: a lane whose only ready work is repo-held spawns nothing — exit 0', () => {
+  withWorkspace({ specs: [{ slug: 'void', files: ['a.js'], repo: '/nonexistent-tl-void-repo' }] }, ws => {
+    const { result, lines, spawns } = runTick(ws);
+    assert.equal(result.code, 0);
+    assert.equal(result.spawned, false);
+    assert.equal(spawns.length, 0);
+    assert.match(lines.join('\n'), /no work for lane "claude" — no_ready/);
+  });
+});
+
+test('tick: containment — a repo-less code spec in a non-tl workspace never spawns into this checkout', () => {
+  withWorkspace({ projectRepo: '/repos/some-project', specs: [{ slug: 'homeless', files: ['a.js'] }] }, ws => {
+    const { result, spawns } = runTick(ws);
+    assert.equal(result.code, 0);
+    assert.equal(result.spawned, false);
+    assert.equal(spawns.length, 0);
+    assert.equal(readLog(ws)[0].reason, 'no_ready');
+  });
+});
+
+test('tick: a repo-held continuation is no work — exit 0, reason repo_held, no spawn', () => {
+  withWorkspace({
+    specs: [{ slug: 'kicked', stage: 'in-progress', claimedBy: 'claude', files: ['a.js'], repo: '/nonexistent-tl-void-repo' }],
+    files: {
+      '_dispatch/kicked.json': JSON.stringify({
+        spec: 'kicked', mode: 'continuation', stage: 'in-progress', status: 'pending', created: '2026-07-11',
+      }),
+    },
+  }, ws => {
+    const { result, spawns } = runTick(ws);
+    assert.equal(result.code, 0);
+    assert.equal(result.spawned, false);
+    assert.equal(spawns.length, 0);
+    assert.equal(readLog(ws)[0].reason, 'repo_held');
+  });
+});
+
+test('tick: workspace run cap flows through — run: { cap: 1 } with 3 eligible ready specs spawns for exactly one', () => {
+  withWorkspace({
+    triage: LANES_YML + 'run:\n  cap: 1\n',
+    specs: [
+      { slug: 'one', files: ['a.js'] },
+      { slug: 'two', files: ['b.js'] },
+      { slug: 'three', files: ['c.js'] },
+    ],
+  }, ws => {
+    const { result, spawns } = runTick(ws);
+    assert.equal(result.code, 0);
+    assert.equal(result.spawned, true);
+    assert.equal(spawns.length, 1);                              // one tick, one spawn
+    assert.match(result.picked, /^specs\/(one|two|three)\/$/);   // exactly one spec claimed the slot
+    assert.equal(readLog(ws)[0].picked, result.picked);
   });
 });
 

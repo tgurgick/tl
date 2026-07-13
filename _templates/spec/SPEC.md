@@ -2,7 +2,7 @@
 title: ""
 created: YYYY-MM-DD
 project: ""
-repo: ""                        # path to the project repo
+repo: ""                        # path to the project repo — must resolve; if it doesn't yet, see the bootstrap gate (skills/new)
 intent: ""                      # path to parent intent
 type: "feature"                 # feature | bug | tech_debt | research
 status: "ready"                 # ready | in-progress | blocked | done
@@ -12,6 +12,8 @@ size: ""                        # small (< 1hr) | medium (1-3hr) | large (3-8hr)
 depends_on: []
 blocks: []
 tags: []
+jira_key: ""                    # optional — JIRA issue key this spec mirrors (e.g. PROJ-123); set by /tl sync
+jira_url: ""                    # optional — the issue's browse URL; set by /tl sync
 ---
 
 # {title}

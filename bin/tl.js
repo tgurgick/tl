@@ -24,8 +24,10 @@ const SKILLS = path.join(ROOT, 'skills');
 // separate copies of the parser, the batch rules, or the path guard.
 const { parseFrontmatter, parseYaml } = require('../lib/parse');
 const { safeRead, readFirst, isDir, mtime } = require('../lib/workspace');
-const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch, calmCap, selectContinuations } = require('../lib/batch');
+const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch, calmCap, selectContinuations, repoHoldReason } = require('../lib/batch');
 const { runFixtureExperiment } = require('../lib/experiment-fixture');
+const { selectWinner, applyWinner, rejectWinner, sendWinnerToReview } = require('../lib/experiment-apply');
+const { queueExperiment, drainQueue, readQueueRows } = require('../lib/experiment-queue');
 const { canAdvanceToReview, verificationPolicy } = require('../lib/verification-gate');
 const { execFileSync } = require('child_process');
 
@@ -141,6 +143,15 @@ function workspaceIsThisRepo(specs) {
   try {
     return path.resolve(r) === path.resolve(ROOT) || path.basename(path.resolve(r)) === path.basename(ROOT);
   } catch { return false; }
+}
+
+// The workspace's own repo identity — PROJECT.md `repo:` — the exemption input
+// for the claim-time containment guard: only when it points at THIS checkout
+// (the tl-developing-tl workspace) may code specs legitimately target tl.
+function workspaceRepoRef(wsDir) {
+  const text = safeRead(path.join(wsDir, 'PROJECT.md'));
+  if (text === null) return null;
+  return parseFrontmatter(text).meta.repo || null;
 }
 
 // ---------- continuation dispatches (_dispatch/<slug>.json) ----------
@@ -271,7 +282,12 @@ function cmdResume(args) {
     if ((type === 'question' || type === 'risk') && status === 'open') loops.push(`open ${type}: ${t.title} (${t.path})`);
   }
   for (const s of specs) {
-    if (String(s.meta.status || '').toLowerCase() === 'blocked') loops.push(`blocked spec: ${s.title} (${s.path})`);
+    // A blocked spec always says why when it can — `blocked_reason` is the
+    // breadcrumb the run skill stamps on any post-claim block.
+    if (String(s.meta.status || '').toLowerCase() === 'blocked') {
+      const why = s.meta.blocked_reason ? ' — ' + String(s.meta.blocked_reason).trim() : '';
+      loops.push(`blocked spec: ${s.title} (${s.path})${why}`);
+    }
     if (s.stage === 'done' && !s.feedback) loops.push(`done, no FEEDBACK: ${s.title} (${s.path})`);
     if (s.stage === 'in-review') loops.push(`awaiting review: ${s.title} (${s.path})`);
   }
@@ -330,6 +346,15 @@ function cmdRun(args) {
   // The calm cap is a workspace dial (TRIAGE.yml `run: cap:`), default 4 — it
   // bounds both fresh fan-out and how many continuations resume together.
   const cap = calmCap(parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || ''));
+  // Claim-time asset preflight (lib/batch.js repoHoldReason): a spec whose
+  // `repo:` is a void is held in specs/ with a concrete reason, never claimed —
+  // and a code spec with no project repo never defaults into this checkout.
+  // The existence check is fs, never a shell-out.
+  const preflight = {
+    isRepo: p => fs.existsSync(path.join(p, '.git')),
+    tlRoot: ROOT,
+    workspaceRepo: workspaceRepoRef(ws.dir),
+  };
   const allReady = specs.filter(s => s.stage === 'ready');
   // agent routing: a spec's `agent:` (default `any`) must match the running agent's lane.
   const agentOf = s => (s.meta.agent || 'any').toLowerCase();
@@ -359,7 +384,7 @@ function cmdRun(args) {
     // batch: ordered (priority, then oldest kickback), capped at the calm cap,
     // and conflict-checked against each other so two resumed specs never share
     // a file. Held continuations stay pending for the next run, with a reason.
-    const resumed = selectContinuations(conts.live, { cap });
+    const resumed = selectContinuations(conts.live, { cap, preflight });
     out('## Continuation dispatches — resume these before fresh claims (' + resumed.batch.length + ')');
     for (const c of resumed.batch) {
       out(`\n### ${c.spec.title}  (${c.spec.path}) [${c.file}]`);
@@ -393,6 +418,10 @@ function cmdRun(args) {
     const want = specSlug(named);
     const hit = ready.find(s => specSlug(s.path) === want);
     if (!hit) fail(`Named spec "${named}" not found in ready/. Ready: ${ready.map(s => s.path).join(', ')}`);
+    // Asset preflight applies to named runs too — naming a spec is not an
+    // override for a missing repo or the tl-checkout containment guard.
+    const repoHold = repoHoldReason(hit, preflight);
+    if (repoHold) fail(`Named spec "${named}" is held — ${repoHold}. Refusing to claim.`);
     // Even a named run refuses a spec whose write scope collides with active
     // work — no override flag exists yet, so a conflict is a hard stop.
     if (!isReadOnly(hit)) {
@@ -406,7 +435,7 @@ function cmdRun(args) {
     batch = [hit];
     held = ready.filter(s => s !== hit).map(s => ({ ...s, holdReason: 'not the named spec' }));
   } else {
-    ({ batch, held } = selectBatch(ready, doneSlugs, { active, cap }));
+    ({ batch, held } = selectBatch(ready, doneSlugs, { active, cap, preflight }));
   }
   held = held.concat(otherLane);  // specs in another agent's lane wait for that agent
 
@@ -968,17 +997,159 @@ function cmdSyncRules(args = []) {
 
 // ---------- tl experiment ----------
 
+// Winner-application subcommands share an argument shape:
+//   tl experiment <action> [workspace] <experiment-id> <candidate-id> [flags]
+// The workspace is optional exactly like everywhere else — if the first
+// positional names a workspace it is consumed, otherwise the default resolves.
+function parseWinnerArgs(rest, action) {
+  const positional = [];
+  const flags = { by: '', reason: '', repo: '' };
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === '--by') flags.by = rest[++i] || '';
+    else if (a === '--reason') flags.reason = rest[++i] || '';
+    else if (a === '--repo') flags.repo = rest[++i] || '';
+    else positional.push(a);
+  }
+  const names = listWorkspaces().map(w => w.name);
+  const wsArg = positional.length > 2 || names.includes(positional[0]) ? positional.shift() : undefined;
+  const [experimentId, candidateId] = positional;
+  if (!experimentId || !candidateId) {
+    fail(`Usage: tl experiment ${action} [workspace] <experiment-id> <candidate-id>${action === 'reject' ? ' --reason "<why>"' : ''} [--by <who>]`);
+  }
+  return { ws: resolveWorkspace(wsArg), experimentId, candidateId, flags };
+}
+
 function cmdExperiment(args) {
   const [subcmd, ...rest] = args;
-  if (subcmd !== 'fixture') {
-    fail('Usage: tl experiment fixture [workspace]');
+
+  // ---- tl experiment queue [ws] <spec> — initiate an experiment ----
+  // Creates the experiment folder (hashing SPEC.md, recording base_commit)
+  // and writes one queued row per candidate. Candidates come from --config
+  // (explicit JSON) or default to the deterministic fixture pair. This never
+  // moves the spec — experiments are shadow attempts against a snapshot.
+  if (subcmd === 'queue') {
+    const positional = [];
+    const flags = { config: '', budget: '', timeout: '', repo: '', id: '' };
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i];
+      if (a === '--config') flags.config = rest[++i] || '';
+      else if (a === '--budget') flags.budget = rest[++i] || '';
+      else if (a === '--timeout') flags.timeout = rest[++i] || '';
+      else if (a === '--repo') flags.repo = rest[++i] || '';
+      else if (a === '--id') flags.id = rest[++i] || '';
+      else positional.push(a);
+    }
+    const names = listWorkspaces().map(w => w.name);
+    const wsArg = positional.length > 1 || names.includes(positional[0]) ? positional.shift() : undefined;
+    const ws = resolveWorkspace(wsArg);
+    const spec = positional[0];
+    if (!spec) fail('Usage: tl experiment queue [workspace] <spec> [--config <file>] [--budget <usd>] [--timeout <min>] [--repo <path>] [--id <experiment-id>]');
+    let config = {};
+    if (flags.config) {
+      try { config = JSON.parse(fs.readFileSync(path.resolve(flags.config), 'utf8')); }
+      catch (e) { fail(`Cannot read --config ${flags.config}: ${e.message}`); }
+    }
+    try {
+      const result = queueExperiment(ws.dir, {
+        spec,
+        repoDir: path.resolve(flags.repo || config.repo || ROOT),
+        candidates: config.candidates,
+        judge: config.judge,
+        budgetUsd: flags.budget !== '' ? flags.budget : config.budget_usd,
+        timeoutMinutes: flags.timeout !== '' ? flags.timeout : config.timeout_minutes,
+        experimentId: flags.id || undefined,
+        source: 'cli',
+      });
+      out('===== tl experiment queue =====');
+      out(`workspace: ${ws.name}`);
+      out(`experiment: _experiments/${result.experimentId}/  (status: queued)`);
+      out(`queue rows: ${result.rows.length} → _experiments/queue/${result.experimentId}.jsonl`);
+      for (const r of result.rows) {
+        out(`  - ${r.candidate_id} [${r.role}] lane ${r.agent_tool}${r.agent_model_requested ? ' model ' + r.agent_model_requested : ''}`);
+      }
+      out('Workers drain their lanes with: tl experiment drain --agent <tool> ' + ws.name);
+    } catch (e) { fail(e.message); }
+    return;
   }
-  const ws = resolveWorkspace(rest[0]);
-  const result = runFixtureExperiment(ws.dir);
-  out('===== tl experiment fixture =====');
-  out(`workspace: ${ws.name}`);
-  out(`experiment: _experiments/${result.experimentId}/`);
-  out(`winner: ${result.winner}`);
+
+  // ---- tl experiment drain --agent <name> [ws] — one worker pass ----
+  // Claims queued rows for this agent's lane only, runs them locally
+  // (fixture/shell in this slice), and queues judge rows for experiments
+  // whose candidate runs are all terminal. Never applies winners.
+  if (subcmd === 'drain') {
+    const positional = [];
+    const flags = { agent: '', max: '', evaluatePartial: [] };
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i];
+      if (a === '--agent') flags.agent = rest[++i] || '';
+      else if (a.startsWith('--agent=')) flags.agent = a.slice(8);
+      else if (a === '--max') flags.max = rest[++i] || '';
+      else if (a === '--evaluate-partial') flags.evaluatePartial.push(rest[++i] || '');
+      else positional.push(a);
+    }
+    if (!flags.agent) fail('Usage: tl experiment drain --agent <name> [workspace] [--max <n>] [--evaluate-partial <experiment-id>]');
+    const ws = resolveWorkspace(positional[0]);
+    try {
+      const result = drainQueue(ws.dir, {
+        agent: flags.agent,
+        max: flags.max !== '' ? flags.max : undefined,
+        evaluatePartial: flags.evaluatePartial.filter(Boolean),
+      });
+      out('===== tl experiment drain =====');
+      out(`workspace: ${ws.name} · lane: ${flags.agent}`);
+      for (const r of result.requests) out(`request ${r.file}: ${r.status}${r.experimentId ? ' → _experiments/' + r.experimentId + '/' : ''}${r.reason ? ' — ' + r.reason : ''}`);
+      if (!result.ran.length) out('no queued rows in this lane.');
+      for (const r of result.ran) out(`ran ${r.row.experiment_id}/${r.row.candidate_id} [${r.row.role}] → ${r.status}${r.reason ? ' — ' + r.reason : ''}`);
+      for (const j of result.judges) out(`judge queued for ${j.experimentId} (${j.row.candidate_id}, lane ${j.row.agent_tool})`);
+      const left = readQueueRows(ws.dir).filter(r => r.status === 'queued');
+      out(`still queued: ${left.length} row(s)${left.length ? ' — lanes: ' + [...new Set(left.map(r => r.agent_tool))].join(', ') : ''}`);
+    } catch (e) { fail(e.message); }
+    return;
+  }
+
+  if (subcmd === 'fixture') {
+    const ws = resolveWorkspace(rest[0]);
+    const result = runFixtureExperiment(ws.dir);
+    out('===== tl experiment fixture =====');
+    out(`workspace: ${ws.name}`);
+    out(`experiment: _experiments/${result.experimentId}/`);
+    out(`winner: ${result.winner}`);
+    return;
+  }
+
+  // Winner application — the explicit human gate. Running one of these
+  // commands IS the explicit action; nothing applies a candidate patch
+  // automatically. Agents must not run apply/reject on a human's behalf.
+  if (['select', 'apply', 'reject', 'send-to-review'].includes(subcmd)) {
+    const { ws, experimentId, candidateId, flags } = parseWinnerArgs(rest, subcmd);
+    const opts = {
+      decidedBy: flags.by || process.env.USER || 'human',
+      decisionSource: 'human',
+      reason: flags.reason || undefined,
+    };
+    try {
+      let record;
+      if (subcmd === 'select') record = selectWinner(ws.dir, experimentId, candidateId, opts);
+      else if (subcmd === 'reject') record = rejectWinner(ws.dir, experimentId, candidateId, opts);
+      else if (subcmd === 'send-to-review') record = sendWinnerToReview(ws.dir, experimentId, candidateId, opts);
+      else record = applyWinner(ws.dir, experimentId, candidateId, { ...opts, repoDir: path.resolve(flags.repo || ROOT) });
+      out(`===== tl experiment ${subcmd} =====`);
+      out(`workspace: ${ws.name}`);
+      out(`experiment: _experiments/${experimentId}/`);
+      out(`candidate: ${candidateId}`);
+      out(`state: ${record.state}`);
+      if (record.error_summary) out(`error: ${record.error_summary}`);
+      if (record.review_artifact) out(`review artifact: ${record.review_artifact}`);
+      out('log: _metrics/winner-log.jsonl (append-only)');
+      if (record.state === 'apply-failed') process.exit(1);
+    } catch (e) {
+      fail(e.message);
+    }
+    return;
+  }
+
+  fail('Usage: tl experiment <queue|drain|fixture|select|apply|reject|send-to-review> …');
 }
 
 // ---------- usage ----------
@@ -997,8 +1168,22 @@ function usage(stream) {
   w('  tl verify [workspace] [spec]    Independent-verifier queue — specs awaiting a non-builder check');
   w('              [--agent <name>]    Verify as this agent; specs you built are excluded');
   w('  tl recall [workspace] <query>   Search intents/specs/threads/outcomes — "did we discuss this?"');
+  w('  tl experiment queue [workspace] <spec>');
+  w('                                  Initiate an experiment: hash the spec, record base_commit, write candidate queue rows');
+  w('              [--config <file>]   Explicit candidates/judge JSON (default: deterministic fixture pair)');
+  w('              [--budget <usd>] [--timeout <min>] [--repo <path>] [--id <experiment-id>]');
+  w('  tl experiment drain --agent <name> [workspace]');
+  w('                                  Worker pass: claim + run queued rows for this agent\'s lane only');
+  w('              [--max <n>]         Cap how many rows one pass claims');
+  w('              [--evaluate-partial <experiment-id>]');
+  w('                                  Force-queue the judge even with non-terminal candidates');
   w('  tl experiment fixture [workspace]');
   w('                                  Create a deterministic fixture experiment proof');
+  w('  tl experiment select|apply|reject|send-to-review [workspace] <experiment-id> <candidate-id>');
+  w('                                  Winner application — the explicit HUMAN action on a winning patch');
+  w('              [--by <who>]        Who decided (recorded in WINNER.json and _metrics/winner-log.jsonl)');
+  w('              [--reason "<why>"]  Required for reject — rejections record why');
+  w('              [--repo <path>]     Canonical repo for apply (default: this checkout)');
   w('  tl sync-rules [--check]         Regenerate per-agent rules, or check for generated-rule drift');
   w('');
   w('Workspace: an argument names a workspace under projects/; if exactly one exists it is used;');

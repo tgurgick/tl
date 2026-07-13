@@ -23,13 +23,20 @@ function withWorkspace(specs, fn) {
   const dir = path.join(ROOT, 'projects', name);
   const folderFor = s => (s.stage && s.stage !== 'ready') ? s.stage : 'specs';
   try {
+    // Default identity: PROJECT.md repo points at this checkout (the
+    // tl-developing-tl case), so the claim-time containment guard is exempt
+    // and the scaffold's repo-less code specs stay eligible.
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'PROJECT.md'), `---\nname: "${name}"\nrepo: "${ROOT}"\n---\n`);
     for (const s of specs) {
       const specDir = path.join(dir, folderFor(s), s.slug);
       fs.mkdirSync(specDir, { recursive: true });
-      const status = s.stage && s.stage !== 'ready' ? s.stage : 'ready';
+      const status = s.status || (s.stage && s.stage !== 'ready' ? s.stage : 'ready');
       const files = (s.files || []).map(f => `- \`${f}\``).join('\n');
       const priority = s.priority ? `priority: "${s.priority}"\n` : '';
-      const fm = `---\ntitle: "${s.slug}"\ntype: feature\nstatus: ${status}\n${priority}---\n\n## Objective\nx\n\n## Scope\n\n### Files to touch\n${files}\n`;
+      const repo = s.repo ? `repo: "${s.repo}"\n` : '';
+      const extra = s.frontmatter ? s.frontmatter + '\n' : '';
+      const fm = `---\ntitle: "${s.slug}"\ntype: feature\nstatus: ${status}\n${priority}${repo}${extra}---\n\n## Objective\nx\n\n## Scope\n\n### Files to touch\n${files}\n`;
       fs.writeFileSync(path.join(specDir, 'SPEC.md'), fm);
     }
     return fn(name);
@@ -215,6 +222,73 @@ test('run: multiple pending continuations resume as an ordered, conflict-checked
     assert.ok(r.stdout.indexOf('### resume-hot') < r.stdout.indexOf('### resume-low'));
     // continuations still outrank fresh claims entirely
     assert.doesNotMatch(r.stdout, /Selected batch/);
+  });
+});
+
+// ---------- claim-time asset preflight (repo readiness) ----------
+
+test('run: a ready spec whose repo is a void is held with a concrete reason, never claimed', () => {
+  withWorkspace([
+    { slug: 'void-repo', stage: 'ready', files: ['src/a.js'], repo: '/nonexistent-tl-cli-void' },
+    { slug: 'sound-repo', stage: 'ready', files: ['src/b.js'] },
+  ], name => {
+    const r = run('run', name);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /Selected batch \(1\)/);
+    assert.match(r.stdout, /sound-repo/);
+    assert.match(r.stdout, /Held back for the next run/);
+    assert.match(r.stdout, /void-repo.*repo not found: \/nonexistent-tl-cli-void/);
+    // the void-repo spec never appears in the claim block
+    assert.doesNotMatch(r.stdout, /specs\/void-repo\/ → in-progress/);
+  });
+});
+
+test('run: named spec with a void repo is refused (non-zero, reason on stderr)', () => {
+  withWorkspace([
+    { slug: 'named-void', stage: 'ready', files: ['src/a.js'], repo: '/nonexistent-tl-cli-void' },
+  ], name => {
+    const r = run('run', name, 'named-void');
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /repo not found: \/nonexistent-tl-cli-void/);
+  });
+});
+
+test('run: containment — a repo-less code spec in a non-tl workspace is held, not claimed', () => {
+  withWorkspace([
+    { slug: 'homeless', stage: 'ready', files: ['src/a.js'] },
+  ], name => {
+    // re-point the workspace at a project repo elsewhere → not the tl-developing-tl case
+    writeWorkspaceFile(name, 'PROJECT.md', '---\nname: "x"\nrepo: "/repos/some-project"\n---\n');
+    const r = run('run', name);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /homeless.*no project repo — refusing to work in the tl checkout/);
+    assert.doesNotMatch(r.stdout, /Selected batch \(1\)/);
+  });
+});
+
+test('run: a repo-held pending continuation stays pending with the reason in the brief', () => {
+  withWorkspace([
+    { slug: 'kicked-void', stage: 'in-progress', files: ['src/a.js'], repo: '/nonexistent-tl-cli-void' },
+  ], name => {
+    writeWorkspaceFile(name, '_dispatch/kicked-void.json', JSON.stringify({
+      spec: 'kicked-void', mode: 'continuation', stage: 'in-progress',
+      status: 'pending', created: '2026-07-11',
+    }));
+    const r = run('run', name);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /Continuation dispatches — resume these before fresh claims \(0\)/);
+    assert.match(r.stdout, /kicked-void.*repo not found: \/nonexistent-tl-cli-void.*dispatch stays pending/);
+  });
+});
+
+test('resume: a blocked spec surfaces its blocked_reason in the open loops', () => {
+  withWorkspace([
+    { slug: 'stuck', stage: 'tests', status: 'blocked', files: ['src/a.js'],
+      frontmatter: 'blocked_reason: "target repo empty — waiting on bootstrap"' },
+  ], name => {
+    const r = run('resume', name);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /blocked spec: stuck \(tests\/stuck\/\) — target repo empty — waiting on bootstrap/);
   });
 });
 

@@ -2,7 +2,8 @@
 name: ""
 created: YYYY-MM-DD
 status: "active"                # active | paused | archived
-repo: ""                        # path to the project's code repo
+repo: ""                        # path to the project's code repo — never the tl checkout or inside it
+remote: ""                      # the repo's remote URL, or explicitly "none yet" — this workspace only *tracks* the work; the code lives in the repo above, and the remote is how its existence is verified (git ls-remote)
 description: ""
 ---
 

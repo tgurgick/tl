@@ -4,10 +4,11 @@ const assert = require('node:assert');
 const {
   filesToTouch, isReadOnly, specSlug, dependencySatisfied, activeConflicts, selectBatch,
   calmCap, selectContinuations,
+  isRepoUrl, localRepoPath, repoHoldReason,
 } = require('../lib/batch');
 
 // build a spec object shaped like readStage produces
-function mk(slug, { priority = 'p2', type = 'feature', deps, files, mtime = 0, readonlyBody, stage = 'ready' } = {}) {
+function mk(slug, { priority = 'p2', type = 'feature', deps, files, mtime = 0, readonlyBody, stage = 'ready', repo } = {}) {
   let body = '';
   if (readonlyBody) body = '## Objective\ndo a thing\n';
   else if (files !== undefined) {
@@ -16,7 +17,9 @@ function mk(slug, { priority = 'p2', type = 'feature', deps, files, mtime = 0, r
     body = '## Scope\n\n### Files to touch\n';   // declared but empty
   }
   const folder = stage === 'ready' ? 'specs' : stage;
-  return { path: `${folder}/${slug}/`, stage, meta: { priority, type, depends_on: deps }, body, mtime };
+  const meta = { priority, type, depends_on: deps };
+  if (repo !== undefined) meta.repo = repo;
+  return { path: `${folder}/${slug}/`, stage, meta, body, mtime };
 }
 
 test('specSlug normalizes across stages', () => {
@@ -205,6 +208,127 @@ test('selectBatch: within-batch file conflict names the winning spec', () => {
     mk('loser', { files: ['shared.js'], mtime: 2 }),
   ], new Set());
   assert.match(held[0].holdReason, /file conflict on shared\.js with winner/);
+});
+
+// ---------- claim-time asset preflight (repo readiness) ----------
+
+// A stubbed preflight for a NON-tl workspace: only /repos/good is a usable
+// checkout (existing dir containing .git); the tl checkout is /tl/checkout.
+function pre(over = {}) {
+  return {
+    isRepo: p => p === '/repos/good',
+    tlRoot: '/tl/checkout',
+    workspaceRepo: '/repos/good',
+    homedir: '/home/u',
+    ...over,
+  };
+}
+
+test('isRepoUrl: URLs and scp-style remotes yes, local paths no', () => {
+  assert.equal(isRepoUrl('https://github.com/a/b.git'), true);
+  assert.equal(isRepoUrl('git@github.com:a/b.git'), true);
+  assert.equal(isRepoUrl('~/Documents/GitHub/x'), false);
+  assert.equal(isRepoUrl('/abs/path'), false);
+  assert.equal(isRepoUrl(''), false);
+});
+
+test('localRepoPath: expands ~ with the injected homedir; URL or unset is null', () => {
+  assert.equal(localRepoPath('~/proj', '/home/u'), '/home/u/proj');
+  assert.equal(localRepoPath('~', '/home/u'), '/home/u');
+  assert.equal(localRepoPath('/abs/proj/', '/home/u'), '/abs/proj');
+  assert.equal(localRepoPath('https://github.com/a/b.git', '/home/u'), null);
+  assert.equal(localRepoPath('', '/home/u'), null);
+  assert.equal(localRepoPath(undefined, '/home/u'), null);
+});
+
+test('repoHoldReason: missing dir is held with the literal path', () => {
+  const s = mk('a', { files: ['a.js'], repo: '/repos/missing' });
+  assert.equal(repoHoldReason(s, pre()), 'repo not found: /repos/missing');
+});
+
+test('repoHoldReason: dir without .git is held (isRepo says not a checkout)', () => {
+  // /repos/bare exists but the injected check requires a contained .git
+  const s = mk('a', { files: ['a.js'], repo: '/repos/bare' });
+  assert.equal(repoHoldReason(s, pre()), 'repo not found: /repos/bare');
+});
+
+test('repoHoldReason: resolvable repo passes; ~ is expanded before the check', () => {
+  assert.equal(repoHoldReason(mk('a', { files: ['a.js'], repo: '/repos/good' }), pre()), null);
+  const tilde = mk('b', { files: ['b.js'], repo: '~/proj' });
+  assert.equal(repoHoldReason(tilde, pre({ isRepo: p => p === '/home/u/proj' })), null);
+  assert.equal(repoHoldReason(tilde, pre()), 'repo not found: ~/proj');
+});
+
+test('repoHoldReason: repo-not-found applies to read-only specs too', () => {
+  const s = mk('r', { type: 'research', readonlyBody: true, repo: '/repos/missing' });
+  assert.match(repoHoldReason(s, pre()), /^repo not found: /);
+});
+
+test('repoHoldReason: repo unset on a read-only spec passes', () => {
+  assert.equal(repoHoldReason(mk('r', { type: 'research', readonlyBody: true }), pre()), null);
+});
+
+test('repoHoldReason: repo unset on a code spec in a non-tl workspace is held', () => {
+  const s = mk('c', { files: ['a.js'] });
+  assert.equal(repoHoldReason(s, pre()), 'no project repo — refusing to work in the tl checkout');
+});
+
+test('repoHoldReason: repo at or inside the tl root is held for a non-tl workspace', () => {
+  const isRepo = () => true;   // both exist as checkouts — containment still refuses
+  const atRoot = mk('c', { files: ['a.js'], repo: '/tl/checkout' });
+  const nested = mk('c', { files: ['a.js'], repo: '/tl/checkout/bench' });
+  assert.equal(repoHoldReason(atRoot, pre({ isRepo })), 'no project repo — refusing to work in the tl checkout');
+  assert.equal(repoHoldReason(nested, pre({ isRepo })), 'no project repo — refusing to work in the tl checkout');
+  // a sibling path sharing the prefix is NOT inside the tl root
+  const sibling = mk('c', { files: ['a.js'], repo: '/tl/checkout-other' });
+  assert.equal(repoHoldReason(sibling, pre({ isRepo })), null);
+});
+
+test('repoHoldReason: URL-only repo is treated as unset (containment holds a code spec)', () => {
+  const s = mk('c', { files: ['a.js'], repo: 'git@github.com:a/b.git' });
+  assert.equal(repoHoldReason(s, pre()), 'no project repo — refusing to work in the tl checkout');
+  // …but a read-only spec with a URL repo passes: nothing local to check.
+  assert.equal(repoHoldReason(mk('r', { type: 'research', readonlyBody: true, repo: 'https://x.test/r.git' }), pre()), null);
+});
+
+test('repoHoldReason: the tl-developing-tl workspace is exempt from containment', () => {
+  const tlPre = pre({ isRepo: () => true, workspaceRepo: '/tl/checkout' });
+  assert.equal(repoHoldReason(mk('c', { files: ['a.js'] }), tlPre), null);                              // unset repo ok
+  assert.equal(repoHoldReason(mk('c', { files: ['a.js'], repo: '/tl/checkout' }), tlPre), null);        // tl root ok
+  // the exemption never waives the existence check
+  const missing = pre({ workspaceRepo: '/tl/checkout' });
+  assert.match(repoHoldReason(mk('c', { files: ['a.js'], repo: '/repos/missing' }), missing), /^repo not found: /);
+});
+
+test('repoHoldReason: no preflight wired → no holds (back-compat)', () => {
+  assert.equal(repoHoldReason(mk('c', { files: ['a.js'], repo: '/repos/missing' }), null), null);
+  assert.equal(repoHoldReason(mk('c', { files: ['a.js'] }), {}), null);
+});
+
+test('selectBatch: repo-held specs are held with the concrete reason, others still run', () => {
+  const { batch, held } = selectBatch([
+    mk('void', { files: ['a.js'], repo: '/repos/missing', mtime: 1 }),
+    mk('nore', { files: ['b.js'], mtime: 2 }),
+    mk('ok', { files: ['c.js'], repo: '/repos/good', mtime: 3 }),
+  ], new Set(), { preflight: pre() });
+  assert.deepEqual(batch.map(s => specSlug(s.path)), ['ok']);
+  assert.equal(held.find(h => specSlug(h.path) === 'void').holdReason, 'repo not found: /repos/missing');
+  assert.equal(held.find(h => specSlug(h.path) === 'nore').holdReason, 'no project repo — refusing to work in the tl checkout');
+});
+
+test('selectBatch: without opts.preflight the repo check is off (back-compat)', () => {
+  const { batch, held } = selectBatch([mk('void', { files: ['a.js'], repo: '/repos/missing' })], new Set());
+  assert.equal(batch.length, 1);
+  assert.equal(held.length, 0);
+});
+
+test('selectContinuations: a repo-held continuation stays pending with the same reason', () => {
+  const { batch, held } = selectContinuations([
+    cont('void', { files: ['a.js'], repo: '/repos/missing' }, { created: '2026-07-01' }),
+    cont('ok', { files: ['b.js'], repo: '/repos/good' }, { created: '2026-07-02' }),
+  ], { preflight: pre() });
+  assert.deepEqual(batch.map(c => specSlug(c.spec.path)), ['ok']);
+  assert.equal(held[0].holdReason, 'repo not found: /repos/missing');
 });
 
 // A live continuation entry as readContinuations shapes it: dispatch file +

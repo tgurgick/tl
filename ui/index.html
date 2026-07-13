@@ -229,6 +229,11 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .bp-status .ar { color: var(--faint); transition: transform .12s; display: inline-block; }
 .bp-status.open .ar { transform: rotate(90deg); }
 
+.bp-value { font-family: var(--serif); font-size: .82rem; font-style: italic; color: var(--mid); line-height: 1.5; margin: 0 0 10px; max-width: 62ch; cursor: pointer; }
+.bp-value .vl { font-family: var(--mono); font-style: normal; font-size: .58rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ok); margin-right: 7px; }
+.bp-value .vsrc { font-family: var(--mono); font-style: normal; font-size: .62rem; color: var(--faint); white-space: nowrap; }
+.bp-value:hover .vt { color: var(--ink); }
+
 .bp-goal { font-family: var(--serif); font-size: .98rem; color: var(--ink); line-height: 1.4; margin: 0 0 26px; }
 .bp-goal .gtext { border-bottom: 1px dashed transparent; cursor: text; }
 .bp-goal .gtext:hover { border-bottom-color: var(--line2); }
@@ -398,6 +403,22 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .break-row { font-size: .82rem; color: var(--mid); padding: 7px 0; cursor: pointer; border-bottom: 1px solid var(--line); }
 .break-row:hover { color: var(--ink); }
 .break-row b { font-weight: 500; color: var(--ink); }
+.break-row .fix { font-family: var(--mono); font-size: .58rem; letter-spacing: .06em; color: var(--bad); margin-left: 10px; opacity: .75; }
+.break-row:hover .fix { opacity: 1; }
+
+/* map — the break-repair chooser (rendered in the drawer) */
+.rp-lead { font-size: .82rem; color: var(--mid); margin: 4px 0 6px; }
+.rp-h { font-family: var(--mono); font-size: .58rem; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); margin: 20px 0 8px; }
+.rp-opt { padding: 8px 11px; border: 1px solid var(--line); border-radius: 5px; margin-bottom: 6px; cursor: pointer; font-size: .82rem; color: var(--ink); }
+.rp-opt:hover { border-color: var(--ink); }
+.rp-opt b { font-weight: 500; }
+.rp-opt .rp-sub { display: block; font-family: var(--mono); font-size: .58rem; color: var(--faint); margin-top: 3px; }
+.rp-new { display: flex; flex-direction: column; gap: 8px; }
+.rp-new input, .rp-new select { width: 100%; box-sizing: border-box; font-family: var(--sans); font-size: .82rem; color: var(--ink); background: var(--card); border: 1px solid var(--line2); border-radius: 4px; padding: 8px 10px; }
+.rp-new input:focus, .rp-new select:focus { border-color: var(--accent); outline: none; }
+.rp-new button { align-self: flex-start; font-family: var(--mono); font-size: .68rem; border-radius: 4px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
+.rp-new button:hover { color: var(--accent); border-color: var(--accent); }
+.rp-hint { font-family: var(--mono); font-size: .58rem; color: var(--faint); }
 
 /* ════ LIVE LOOK (mission control) ════ */
 #view-live { background: var(--bg); }
@@ -1024,6 +1045,66 @@ function wireModalClose() {
 addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('open')) document.body.classList.remove('open'); });
 addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('open'); });
 
+/* ── throughline repair (Map breaks → corrective action) ── */
+// an orphan spec: attach it to an existing intent, or create a new goal-carrying
+// intent for it — the break itself is the affordance, repaired without leaving the cockpit
+function openBreakChooser(ws, spec) {
+  const slug = (spec.path || '').replace(/\/$/, '').split('/').pop();
+  const intents = ws.intents || [];
+  const goals = (ws.config && ws.config.goals) || [];
+  const rows = intents.map((it, i) =>
+    `<div class="rp-opt" data-i="${i}"><b>${esc(it.title)}</b><span class="rp-sub">${esc(it.path)}${(it.meta.goals || []).length ? ' · → ' + esc((it.meta.goals || []).join(', ')) : ' · no goal yet'}</span></div>`).join('');
+  $('drawer').innerHTML = `
+    <button type="button" class="dr-close" aria-label="Close">×</button>
+    <div class="path">${esc(spec.path || '')}</div>
+    <h2>Repair: <b>${esc(slug)}</b> has no intent</h2>
+    <p class="rp-lead">Attach this spec to a throughline so the Map can trace it up to a goal.</p>
+    <div class="rp-h">attach to an existing intent</div>
+    ${rows || '<div class="empty">no intents yet — create one below</div>'}
+    <div class="rp-h">or create a new intent</div>
+    <div class="rp-new">
+      <input class="rp-title" placeholder="intent title — the outcome, not the task">
+      <select class="rp-goal"><option value="">pick a goal — required</option>${goals.map(g => `<option value="${esc(g.id)}">${esc(g.description || g.id)}</option>`).join('')}</select>
+      <button class="rp-create">create intent + attach →</button>
+      <span class="rp-hint">scaffolded from _templates/intent.md · an intent always ladders to a goal</span>
+    </div>`;
+  const done = () => { document.body.classList.remove('open'); loadSelected(); };
+  $('drawer').querySelectorAll('.rp-opt').forEach(el => el.onclick = async () => {
+    try { await postJSON('/api/map-repair', { ws: ws.name, action: 'attach', spec: spec.path, intent: intents[+el.dataset.i].path }); done(); }
+    catch (err) { alert(err.message); }
+  });
+  const btn = $('drawer').querySelector('.rp-create');
+  btn.onclick = async () => {
+    const title = $('drawer').querySelector('.rp-title').value.trim();
+    const goal = $('drawer').querySelector('.rp-goal').value;
+    if (!title) return alert('the intent needs a title');
+    if (!goal) return alert('pick a goal — an intent must ladder to one');  // never a goal-less intent
+    btn.disabled = true;
+    try { await postJSON('/api/map-repair', { ws: ws.name, action: 'create-intent', spec: spec.path, title, goal }); done(); }
+    catch (err) { alert(err.message); btn.disabled = false; }
+  };
+  document.body.classList.add('open');
+  wireModalClose();
+}
+
+// an intent serving no goal: point it at one of the workspace's TRIAGE.yml goals
+function openGoalChooser(ws, intent) {
+  const goals = (ws.config && ws.config.goals) || [];
+  $('drawer').innerHTML = `
+    <button type="button" class="dr-close" aria-label="Close">×</button>
+    <div class="path">${esc(intent.path || '')}</div>
+    <h2>Repair: <b>${esc(intent.title)}</b> serves no goal</h2>
+    <p class="rp-lead">Pick the goal this intent ladders up to.</p>
+    <div class="rp-h">set the goal</div>
+    ${goals.map((g, i) => `<div class="rp-opt" data-i="${i}"><b>${esc(g.description || g.id)}</b><span class="rp-sub">${esc(g.id)}${g.weight ? ' · weight ' + esc(String(g.weight)) : ''}</span></div>`).join('') || '<div class="empty">no goals in TRIAGE.yml — add one first</div>'}`;
+  $('drawer').querySelectorAll('.rp-opt').forEach(el => el.onclick = async () => {
+    try { await postJSON('/api/map-repair', { ws: ws.name, action: 'set-goal', intent: intent.path, goal: goals[+el.dataset.i].id }); document.body.classList.remove('open'); loadSelected(); }
+    catch (err) { alert(err.message); }
+  });
+  document.body.classList.add('open');
+  wireModalClose();
+}
+
 /* ════ RESUME ════ */
 function loopIcon(kind) {
   if (kind === 'question') return IC.question('#6b57c7');
@@ -1332,6 +1413,40 @@ function renderResume(wss) {
     if (!inprog.length && !done.length) statusEx.innerHTML = '<div class="empty">nothing completed yet</div>';
     status.onclick = () => { status.classList.toggle('open'); statusEx.classList.toggle('open'); };
     block.appendChild(status); block.appendChild(statusEx);
+
+    // ── value delivered (one calm sentence, client-side from outcome/FEEDBACK.md) ──
+    // Display rule: scan the most recent 1–3 done specs, render the first usable
+    // sentence — "What shipped" preferred, else the "Delivered …" sentence of
+    // "Asked vs. delivered". No usable prose → render nothing: the status line
+    // above already carries the completed-spec title, so the fallback is silent.
+    const valueSentence = s => {
+      const fb = (s.outcome || []).find(o => /^feedback$/i.test(o.name));
+      if (!fb || !fb.body) return null;
+      const secs = {};
+      fb.body.split(/\n(?=##\s)/).forEach(ch => {
+        const m = ch.match(/^##\s+(.+?)\s*\n([\s\S]*)$/);
+        if (m) secs[m[1].toLowerCase().replace(/[^a-z ]/g, '')] = m[2];
+      });
+      const prose = ((secs['what shipped'] || secs['asked vs delivered'] || '').split(/\n(?=#)/)[0] || '')
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
+      if (!prose || prose.startsWith('{')) return null; // empty or template placeholder
+      // a terminator only ends a sentence when followed by whitespace/end —
+      // periods inside file names (SCHEMA.md, lib/foo.js) must not split it
+      const sentences = prose.match(/.+?[.!?]+["')\]]*(?=\s|$)/g) || [prose];
+      let pick = (sentences.find(x => /^\s*Delivered\b/.test(x)) || sentences[0]).trim();
+      if (pick.length > 200) pick = pick.slice(0, 199).replace(/\s+\S*$/, '') + '…';
+      return pick;
+    };
+    let vsText = null, vsSpec = null;
+    for (const s of done.slice(0, 3)) { const t = valueSentence(s); if (t) { vsText = t; vsSpec = s; break; } }
+    if (vsText) {
+      const val = document.createElement('p');
+      val.className = 'bp-value';
+      val.title = 'why the latest completed work mattered — click to open the spec';
+      val.innerHTML = `<span class="vl">value delivered</span><span class="vt">${esc(vsText)}</span> <span class="vsrc">— ${esc(slugOf(vsSpec.path))}</span>`;
+      val.onclick = () => openDrawer(vsSpec);
+      block.appendChild(val);
+    }
 
     // ── goal line + scope editor (description, weight, key results) ──
     const goalEl = document.createElement('p');
@@ -1669,22 +1784,28 @@ function renderResume(wss) {
             <text x="${gp.x + GW / 2}" y="${gp.y + NH / 2 + 0.5}" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9.5" letter-spacing=".03em" fill="#5a5347" dominant-baseline="middle">${esc(lbl.toUpperCase())}</text>
           </g>`;
         });
+        // a break in the throughline: a spec with no intent field at all
+        const isBreak = s => !(s.meta.intent || '').trim();
         specs.forEach(s => {
           const p = pos[slugOf(s.path)]; if (!p) return;
           const slug = slugOf(s.path), lbl = slug.length > 19 ? slug.slice(0, 18) + '…' : slug;
           const isFocus = slug === focusSlug;
+          const broken = !isFocus && isBreak(s);
           const dash = (!isFocus && (s.stage === 'triage' || s.meta.status === 'blocked')) ? ' stroke-dasharray="3 2"' : '';
           const sw = isFocus ? ' stroke-width="1.75"' : '';
           const prFill = isFocus ? '#d98a3d' : '#9a948a';
           nodes += `<g class="dn${isFocus ? ' dn-focus' : ''}" data-slug="${esc(slug)}">
-            <rect x="${p.x}" y="${p.y}" width="${NW}" height="${NH}" rx="5" fill="${fill(s)}" stroke="${stroke(s)}"${sw}${dash}/>
+            ${broken ? '<title>no intent — click to repair the throughline</title>' : ''}
+            <rect x="${p.x}" y="${p.y}" width="${NW}" height="${NH}" rx="5" fill="${fill(s)}" stroke="${broken ? '#a83232' : stroke(s)}"${sw}${broken ? ' stroke-dasharray="3 2"' : dash}/>
+            ${broken ? `<circle cx="${p.x + NW - 8}" cy="${p.y + 8}" r="3" fill="#fffefb" stroke="#a83232" stroke-width="1.2"/>` : ''}
             ${isFocus ? `<text x="${p.x + 12}" y="${p.y + 9}" font-family="ui-monospace,monospace" font-size="6" letter-spacing=".12em" fill="#d98a3d">IN FOCUS</text>` : ''}
             <text x="${p.x + 12}" y="${p.y + NH / 2 + (isFocus ? 5.5 : 0.5)}" font-family="ui-monospace,monospace" font-size="10.5" fill="${textFill(s)}" dominant-baseline="middle">${esc(lbl)}</text>
             ${s.meta.priority ? `<text x="${p.x + NW - 8}" y="${p.y + NH / 2 + 0.5}" text-anchor="end" font-family="ui-monospace,monospace" font-size="8.5" fill="${prFill}" dominant-baseline="middle">${esc(s.meta.priority.toUpperCase())}</text>` : ''}
           </g>`;
         });
         countsEx.innerHTML = `<div class="dag-cap">↑ laddering up to goals</div><div class="dag-wrap"><button class="dag-reset" title="Reset view (or double-click the map)">reset view</button><svg viewBox="0 0 ${W} ${Hsvg}" preserveAspectRatio="xMidYMid meet">${goalEdges}${edges}${goalNodes}${nodes}</svg></div>`;
-        countsEx.querySelectorAll('.dn[data-slug]').forEach(g => { g.onclick = () => { const s = bySlug[g.dataset.slug]; if (s) openDrawer({ ...s, _ws: ws.name }); }; });
+        // a broken node opens the repair chooser — the break itself is the affordance
+        countsEx.querySelectorAll('.dn[data-slug]').forEach(g => { g.onclick = () => { const s = bySlug[g.dataset.slug]; if (!s) return; if (isBreak(s)) openBreakChooser(ws, s); else openDrawer({ ...s, _ws: ws.name }); }; });
         // zoom + pan by manipulating the SVG viewBox (crisp, no CSS transform).
         // default framing centres on the in-focus node (or the goal tier) zoomed in; the user can
         // wheel-zoom toward the cursor, drag to pan, and double-click / "reset view" to return.
@@ -1772,8 +1893,9 @@ function renderResume(wss) {
           const bk = document.createElement('div'); bk.className = 'map-breaks';
           bk.innerHTML = `<div class="mb-head">Throughline breaks</div>`;
           starving.forEach(g => bk.insertAdjacentHTML('beforeend', `<div class="break-row">goal <b>${esc(g.description || g.id)}</b> has nothing laddering up</div>`));
-          goalless.forEach(it => { const r = document.createElement('div'); r.className = 'break-row'; r.innerHTML = `intent <b>${esc(it.title)}</b> serves no goal`; r.onclick = () => openDrawer({ ...it, _ws: ws.name }); bk.appendChild(r); });
-          orphanSpecs.forEach(s => { const r = document.createElement('div'); r.className = 'break-row'; r.innerHTML = `spec <b>${esc(slugOf(s.path))}</b> has no intent`; r.onclick = () => openDrawer({ ...s, _ws: ws.name }); bk.appendChild(r); });
+          // a break row is the corrective action: click → chooser, not just the record
+          goalless.forEach(it => { const r = document.createElement('div'); r.className = 'break-row'; r.innerHTML = `intent <b>${esc(it.title)}</b> serves no goal<span class="fix">repair ›</span>`; r.onclick = () => openGoalChooser(ws, it); bk.appendChild(r); });
+          orphanSpecs.forEach(s => { const r = document.createElement('div'); r.className = 'break-row'; r.innerHTML = `spec <b>${esc(slugOf(s.path))}</b> has no intent<span class="fix">repair ›</span>`; r.onclick = () => openBreakChooser(ws, s); bk.appendChild(r); });
           countsEx.appendChild(bk);
         }
       },

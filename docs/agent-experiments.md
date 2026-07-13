@@ -69,13 +69,114 @@ Every candidate and judge record should carry the same runtime fingerprint field
 
 Experiments and candidate runs use lowercase status strings: `queued`, `running`, `succeeded`, `failed`, `timed_out`, `over_budget`, `unavailable`, `cancelled`, `invalid_output`, and `awaiting_evaluation`.
 
-Winner application states are reserved but not implemented by this schema slice: `selected`, `applied`, `rejected`, `sent-to-review`, `apply-failed`, and `superseded`.
+Winner application states are separate from run statuses and human-owned: `selected`, `applied`, `rejected`, `sent-to-review`, `apply-failed`, and `superseded`. See "Winner Application" below.
+
+## Initiation and Headless Workers (queue / drain)
+
+Experiments are initiated in one of two ways, both file-native:
+
+- **Manual command** — `tl experiment queue [ws] <spec>` creates the experiment folder for a TL spec: it hashes the spec at queue time (`spec_hash`), records the source tree (`base_commit`, from `--repo`, default this checkout), selects candidates from explicit config (`--config <file>`) or the deterministic fixture defaults (`fixture-a` primary, `fixture-b` shadow, `fixture-judge` judge), and writes one **queued candidate row** per candidate. The spec itself is never moved — an experiment is a shadow attempt against a snapshot, not a claim.
+- **UI request** — the dashboard's queue form drops a request config at `_experiments/queue/<stamp>-<slug>.json`. A drain pass folds pending `runtime: "fixture"` requests into real experiments (the request file is rewritten `status: "accepted"` with the `experiment_id` — an audit trail, never deleted). `runtime: "local"` requests need explicit candidate config (a command, a repo) the form doesn't collect yet, so they stay queued for a later slice.
+
+The `--config` JSON for explicit cohorts:
+
+```json
+{
+  "repo": "/path/to/canonical/repo",
+  "budget_usd": 2.0,
+  "timeout_minutes": 30,
+  "judge": { "id": "judge-1", "agent_tool": "fixture" },
+  "candidates": [
+    { "id": "shell-a", "role": "primary", "agent_tool": "shell", "command": "…", "repo": "/path/to/repo" },
+    { "id": "fixture-b", "role": "shadow", "agent_tool": "fixture" }
+  ]
+}
+```
+
+### Queue rows and lanes
+
+Queue rows live in `_experiments/queue/<experiment_id>.jsonl` (workspace-relative), **append-only and event-sourced**: every transition appends a full row; the newest row per candidate is the current state. Every row carries at least `experiment_id`, `candidate_id`, `role` (`primary` / `shadow` / `judge`), `agent_tool`, `agent_model_requested`, `status`, `attempt`, `budget_usd`, `timeout_minutes`, and `created` — one row is self-describing without replaying the file. A `config` object (command, repo, env, `estimated_cost_usd`) rides along so a drain is self-contained.
+
+Each worker drains **only its own lane**: `tl experiment drain --agent <tool> [ws]` claims queued candidate rows whose `agent_tool` matches, runs them, and appends terminal transitions. Rows in other lanes are simply left `queued` — that *is* the fault posture for a worker that isn't running. This is what makes shadow runs safe to queue while a different tool or session is active: a Codex row waits for a Codex worker; a Cursor row waits for a Cursor SDK/cloud worker (Cursor's IDE chat cannot drain headlessly — capability data, see below).
+
+**Claim atomicity (local files).** Appends record history; the claim decides races: claiming attempt N creates `_experiments/queue/claims/<exp>--<cand>--<N>.claim` with an exclusive create (`O_EXCL`). Two workers may both read a row as queued, but exactly one wins the marker and appends the `running` row; the loser moves on. Atomic enough for local file use by design — a distributed queue is explicitly out of scope for this slice.
+
+### Fault handling
+
+Every terminal path — fault or not — leaves the same artifact set (`PATCH.diff`, `FEEDBACK.md`, `METRICS.json`, `TRACE.jsonl`) and appends a `candidate-run-log.jsonl` row. Faults are learning data, never dropped:
+
+| Situation | Row status |
+|-----------|-----------|
+| No worker running for a lane | rows stay `queued` (nothing marks them) |
+| Worker drains a tool it cannot execute locally | `unavailable` |
+| Estimated cost exceeds `budget_usd` | `over_budget` (stopped **before** execution) |
+| Command outlives `timeout_minutes` | `timed_out` |
+| Command exits non-zero / runner crashes | `failed` |
+| Run "succeeds" but produces no usable patch | `invalid_output` |
+
+A primary failure **never cancels shadows** — `failed` is terminal like any other status, the shadow lanes keep draining, and a shadow can still win at evaluation.
+
+### Judge queueing
+
+The judge row (role `judge`, lane from the experiment's `judge_tool`) is queued only once **every candidate run is terminal** — whichever lane finishes last queues it, and the experiment flips to `awaiting_evaluation`. A human can force evaluation of partial results with `tl experiment drain --agent <tool> --evaluate-partial <experiment-id>`; the forced judge row records that it was partial. Drain never *runs* judge rows in this slice — judging is the `skills/experiment-judge` procedure, and a judge worker is a later spec.
+
+### Isolated runs (the worktree/clone strategy)
+
+Local shell candidates never touch the canonical working tree. The runner creates a **detached git worktree** at the experiment's `base_commit` (`git worktree add --detach`, cheap — shares the object store), falls back to a **sibling clone** when worktrees are unavailable, runs the command inside it, collects `git diff` (intent-to-add first, so new files show) as `PATCH.diff`, and tears the workdir down. Fixture candidates are side-effect-free and need no isolation.
+
+This is also the documented **seam for later orchestration**: `lib/experiment-runner.js` exports `createIsolatedWorkdir` / `removeIsolatedWorkdir` (the isolation strategy) and the `RUNNERS` registry (one entry per `agent_tool`; this slice ships `fixture` and `shell`). A real Claude/Codex/Cursor-SDK adapter registers one `RUNNERS` entry that wraps its prepare/start/collect cycle (per `lib/experiment-adapter.js`), and a remote/cloud worker replaces the workdir pair with its own sandbox provisioning — keeping the same promise: **the canonical repo is never mutated by a candidate run**.
+
+### Worker safety invariants
+
+- Workers **never apply winners**. The queue and runner modules do not import the winner-application library (a test enforces it); `tl experiment apply` remains the explicit human action.
+- Workers **never move canonical spec folders**. Queueing reads `SPEC.md`; it does not claim, stage, or advance the spec.
+- Queue history is **append-only**; corrections and retries are new rows/attempts, never edits.
 
 ## Safety Boundary
 
 Experiments are shadow attempts. They may create artifacts under `_experiments/` and append rows under `_metrics/`, but they do not mutate canonical spec stages or source files as a side effect of judging. Applying a winning patch must be an explicit later action, and normal TL review still owns acceptance into `done/`.
 
 Markdown is the human narrative. JSON and JSONL are the learning surface. This split keeps review readable while allowing routing, replay, and benchmark tools to query outcomes without scraping prose.
+
+## Winner Application (human-controlled)
+
+Judging picks a winner; it does not act on one. Winner application is the explicit later step where a human decides what happens to the winning patch. The invariant: **candidate artifacts are evidence; only an explicit human action applies a winning candidate to the canonical repo.** No queue worker, judge, scheduler, or agent applies a patch automatically — running one of the commands below *is* the explicit action, and the library additionally refuses to apply for any `decision_source` other than `human`.
+
+### States
+
+| State | Meaning |
+|-------|---------|
+| `selected` | A human named this candidate the winner; nothing has been applied |
+| `applied` | The candidate's `PATCH.diff` was applied to the canonical repo working tree |
+| `rejected` | The winner was declined with a recorded reason; artifacts are retained |
+| `sent-to-review` | The patch was handed to normal TL review as a proposal, without applying |
+| `apply-failed` | Application failed; canonical files are unchanged and the error is recorded |
+| `superseded` | A later decision named a different candidate; the old decision stays in the log |
+
+### Commands
+
+```text
+tl experiment select         [ws] <experiment-id> <candidate-id> [--by <who>]
+tl experiment apply          [ws] <experiment-id> <candidate-id> [--by <who>] [--repo <path>]
+tl experiment reject         [ws] <experiment-id> <candidate-id> --reason "<why>" [--by <who>]
+tl experiment send-to-review [ws] <experiment-id> <candidate-id> [--by <who>]
+```
+
+`apply` dry-runs first (`git apply --check`) and only then applies, so a patch that cannot apply cleanly leaves every canonical file untouched and records `apply-failed` with the error summary. `reject` requires a reason and never deletes candidate artifacts. Re-selecting a different candidate supersedes the earlier decision in the log; an `applied` decision can never be silently superseded — reverting an applied patch is a normal git operation a human performs deliberately.
+
+### Artifacts
+
+Every decision is legible and append-only:
+
+- `_experiments/<id>/WINNER.json` — the current state: candidate, state, who decided (`decided_by` / `decision_source`), timestamp, patch path and SHA-256, reason or error summary.
+- `_experiments/<id>/APPLICATION.md` — the review artifact, created on `applied` and `sent-to-review`. It points normal TL review back at the experiment, the winning candidate's artifacts, and the judge evaluation.
+- `_metrics/winner-log.jsonl` — one row per decision, including supersessions. `WINNER.json` is state; the log is history.
+
+Applying a patch does not move any spec through its lifecycle. The applied change sits in the working tree like any other in-flight work, and the normal human review gate still owns acceptance — `APPLICATION.md` exists exactly so a reviewer can trace the change back to its evidence.
+
+### Future UI affordance
+
+The Experiments detail view's winner panel already reads `WINNER.json` (degrading to the judge's pick). A later dashboard slice may add apply/reject buttons there, but they will follow the UI's existing write discipline: a button only records the human's decision request as a file — the patch application itself remains this explicit CLI/helper path, never a side effect of rendering or judging.
 
 ## Portable core boundary
 

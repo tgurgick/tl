@@ -68,7 +68,7 @@ The proprietary side lives in a **separate private repository** — not a subfol
 
 **The contract is data, not code.** The private repo depends on:
 
-- **JSONL schemas** — `_metrics/*.jsonl` shapes defined per skill (and in `SCHEMA.md`). The benchmark pipeline reads `cycle-log.jsonl`, `triage-log.jsonl`, etc.
+- **JSONL schemas** — `_metrics/*.jsonl` shapes defined per skill (and in `SCHEMA.md`). The benchmark pipeline reads `benchmark-log.jsonl`, `cycle-log.jsonl`, `triage-log.jsonl`, etc.
 - **Frontmatter fields** — the `SCHEMA.md` contract: spec fields (`type`, `status`, `priority`, `depends_on`, a future `jira_key`), intent `goals`, `FEEDBACK.md` scores. Parsers preserve unknown fields, so the private repo can read public data and the public tool can carry private-added fields without either breaking the other.
 - **A REST API spec** (placeholder at this stage) — the hosted service's surface: submit anonymized cycle/feedback records, request routing suggestions, sync JIRA. To be specified when Phase 2/3 of the enterprise intent lands. Until then the shape is "the private service reads the same JSONL and frontmatter the tool writes."
 
@@ -81,6 +81,14 @@ public tool  ◀──features via MCP / API / npm──            private serv
 
 - **Public → private:** one-way, and only through emitted data. The tool writes files; the service reads them. The public repo has no line of code that names the private repo.
 - **Private → public:** the private service exposes features *back* to the local tool the same way any third-party capability arrives — as an **MCP server**, a **hosted API**, or an optional **npm package** the user installs. None of these are imports of private *source* into public source; they're runtime integrations the user opts into.
+
+### Benchmark data flow
+
+`_metrics/benchmark-log.jsonl` (schema in `SCHEMA.md`) is the concrete instance of this contract. The split, in one sentence per side:
+
+- **Written locally, stays local.** The public tool appends one line per completed spec — agent, model, cost, duration, tokens, human scores — as a side effect of normal use, under `projects/<name>/_metrics/`, which is already gitignored. Raw lines never leave the machine unless the user explicitly opts into submitting them.
+- **Aggregation is private.** The pipeline that rolls those lines up — across agents, spec types, workspaces, and users — lives in the private repo. The public repo ships the schema and the writer, never the rollup.
+- **The anonymized aggregate is the paid product.** "Which agent is best for CDK specs, which is cheapest for React components, which stays in scope most reliably" — answered with anonymized cross-user data — is the paid analytics offering. That's the same line drawn under "What must NOT be in the public repo": individual users own their raw data; the aggregate is the business.
 
 ### Graceful degradation
 
