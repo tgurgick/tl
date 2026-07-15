@@ -165,27 +165,65 @@ test('isAdapter: rejects incomplete adapters', () => {
   assert.equal(isAdapter(createShellAdapter()), true);
 });
 
-test('routing policy: private learning stays out of the core', () => {
+test('routing policy: createLocalRoutingPolicy delegates to experiment-policy', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { PRIOR_FIELDS, updatePriorsFromLogs } = require('../lib/experiment-policy');
   const policy = createLocalRoutingPolicy();
   assert.equal(policy.name, 'local-priors');
   assert.equal(policy.priorsFile, ROUTING_PRIORS_FILE);
   assert.equal(ROUTING_PRIORS_FILE, 'routing-priors.jsonl');
+  assert.equal(typeof policy.record, 'function');
+  assert.equal(typeof policy.choose, 'function');
 
-  const row = policy.formatPriorRow({ task_type: 'feature', agent_tool: 'shell', outcome: 'won', utility: 5 });
+  // formatPriorRow emits the SCHEMA routing-priors shape — not the old
+  // { ts, task_type, outcome, utility } baseline.
+  const row = policy.formatPriorRow({
+    context_key: 'type=feature|size=small|files=lib|tags=none|risk=normal|caps=none',
+    agent_tool: 'shell',
+    agent_model: null,
+    expected_quality: 1,
+    samples: 2,
+    source: 'judged:exp-1',
+    last_updated: '2026-07-14T12:00:00Z',
+  });
+  assert.deepEqual(Object.keys(row).sort(), [...PRIOR_FIELDS].sort());
   assert.equal(row.agent_tool, 'shell');
-  assert.equal(row.outcome, 'won');
-  assert.equal(row.utility, 5);
-  assert.ok(row.ts);
+  assert.equal(row.date, '2026-07-14');
+  assert.equal(row.expected_quality, 1);
+  assert.equal(row.outcome, undefined);
+  assert.equal(row.utility, undefined);
+  assert.equal(row.ts, undefined);
 
-  // Baseline choice: no priors -> first candidate
-  assert.equal(policy.choose(['a', 'b']), 'a');
   assert.equal(policy.choose([]), null);
 
-  // With priors, prefers the higher observed win-rate
+  // choose delegates to selectPrimary: enough samples → best weighted score.
+  // Deterministic rng (≥ explore_rate) disables the exploration roll.
+  const contextKey = 'k';
   const priors = [
-    { agent_tool: 'a', outcome: 'lost' },
-    { agent_tool: 'b', outcome: 'won' },
-    { agent_tool: 'b', outcome: 'won' },
+    {
+      context_key: contextKey, agent_tool: 'a', agent_model: null,
+      expected_quality: 0.2, expected_cost: 0, expected_latency: 0, success_rate: 0.2, samples: 5,
+    },
+    {
+      context_key: contextKey, agent_tool: 'b', agent_model: null,
+      expected_quality: 0.9, expected_cost: 0, expected_latency: 0, success_rate: 0.9, samples: 5,
+    },
   ];
-  assert.equal(policy.choose(['a', 'b'], priors), 'b');
+  assert.equal(
+    policy.choose(['a', 'b'], priors, {
+      contextKey,
+      config: { enabled: true, candidates: ['a', 'b'], explore_rate: 0, min_samples_to_route: 2 },
+      rng: () => 1,
+    }),
+    'b',
+  );
+
+  // record delegates to updatePriorsFromLogs (same append-only fold).
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-adapter-policy-'));
+  fs.mkdirSync(path.join(ws, '_metrics'), { recursive: true });
+  const empty = policy.record(ws);
+  assert.deepEqual(empty, updatePriorsFromLogs(ws));
+  assert.equal(empty.appended, 0);
 });

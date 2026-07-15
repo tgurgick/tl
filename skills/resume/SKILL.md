@@ -1,6 +1,6 @@
 ---
 name: resume
-description: Reconstruct context for a tl workspace after time away — last activity, open loops, recent decisions, and the recommended next action. Use when the user asks where did I leave off, what changed, what's the status, catch me up, or starts a session on a project after a gap.
+description: Reconstruct context for a tl workspace after time away — last activity, open loops, recent decisions, and the recommended next action. Use when the user asks where did I leave off, what changed, catch me up, or starts a session on a project after a gap (learn — where am I).
 ---
 
 # /tl resume
@@ -19,24 +19,30 @@ Read specs (all stages), `threads/`, `PRIORITIES.md`, `TRIAGE.yml`, and `_metric
 
 **2. Goal in focus** — the top-weighted goal from `TRIAGE.yml`, one line, with its weight and key-result count.
 
-**3. In focus** — the single thing that needs a human, with the reason:
-   - a top-ranked `ready` spec to delegate, or
-   - an open `question` thread to answer (upstream of new work), or
-   - if neither and specs are in-progress: "all clear — agents working, nothing needs you," point at Live Look, or
-   - if nothing at all: "queue empty — decompose the next slice of an intent."
+**3. In focus** — the single thing that needs a human. Pick with this **priority order** (highest first — same rules the cockpit Resume tab uses via `lib/resume-recommended.js`):
+
+   1. an open `question` / `risk` / `decision` thread whose `linked_spec` blocks the **top ready** spec — outranks generic backlog
+   2. the top-weighted goal with **zero active** specs (`ready` / `in-progress` / `tests` / `in-review`) — a decompose / goal-health ask; **do not** flag the goal (or its intents) as starving when every linked spec is already `done`
+   3. the longest-idle `in-progress` spec that has **`NOTES.md`** (kickback / mid-flight) — surfaces ahead of ordinary ready work
+   4. a top-ranked `ready` spec to delegate
+   5. any open `question` thread (upstream of new work)
+   6. if none of the above and specs are in-progress: "all clear — agents working, nothing needs you," point at Live Look
+   7. if nothing at all: "queue empty — decompose the next slice of an intent"
+
    Say which case fired. This is the page's one hero; keep it to the recommendation plus one line of why.
 
 **4. Open loops — the decay inbox (capped).** Resume is the place a project gets *cleaned*, not just read — but it must never overwhelm. Detect every kind of decay:
    - open `question` / `risk` / `decision` threads
    - blocked specs (with what blocks them)
    - done specs missing `outcome/FEEDBACK.md`
-   - `in-progress` specs idle too long (stalled?) or with **`NOTES.md`** (kickback / mid-flight feedback — rank these above stalled-idle; read the note, not just the folder)
+   - `in-progress` specs with **`NOTES.md`** (kickback / mid-flight feedback — rank these **above** stalled-idle; read the note, not just the folder)
+   - `in-progress` specs idle too long without notes (stalled?)
    - `triage` items aging (promote or kill?)
-   - a goal with **zero active specs** — it's starving; an intent needs decomposing or the goal needs dropping (this is the priorities-back-to-intent check)
+   - a goal with **zero active specs** — it's starving; an intent needs decomposing or the goal needs dropping (this is the priorities-back-to-intent check). Never when all linked specs are `done`.
    - completed `research` specs whose recommendation is awaiting a human decision
    - parked threads piling up (cleanup review)
 
-   Then **surface at most 3 as "needs you now,"** ranked by impact: (1) anything blocking the in-focus spec, (2) anything starving the top-weighted goal, (3) the oldest unresolved item. Everything else is a single line — "+N more loose ends" — visible but never demanded. The cap is the point: a restart should ask for a few decisions, not confront a wall.
+   Then **surface at most 3 as "needs you now,"** ranked by impact: (1) anything blocking the in-focus item, (2) anything starving the top-weighted goal, (3) NOTES/kickback before plain idle, then the oldest unresolved item. Everything else is a single line — "+N more loose ends" — visible but never demanded. The cap is the point: a restart should ask for a few decisions, not confront a wall.
 
 **5. Backlog · decisions · parked** — counts, with detail only if asked: the ranked `ready`+`triage` backlog, recent `decision` threads, and the parked-thread count by type. These are reference, not headline.
 
@@ -53,3 +59,4 @@ When you surface a loop and the human engages, three responses are always availa
 - The report is read-only — surfacing and ranking only. Acting on an ask (resolve / park / research) is the human's explicit choice, then carried out by the matching skill (`/tl capture`, a thread-status edit, or a research-spec dispatch).
 - Honor the cap. Three asks at most; the rest stays counted, not listed. Resume is a glance and a short to-do, never a report.
 - If a section is empty, say so in three words.
+- Recommended-next selection is shared with the UI — do not invent a different order; follow the numbered priority above (and the same pure helper when present: `lib/resume-recommended.js`).

@@ -51,6 +51,39 @@ test('parseFrontmatter: inline-array depends_on parses the same way', () => {
   assert.deepEqual(meta.depends_on, ['specs/foo/']);
 });
 
+test('parseFrontmatter: indent-0 lists keep following provenance fields', () => {
+  const { meta } = parseFrontmatter(`---
+title: x
+depends_on:
+- specs/foo/
+- specs/bar/
+tags:
+- parser
+- provenance
+claimed_by: cursor
+awaiting_verifier: true
+status: tests
+---
+body`);
+  assert.deepEqual(meta.depends_on, ['specs/foo/', 'specs/bar/']);
+  assert.deepEqual(meta.tags, ['parser', 'provenance']);
+  assert.equal(meta.claimed_by, 'cursor');
+  assert.equal(meta.awaiting_verifier, true);
+  assert.equal(meta.status, 'tests');
+});
+
+test('parseYaml: nested indentless sequence returns to its containing map', () => {
+  const o = parseYaml(`verification:
+  allow_self_check_for:
+  - research
+  - tech_debt
+  require_independent_verifier: true
+enabled: false`);
+  assert.deepEqual(o.verification.allow_self_check_for, ['research', 'tech_debt']);
+  assert.equal(o.verification.require_independent_verifier, true);
+  assert.equal(o.enabled, false);
+});
+
 test('parseFrontmatter: malformed block degrades to empty meta, never throws', () => {
   const { meta, body } = parseFrontmatter('no frontmatter here');
   assert.deepEqual(meta, {});

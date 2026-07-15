@@ -58,6 +58,13 @@ test('gate: bad verdict rejected on independent path', () => {
   assert.equal(r.ok, false);
 });
 
+test('gate: human-decision-required never advances', () => {
+  const r = canAdvanceToReview(spec('feature', 'claude'),
+    { meta: { builder: 'claude', verifier: 'gemini', verdict: 'human-decision-required' } }, CFG);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /human must approve/);
+});
+
 test('policy: parses allow list case-insensitively', () => {
   const p = verificationPolicy({ verification: { require_independent_verifier: true, allow_self_check_for: ['Research'] } });
   assert.deepEqual(p.allowSelfCheckFor, ['research']);

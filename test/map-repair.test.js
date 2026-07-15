@@ -2,7 +2,8 @@
 // /api/map-repair — the Map's break-repair endpoint (ui/server.js).
 // Covers the three corrective actions as plain file edits: attach writes the
 // spec's intent: field and appends to the intent's specs: list; create-intent
-// scaffolds a goal-carrying intent from _templates/intent.md; set-goal points a
+// scaffolds a goal-carrying intent from _templates/intent.md (with or without
+// a linked spec — starving goals create spec-less); set-goal points a
 // goal-less intent at a TRIAGE.yml goal. Plus the guards: goal-less create is
 // rejected, unknown goals are rejected, and paths can't escape the workspace.
 const { test } = require('node:test');
@@ -101,6 +102,25 @@ test('map-repair endpoint', async t => {
       assert.match(raw, /## Outcome/);                             // scaffolded from _templates/intent.md
       const spec = parseFrontmatter(fs.readFileSync(path.join(dir, 'specs', 'orphan-b', 'SPEC.md'), 'utf8'));
       assert.equal(spec.meta.intent, rel);
+    });
+
+    await t.test('create-intent: spec-less create for a starving goal (goal locked, empty specs)', async () => {
+      const before = fs.readdirSync(path.join(dir, 'intents')).sort();
+      const r = await post(port, { action: 'create-intent', title: 'Feed the starving goal', goal: 'goal-b' });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      const rel = r.body.path;
+      assert.match(rel, /^intents\/\d{4}-\d{2}-\d{2}-feed-the-starving-goal\.md$/);
+      assert.ok(!before.includes(path.basename(rel)));
+      const raw = fs.readFileSync(path.join(dir, rel), 'utf8');
+      const it = parseFrontmatter(raw);
+      assert.equal(it.meta.title, 'Feed the starving goal');
+      assert.deepEqual(it.meta.goals, ['goal-b']);
+      assert.deepEqual(it.meta.specs, []);                         // no orphan to attach
+      assert.equal(it.meta.status, 'draft');
+      assert.match(raw, /# Feed the starving goal/);
+      // orphan specs untouched
+      const orphan = parseFrontmatter(fs.readFileSync(path.join(dir, 'specs', 'orphan-c', 'SPEC.md'), 'utf8'));
+      assert.equal(orphan.meta.intent ?? '', '');
     });
 
     await t.test('create-intent: a goal-less create is rejected and writes nothing', async () => {

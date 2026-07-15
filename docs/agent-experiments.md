@@ -34,9 +34,9 @@ The adapter should capture `spec_hash` at experiment creation time and `base_com
 
 An experiment folder is created under `_experiments/<experiment_id>/` with `EXPERIMENT.md` as the index. Candidate outputs live under `candidates/<candidate_id>/`; judge outputs live under `evaluation/<judge_id>/`.
 
-Candidate folders contain `PATCH.diff`, `FEEDBACK.md`, `METRICS.json`, and optionally `TRACE.jsonl` and `REASONING.md`. `TRACE.jsonl` is for observable action events such as tool calls, file reads/writes, commands, tests, retries, and status changes. `REASONING.md` is optional and only for deliberate summaries a runtime exposes; private chain-of-thought is never required or stored.
+Candidate folders contain `PATCH.diff`, `FEEDBACK.md`, `METRICS.json`, and `TRACE.jsonl`, plus optional `REASONING.md`. `TRACE.jsonl` is an append-only observable action stream (tool calls, file reads/writes, commands, tests, retries, status changes, faults). `REASONING.md` is optional and only for deliberate summaries a runtime exposes; private chain-of-thought is never required or stored. See "Action traces and model visibility" below.
 
-Judge folders contain `EVALUATION.md` and `SCORES.json`. The markdown explains the comparison for humans. The JSON records hard gates, score dimensions, utility, winner, and rationale in a shape later routing logic can read.
+Judge folders contain `EVALUATION.md`, `SCORES.json`, and (from a headless deterministic judgment) `JUDGE-BRIEF.md`. The markdown explains the comparison for humans. The JSON records hard gates, score dimensions, utility, winner, and rationale in a shape later routing logic can read. `JUDGE-BRIEF.md` lists the rubric dimensions that still need model judgment so any lane can refine the deterministic baseline without rewriting it.
 
 ## Fixture Proof
 
@@ -65,6 +65,48 @@ Every candidate and judge record should carry the same runtime fingerprint field
 
 `agent_model_auto` distinguishes an explicit model from an automatic model selection mode. `agent_model_source` records whether the resolved model came from an SDK, a hook, a runtime report, or is unknown.
 
+Replay records add one more field on top of the nine: `tl_version` — the version of tl itself that queued the replay. Together the fields answer *why* a candidate's behavior changed between runs: model (`agent_model*`), agent tool (`agent_tool`), framework (`framework`), adapter (`adapter_version`), rules (`rules_hash`), skills (`skills_hash`), or the harness (`tl_version`). `rules_hash` hashes the agent-facing rules files at the checkout root (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursor/rules/tl.mdc`); `skills_hash` hashes every `skills/*/SKILL.md` — sorted relpath + content pairs, so the hash moves exactly when the content moves. See "Replay and benchmark suites" below. Candidate `METRICS.json` also records `agent_model_requested` (what was asked for — display `auto` under Cursor auto).
+
+## Action traces and model visibility
+
+How a candidate executed the task is a first-class learning input. Implementation lives in `lib/experiment-trace.js` (append, redaction, feature extraction) and is wired through `lib/experiment-runner.js`.
+
+### Privacy boundary
+
+| Layer | Contract |
+|-------|----------|
+| Required | Observable action trace — tool calls, file reads/writes, tests, commands, retries, status changes, faults |
+| Optional | Reasoning / plan summaries only when deliberately reported by a runtime or agent (`reasoning_summary`, `plan_summary`) |
+| Never required | Private chain-of-thought — do not request, persist, or treat hidden model reasoning as a validity gate |
+
+A candidate run is valid without any optional reasoning events. Action trace + metrics are enough.
+
+### `TRACE.jsonl` event contract
+
+Each line is one JSON object with common fields: `ts`, `type`, `agent_tool`, `agent_model`, `agent_model_auto`, `agent_model_source`, `source`, `duration_ms`, `status`, `summary`, plus event-specific payload keys.
+
+**Required types** (local runner emits where possible): `start`, `plan_summary`, `tool`, `file_read`, `file_write`, `test`, `command`, `patch`, `status`, `fault`, `finish`.
+
+**Optional types**: `reasoning_summary`, `replan`, `backtrack`, `human_intervention`.
+
+### Redaction
+
+Before any event is written, summaries and string payload fields pass through redaction: env-style credential assignments (`API_KEY=…`, `*TOKEN*` / `*SECRET*` / `*PASSWORD*` names) and known secret patterns (provider API keys, GitHub/Slack tokens, AWS keys, JWTs, bearer/password assignments) become `[redacted]`. The UI applies a second redact pass when serving traces; write-time redaction is the disk safety net.
+
+### Derived `trace-features.jsonl`
+
+After each candidate run, the runner appends one `_metrics/trace-features.jsonl` row with: `date`, `experiment_id`, `candidate_id`, `event_count`, `tool_calls`, `test_iterations`, `first_test_at_ms`, `replan_count`, `backtrack_count`, `scope_violations`, `human_intervention_count`. Features are counts/timings over observable events only.
+
+### Cursor auto model handling
+
+For Claude/Codex, the model may be declared by the CLI/API (`agent_model_requested` + `agent_model_source: requested|reported`). For Cursor auto:
+
+1. Display requested model as `auto` (`agent_model_requested: "auto"`, `agent_model_auto: true`).
+2. Capture the resolved model when an SDK, hook, or session report exposes it.
+3. Otherwise mark the resolved model `unknown` and `agent_model_source` as `unknown` (or `sdk` / `hook` / `reported` when that channel supplied the resolution).
+
+Adapters report best-effort identity only — no provider-internal probing for hidden reasoning.
+
 ## Statuses
 
 Experiments and candidate runs use lowercase status strings: `queued`, `running`, `succeeded`, `failed`, `timed_out`, `over_budget`, `unavailable`, `cancelled`, `invalid_output`, and `awaiting_evaluation`.
@@ -76,7 +118,9 @@ Winner application states are separate from run statuses and human-owned: `selec
 Experiments are initiated in one of two ways, both file-native:
 
 - **Manual command** — `tl experiment queue [ws] <spec>` creates the experiment folder for a TL spec: it hashes the spec at queue time (`spec_hash`), records the source tree (`base_commit`, from `--repo`, default this checkout), selects candidates from explicit config (`--config <file>`) or the deterministic fixture defaults (`fixture-a` primary, `fixture-b` shadow, `fixture-judge` judge), and writes one **queued candidate row** per candidate. The spec itself is never moved — an experiment is a shadow attempt against a snapshot, not a claim.
-- **UI request** — the dashboard's queue form drops a request config at `_experiments/queue/<stamp>-<slug>.json`. A drain pass folds pending `runtime: "fixture"` requests into real experiments (the request file is rewritten `status: "accepted"` with the `experiment_id` — an audit trail, never deleted). `runtime: "local"` requests need explicit candidate config (a command, a repo) the form doesn't collect yet, so they stay queued for a later slice.
+- **UI request** — the dashboard's queue form drops a request config at `_experiments/queue/<stamp>-<slug>.json`. A drain pass folds pending requests into real experiments (the request file is rewritten `status: "accepted"` with the `experiment_id` — an audit trail, never deleted). Two runtimes bridge:
+  - `runtime: "fixture"` — the deterministic proof cohort, no extra fields needed.
+  - `runtime: "local"` — a real local adapter run. The request must carry the two bridge fields: `runner` (a registered adapter lane: `codex` | `gemini` | `claude` | `cursor` | `shell`) and `repo` (the repo candidates run against, isolated per run). All named candidates (primary + shadows) land in that runner's lane; per-candidate models ride in `models`; `command` is required for (and only used by) the `shell` runner; optional `prompt`/`profile` pass through as structured config. A **malformed** local request (missing/unknown runner, missing/nonexistent repo, shell without a command) is rewritten `status: "invalid"` with the exact error — **never silently dropped**. Unknown future runtimes (e.g. a cloud slice) are reported `left-queued` and left untouched; an unparseable request file is reported invalid without rewriting it (it may be a corrupted audit record).
 
 The `--config` JSON for explicit cohorts:
 
@@ -87,8 +131,9 @@ The `--config` JSON for explicit cohorts:
   "timeout_minutes": 30,
   "judge": { "id": "judge-1", "agent_tool": "fixture" },
   "candidates": [
-    { "id": "shell-a", "role": "primary", "agent_tool": "shell", "command": "…", "repo": "/path/to/repo" },
-    { "id": "fixture-b", "role": "shadow", "agent_tool": "fixture" }
+    { "id": "codex-a", "role": "primary", "agent_tool": "codex", "repo": "/path/to/repo", "profile": "todoapp", "extra_flags": ["--full-auto"] },
+    { "id": "shell-b", "role": "shadow", "agent_tool": "shell", "command": "…", "repo": "/path/to/repo" },
+    { "id": "fixture-c", "role": "shadow", "agent_tool": "fixture" }
   ]
 }
 ```
@@ -116,15 +161,39 @@ Every terminal path — fault or not — leaves the same artifact set (`PATCH.di
 
 A primary failure **never cancels shadows** — `failed` is terminal like any other status, the shadow lanes keep draining, and a shadow can still win at evaluation.
 
-### Judge queueing
+### Judge queueing and drain
 
-The judge row (role `judge`, lane from the experiment's `judge_tool`) is queued only once **every candidate run is terminal** — whichever lane finishes last queues it, and the experiment flips to `awaiting_evaluation`. A human can force evaluation of partial results with `tl experiment drain --agent <tool> --evaluate-partial <experiment-id>`; the forced judge row records that it was partial. Drain never *runs* judge rows in this slice — judging is the `skills/experiment-judge` procedure, and a judge worker is a later spec.
+One `tl experiment drain --agent <tool>` pass follows this flow:
+
+1. Fold pending request configs into experiments.
+2. Claim + run every queued **candidate** row in this agent's lane (up to `--max`).
+3. Queue a **judge** row for any experiment whose candidates are all terminal (or that `--evaluate-partial <experiment-id>` forces).
+4. Execute queued judge rows in this agent's lane (default) — deterministic hard-gate checks in code; model-judgment dimensions land in a lane-agnostic `JUDGE-BRIEF.md`.
+
+The judge row (role `judge`, lane from the experiment's `judge_tool`) is queued only once **every candidate run is terminal** — whichever lane finishes last queues it, and the experiment flips to `awaiting_evaluation`. A human can force evaluation of partial results with `--evaluate-partial <experiment-id>`; the forced judge row records that it was partial.
+
+**Default vs opt-out.** The CLI turns step 4 on by default (`judges: true`). Pass `--skip-judges` to leave judge rows queued for the interactive `skills/experiment-judge` path instead. Library callers of `drainQueue` keep the older candidate-only contract unless they opt in with `judges: true` — the CLI is what flips the default for operators. A mid-run judge failure marks the row `failed`, releases the claim marker, and leaves the experiment `awaiting_evaluation` for an explicit retry or the skill; evaluations stage then rename so nothing half-writes.
 
 ### Isolated runs (the worktree/clone strategy)
 
 Local shell candidates never touch the canonical working tree. The runner creates a **detached git worktree** at the experiment's `base_commit` (`git worktree add --detach`, cheap — shares the object store), falls back to a **sibling clone** when worktrees are unavailable, runs the command inside it, collects `git diff` (intent-to-add first, so new files show) as `PATCH.diff`, and tears the workdir down. Fixture candidates are side-effect-free and need no isolation.
 
-This is also the documented **seam for later orchestration**: `lib/experiment-runner.js` exports `createIsolatedWorkdir` / `removeIsolatedWorkdir` (the isolation strategy) and the `RUNNERS` registry (one entry per `agent_tool`; this slice ships `fixture` and `shell`). A real Claude/Codex/Cursor-SDK adapter registers one `RUNNERS` entry that wraps its prepare/start/collect cycle (per `lib/experiment-adapter.js`), and a remote/cloud worker replaces the workdir pair with its own sandbox provisioning — keeping the same promise: **the canonical repo is never mutated by a candidate run**.
+This is also the documented **seam for later orchestration**: `lib/experiment-runner.js` exports `createIsolatedWorkdir` / `removeIsolatedWorkdir` (the isolation strategy) and the `RUNNERS` registry (one entry per `agent_tool`: `fixture`, `shell`, and the provider adapters below). A remote/cloud worker replaces the workdir pair with its own sandbox provisioning — keeping the same promise: **the canonical repo is never mutated by a candidate run**.
+
+### Provider adapters (codex / gemini / claude / cursor)
+
+The `RUNNERS` registry ships turnkey adapters for the four provider CLIs, so a cohort config can say `agent_tool: "codex"` instead of hand-assembling a shell command. Each adapter is a thin wrapper over the same isolation + artifact contract as `shell` — same terminal statuses, same artifact set, no provider SDKs — but **encodes its CLI's invocation shape** so it cannot be misconfigured per-experiment. The quirks themselves (why the flag order matters, sandbox tiers, writable-roots profiles) are ground-truthed in `docs/headless-lanes.md` ("Per-lane invocation quirks") — this table is the encoding, that document is the rationale:
+
+| Adapter | Invocation template | Prompt delivery |
+|---------|--------------------|-----------------|
+| `codex` | `codex exec --sandbox <mode> [-p <profile>] [extra…] -` | stdin (the trailing `-`); `-p` is a config **profile**, never the prompt |
+| `gemini` | `agy --dangerously-skip-permissions [extra…] -p <prompt>` | final argv element; `-p` is always emitted **last** so no flag can be swallowed as the task |
+| `claude` | `claude [extra…] -p` | stdin (the `cat brief \| claude -p` shape) |
+| `cursor` | `cursor-agent -f [extra…] -p <prompt>` | final argv element; `-f` (trust the directory) is baked in |
+
+**No shell, no quoting.** Adapters spawn the CLI with an **argv array** — the prompt travels on stdin or as one argv element, so the no-nested-quoting rule from `docs/headless-lanes.md` holds by construction. Overrides are **structured config fields** on the candidate (never string concatenation): `repo` (required — the isolation source), `prompt` (default: the tl spec the experiment was queued from — the turnkey path), `profile` and `sandbox` (codex), `extra_flags` (an array of argv elements, inserted in the one slot per adapter where they cannot displace the load-bearing flags), and `env`. Anything structured beyond that (writable roots, TOML/JSON settings) belongs in the provider's own profile file, per the headless-lanes rule — the config field only names the profile.
+
+Budget (`over_budget`, stopped before execution) and `timeout_minutes` behave exactly like `shell`. A provider CLI missing from PATH is `unavailable` — with the full artifact set and log row, so an unequipped machine draining the lane is recorded learning data, not a crash. Note the lane semantics stay unchanged: a `codex` row waits for a worker that drains `--agent codex` on a machine where the CLI exists.
 
 ### Worker safety invariants
 
@@ -177,6 +246,51 @@ Applying a patch does not move any spec through its lifecycle. The applied chang
 ### Future UI affordance
 
 The Experiments detail view's winner panel already reads `WINNER.json` (degrading to the judge's pick). A later dashboard slice may add apply/reject buttons there, but they will follow the UI's existing write discipline: a button only records the human's decision request as a file — the patch application itself remains this explicit CLI/helper path, never a side effect of rendering or judging.
+
+## Replay and benchmark suites
+
+Replay answers "is a newly introduced model / framework / agent tool actually better?" by rerunning historical tasks against the new candidate runtime and comparing the outcome to the prior winner — updating nothing until the evidence clears the promotion policy. `lib/experiment-replay.js` owns the modes, suites, and comparison fold; every replay is a **normal experiment** (created through `queueExperiment`, drained by the same lane workers, judged by the same judge, replay-tagged via `replay_of` / `suite_id` in `EXPERIMENT.md`), so no second execution path exists to drift.
+
+### Replay modes
+
+| Mode | Task identity | Use |
+|------|---------------|-----|
+| `exact` | Original `spec_hash` **and** original `base_commit` | The fully controlled comparison — same task text, same source tree. Default for `tl experiment replay`. Refused loudly if the spec body has changed since (its hash would differ); the error names the alternative |
+| `spec` | Same spec slug, **current** text and repo — rehash now, `base_commit` from the run repo's HEAD | The task drifted and you want the candidate measured on today's version; the comparison is honest that the task moved (`spec_hash_matches: false` in `REPLAY.json`) |
+| `auto` | `exact` when the spec still hashes the same, else `spec` | The suite default — one changed spec degrades to a spec replay instead of sinking the whole benchmark pass |
+
+Replay follows a spec through lifecycle stages: an experiment originally queued from `specs/foo/` replays fine after the spec moved to `done/foo/` — *moved* is not *changed*; only the body hash decides exactness.
+
+```text
+tl experiment replay [ws] <experiment-id> --candidate <tool>[:<model>]
+        [--mode exact|spec|auto] [--repo <path>] [--budget <usd>] [--timeout <min>]
+        [--command <cmd>]        # shell-lane candidates only
+tl experiment replay report [ws] # fold judged replays into _metrics/replay-log.jsonl
+```
+
+The new candidate runs as the replay experiment's sole **primary** in its own lane (a `codex` replay row waits for a codex worker, exactly like any queue row). The original experiment's judge is reused by default. Alongside `EXPERIMENT.md`, replay writes **`_experiments/<id>/REPLAY.json`**: the mode, the original's `tl_spec` / `spec_hash` / `base_commit` / previous winner, and the candidate **runtime fingerprint captured at queue time** — the nine shared fields plus `tl_version` (see "Runtime Fingerprints"). That fingerprint is what lets a later reader say *the candidate changed because of the model / tool / adapter / framework / rules / skills*, not just *something changed*.
+
+### Suites
+
+A suite is a **stored selector query** over judged historical experiments — not a snapshot; selection happens at replay time:
+
+```text
+tl experiment suite create [ws] <name> [--spec <path>]… [--tag <tag>]… [--task-type <type>]… [--sample <n>] [--notes "…"]
+tl experiment suite list   [ws]
+tl experiment suite replay [ws] <name> --candidate <tool>[:<model>] [--mode …] [--sample <n>]
+```
+
+Definitions live at `_experiments/suites/<name>.json` (`suite_id`, `created`, `selectors: { specs, tags, task_types }`, `sample_size`, `notes`). Selection rules: **judged originals only** (a benchmark needs a prior verdict; replays of replays never become benchmark sources), selectors ANDed (empty = match all; `tags` reads the spec's frontmatter, following moved specs), deduped to the **newest experiment per `spec_hash`** (one benchmark per task), newest first, capped at the sample size. `suite replay` queues one replay experiment per selected task with `suite_id` set, in `auto` mode by default; an item that fails to queue is reported and skipped, never fatal to the batch.
+
+### Comparison rows and promotion (`replay-log.jsonl`)
+
+`tl experiment replay report` folds **judged** replay experiments into `_metrics/replay-log.jsonl`, appending one row per replay candidate exactly once (keyed by `experiment_id` + `candidate_id`; a rerun of the report appends nothing). Each row carries the SCHEMA fields — `date`, `experiment_id`, `replay_of`, `suite_id`, `candidate_id`, `previous_winner`, `new_winner`, `utility_delta`, `quality_delta`, `cost_delta`, `latency_delta`, `promotion_recommendation` — plus supporting fields: `agent_tool` / `agent_model` (the candidate runtime identity the promotion evidence aggregates by), `replay_status` and `fault`, `fingerprint_changes` (which fingerprint fields differ between the previous winner's run and the new candidate's run), `promotion_reason`, and `promotion_samples`.
+
+Deltas are *new candidate minus previous winner*: utility from the two `SCORES.json` verdicts, quality from mean rubric scores, cost and latency from `candidate-run-log.jsonl`. A missing side yields a **null** delta, never a fake zero — an unjudged original (no prior winner) or a faulted replay compares as far as its evidence goes.
+
+**Faults are reliability signals.** A replay whose run ends `unavailable`, `timed_out`, `over_budget`, or `invalid_output` still gets judged (non-winning), still gets a comparison row (`replay_status` + `fault` set, `new_winner: null` when nothing was eligible), and still counts as evidence about the candidate runtime. A lane with no worker simply stays queued — the report only ever folds judged replays.
+
+**Promotion is threshold-enforced and recommendation-only.** Each row's `promotion_recommendation` (`promote` / `hold`) comes from `shouldPromoteFromReplays` in `lib/experiment-policy.js`, applied to the **cumulative** utility deltas for that candidate runtime (tool + model) across the whole replay log: it requires **both** at least `min_samples_to_promote` comparisons **and** a mean utility delta of at least `promote_utility_delta` (the same `experiments:` dials in `TRIAGE.yml` that govern prior-based promotion) — a new runtime never becomes the recommended default off a single win. As with `shouldPromote`, acting on the recommendation is a human `TRIAGE.yml` edit (`default_primary`); nothing in replay writes config, applies patches, or moves specs. Note the units: replay deltas are judge-utility points, while prior-based `shouldPromote` deltas are weighted-prior-score points; `promote_utility_delta` is the shared configurable bar for both.
 
 ## Portable core boundary
 
@@ -248,4 +362,4 @@ The whole surface follows the existing UI discipline: single-file zero-build `ui
 
 ### Private routing stays out of the core
 
-Learned routing is explicitly *not* a core requirement. The open core ships only a local, file-backed policy (`createLocalRoutingPolicy`) that reads and appends priors to `routing-priors.jsonl` (`ROUTING_PRIORS_FILE`) and picks by a trivial observed win-rate baseline. A future private or hosted learned model is just another policy adapter satisfying the same `{ name, choose, record/formatPriorRow }` shape, so it can be swapped in without the core ever depending on it.
+Learned routing is explicitly *not* a core requirement. The open core's shipping transparent policy is `lib/experiment-policy.js` — the sole writer/selector for `_metrics/routing-priors.jsonl` (SCHEMA row shape: `date`, `context_key`, aggregates, `source`, …). Portable-core code reaches it through `createLocalRoutingPolicy` in `lib/experiment-adapter.js`, a thin `{ name, choose, record }` (plus `formatPriorRow`) adapter seam that *delegates* to that policy; it does not invent a second prior-row shape. A future private or hosted learned model implements the same seam and swaps in without the core ever depending on it.

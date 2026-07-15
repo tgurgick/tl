@@ -4,14 +4,35 @@
     {
       "name": "tl-ui",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["ui/server.js", "--port", "4400"],
+      "runtimeArgs": [
+        "ui/server.js",
+        "--port",
+        "4400"
+      ],
       "port": 4400
     },
     {
       "name": "tl-ui-preview",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["ui/server.js", "--port", "4401"],
+      "runtimeArgs": [
+        "ui/server.js",
+        "--port",
+        "4401"
+      ],
       "port": 4401
+    },
+    {
+      "name": "bench",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "/Users/trevorgurgick/Documents/GitHub/bench/bin/bench.js",
+        "serve",
+        "--port",
+        "4460",
+        "--dir",
+        "/Users/trevorgurgick/Documents/GitHub/throughline"
+      ],
+      "port": 4460
     }
   ]
 }

@@ -328,9 +328,9 @@ test('fault handling: unavailable tool, budget stop, timeout, non-zero exit, emp
     assert.equal(logged.fault, logged.status === 'succeeded' ? null : logged.status);
   }
 
-  // The budget stop never executed — its trace has no exec event.
+  // The budget stop never executed — its trace has no command event.
   const costlyTrace = readJsonl(path.join(ws, '_experiments', 'exp-t', 'candidates', 'costly', 'TRACE.jsonl'));
-  assert.equal(costlyTrace.some(t => t.type === 'exec'), false);
+  assert.equal(costlyTrace.some(t => t.type === 'command'), false);
 
   // All candidates terminal (all faulted but terminal) → judge still queues:
   // faults are learning data and evaluation proceeds.
@@ -418,7 +418,7 @@ test('shell candidates run in an isolated worktree: patch captured, canonical re
 
 // ---------- request configs (the UI bridge) ----------
 
-test('processQueueRequests folds a queued fixture request into an experiment and leaves local requests for a later slice', () => {
+test('processQueueRequests folds a queued fixture request into an experiment and marks incomplete local requests invalid', () => {
   const repo = mkRepo();
   const ws = mkWorkspace();
   const qdir = path.join(ws, '_experiments', 'queue');
@@ -436,8 +436,12 @@ test('processQueueRequests folds a queued fixture request into an experiment and
   const results = processQueueRequests(ws, { now: NOW });
   const accepted = results.find(r => r.file === '20260712120000-demo.json');
   assert.equal(accepted.status, 'accepted');
-  const leftover = results.find(r => r.file === '20260712120001-local.json');
-  assert.equal(leftover.status, 'left-queued');
+  // A local request without the bridge fields (runner + repo) is malformed —
+  // marked invalid with the reason, never silently dropped (provider-adapters
+  // slice; see test/experiment-adapters.test.js for the full bridge contract).
+  const malformed = results.find(r => r.file === '20260712120001-local.json');
+  assert.equal(malformed.status, 'invalid');
+  assert.match(malformed.reason, /requires "runner"/);
 
   // The fixture request became a real experiment with rows in its lanes.
   const rows = readQueueRows(ws).filter(r => r.experiment_id === accepted.experimentId);
@@ -452,7 +456,7 @@ test('processQueueRequests folds a queued fixture request into an experiment and
   const rewritten = JSON.parse(fs.readFileSync(path.join(qdir, '20260712120000-demo.json'), 'utf8'));
   assert.equal(rewritten.status, 'accepted');
   assert.equal(rewritten.experiment_id, accepted.experimentId);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(qdir, '20260712120001-local.json'), 'utf8')).status, 'queued');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(qdir, '20260712120001-local.json'), 'utf8')).status, 'invalid');
 
   // A second pass is idempotent — accepted requests are not re-queued.
   assert.equal(processQueueRequests(ws, { now: NOW }).some(r => r.status === 'accepted'), false);

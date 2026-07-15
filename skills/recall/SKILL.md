@@ -1,6 +1,6 @@
 ---
 name: recall
-description: Unified retrieval across a tl workspace's memory — search intents, specs (all stages), threads, and done outcomes to answer "didn't we already discuss this?". Use when the user asks whether something was already considered, wants prior discussion on a topic, or before opening a new intent/spec to check for overlap. Read-only.
+description: Unified retrieval across a tl workspace's memory — search intents, specs (all stages), threads, and done outcomes to answer "didn't we already discuss this?". Use when the user asks whether something was already considered, wants prior discussion on a topic, or before drafting a new intent/spec to check for overlap (learn). Read-only.
 ---
 
 # /tl recall

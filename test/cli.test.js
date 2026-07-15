@@ -6,28 +6,57 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
-const ROOT = path.join(__dirname, '..');
-const BIN = path.join(ROOT, 'bin', 'tl.js');
-const run = (...a) => spawnSync(process.execPath, [BIN, ...a], { encoding: 'utf8' });
+const REPO_ROOT = path.join(__dirname, '..');
+const BIN = path.join(REPO_ROOT, 'bin', 'tl.js');
+
+// Optional pretest sweep: remove stray tl-clitest-* left under the real
+// checkout's projects/ (e.g. from a hard-killed run before tmpdir isolation).
+(function sweepStrayCliTestWorkspaces() {
+  const projects = path.join(REPO_ROOT, 'projects');
+  if (!fs.existsSync(projects)) return;
+  const hourMs = 60 * 60 * 1000;
+  const now = Date.now();
+  for (const name of fs.readdirSync(projects)) {
+    if (!name.startsWith('tl-clitest-')) continue;
+    const p = path.join(projects, name);
+    try {
+      const st = fs.statSync(p);
+      if (now - st.mtimeMs >= hourMs) fs.rmSync(p, { recursive: true, force: true });
+    } catch { /* best-effort */ }
+  }
+})();
+
+// Active scratch TL_ROOT for the current withWorkspace() callback — run() and
+// writeWorkspaceFile() route through it so the real checkout's projects/ stays
+// untouched.
+let activeTestRoot = null;
+
+const run = (...a) => spawnSync(process.execPath, [BIN, ...a], {
+  encoding: 'utf8',
+  env: activeTestRoot
+    ? { ...process.env, TL_ROOT: activeTestRoot }
+    : process.env,
+});
 const runWithEnv = (env, ...a) => spawnSync(process.execPath, [BIN, ...a], {
   encoding: 'utf8',
-  env: { ...process.env, ...env },
+  env: { ...process.env, ...(activeTestRoot ? { TL_ROOT: activeTestRoot } : {}), ...env },
 });
 
-// Scaffold a throwaway workspace under projects/ (gitignored) with the given
-// specs, run the callback with the workspace name, then remove it. Each spec is
-// { slug, stage, files } → a <stage-folder>/<slug>/SPEC.md with a Files to touch
-// section. stage 'ready' → specs/.
+// Scaffold a throwaway workspace under a tmpdir TL_ROOT (never the real
+// checkout's projects/). Specs: { slug, stage, files } → <stage>/<slug>/SPEC.md.
+// stage 'ready' → specs/.
 function withWorkspace(specs, fn) {
   const name = 'tl-clitest-' + process.pid + '-' + Math.random().toString(36).slice(2, 8);
-  const dir = path.join(ROOT, 'projects', name);
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-clitest-root-'));
+  const dir = path.join(scratch, 'projects', name);
   const folderFor = s => (s.stage && s.stage !== 'ready') ? s.stage : 'specs';
+  activeTestRoot = scratch;
   try {
     // Default identity: PROJECT.md repo points at this checkout (the
     // tl-developing-tl case), so the claim-time containment guard is exempt
     // and the scaffold's repo-less code specs stay eligible.
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'PROJECT.md'), `---\nname: "${name}"\nrepo: "${ROOT}"\n---\n`);
+    fs.writeFileSync(path.join(dir, 'PROJECT.md'), `---\nname: "${name}"\nrepo: "${REPO_ROOT}"\n---\n`);
     for (const s of specs) {
       const specDir = path.join(dir, folderFor(s), s.slug);
       fs.mkdirSync(specDir, { recursive: true });
@@ -41,8 +70,14 @@ function withWorkspace(specs, fn) {
     }
     return fn(name);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    activeTestRoot = null;
+    fs.rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+function workspacePath(name, ...parts) {
+  const root = activeTestRoot || REPO_ROOT;
+  return path.join(root, 'projects', name, ...parts);
 }
 
 test('unknown command exits non-zero', () => {
@@ -54,13 +89,48 @@ test('unknown command exits non-zero', () => {
 test('help exits 0 and prints usage', () => {
   const r = run('help');
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /Usage:/);
+  assert.match(r.stdout, /the throughline CLI/);
+  assert.match(r.stdout, /Four verbs/);
+  assert.match(r.stdout, /tl up\s+\[workspace\]/);
 });
 
 test('no arguments exits 0 (usage)', () => {
   const r = run();
   assert.equal(r.status, 0);
   assert.match(r.stdout, /the throughline CLI/);
+});
+
+test('withWorkspace scaffolds under TL_ROOT tmpdir, never real projects/', () => {
+  withWorkspace([{ slug: 'iso-one', files: ['a.js'] }], name => {
+    assert.ok(activeTestRoot);
+    assert.ok(activeTestRoot.startsWith(os.tmpdir()));
+    assert.ok(fs.existsSync(workspacePath(name, 'specs', 'iso-one', 'SPEC.md')));
+    assert.ok(!fs.existsSync(path.join(REPO_ROOT, 'projects', name)));
+    const r = run('resume', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /iso-one|READY|ready/i);
+  });
+});
+
+test('TL_ROOT and --root resolve the projects root', () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-clitest-rootflag-'));
+  try {
+    const name = 'ws-rootflag';
+    const dir = path.join(scratch, 'projects', name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'PROJECT.md'), `---\nname: "${name}"\nrepo: "${REPO_ROOT}"\n---\n`);
+    const viaEnv = runWithEnv({ TL_ROOT: scratch }, 'resume', name);
+    assert.equal(viaEnv.status, 0, viaEnv.stderr);
+    assert.match(viaEnv.stdout, new RegExp('SNAPSHOT: ' + name));
+    const viaFlag = spawnSync(process.execPath, [BIN, '--root', scratch, 'resume', name], {
+      encoding: 'utf8',
+      env: { ...process.env, TL_ROOT: '' },
+    });
+    assert.equal(viaFlag.status, 0, viaFlag.stderr);
+    assert.match(viaFlag.stdout, new RegExp('SNAPSHOT: ' + name));
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
 });
 
 test('run: holds back a ready spec that conflicts with active in-progress work', () => {
@@ -91,7 +161,7 @@ test('run: named spec conflicting with active work is refused (non-zero)', () =>
 // Write extra workspace files (NOTES.md, _dispatch/*.json) that the scaffold
 // doesn't cover; paths are relative to the workspace dir.
 function writeWorkspaceFile(name, rel, content) {
-  const f = path.join(ROOT, 'projects', name, rel);
+  const f = workspacePath(name, rel);
   fs.mkdirSync(path.dirname(f), { recursive: true });
   fs.writeFileSync(f, content);
 }
@@ -119,6 +189,55 @@ test('run: pending continuation dispatch resumes in-progress work, holds all rea
     assert.doesNotMatch(r.stdout, /Selected batch/);
     assert.match(r.stdout, /ready-conflict.*continuation pending/);
     assert.match(r.stdout, /ready-free.*continuation pending/);
+  });
+});
+
+test('run --agent: other-lane continuation is filtered out; lane falls through to ready', () => {
+  withWorkspace([
+    { slug: 'kicked-claude', stage: 'in-progress', files: ['src/a.js'],
+      frontmatter: 'claimed_by: claude' },
+    { slug: 'ready-codex', stage: 'ready', files: ['src/b.js'],
+      frontmatter: 'agent: codex' },
+  ], name => {
+    writeWorkspaceFile(name, 'in-progress/kicked-claude/NOTES.md',
+      '## 2026-07-12 — kicked back\nClaude owns this resume.\n');
+    writeWorkspaceFile(name, '_dispatch/kicked-claude.json', JSON.stringify({
+      spec: 'kicked-claude', mode: 'continuation', stage: 'in-progress',
+      notes_path: 'kicked-claude/NOTES.md', status: 'pending', created: '2026-07-12',
+      reason: 'kicked back',
+    }));
+    const r = run('run', name, '--agent', 'codex');
+    assert.equal(r.status, 0);
+    // other-lane continuation noted, not resumed
+    assert.match(r.stdout, /owned by claude/);
+    assert.doesNotMatch(r.stdout, /Continuation dispatches — resume these before fresh claims/);
+    // falls through to this lane's ready queue
+    assert.match(r.stdout, /Selected batch \(1\)/);
+    assert.match(r.stdout, /ready-codex/);
+  });
+});
+
+test('run --agent: own-lane continuation still resumed before ready claims', () => {
+  withWorkspace([
+    { slug: 'kicked-codex', stage: 'in-progress', files: ['src/a.js'],
+      frontmatter: 'claimed_by: codex' },
+    { slug: 'ready-codex-two', stage: 'ready', files: ['src/b.js'],
+      frontmatter: 'agent: codex' },
+  ], name => {
+    writeWorkspaceFile(name, 'in-progress/kicked-codex/NOTES.md',
+      '## 2026-07-12 — kicked back\nFix the footer before resubmitting.\n');
+    writeWorkspaceFile(name, '_dispatch/kicked-codex.json', JSON.stringify({
+      spec: 'kicked-codex', mode: 'continuation', stage: 'in-progress',
+      notes_path: 'kicked-codex/NOTES.md', status: 'pending', created: '2026-07-12',
+      reason: 'kicked back: fix the footer',
+    }));
+    const r = run('run', name, '--agent', 'codex');
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /Continuation dispatches — resume these before fresh claims \(1\)/);
+    assert.match(r.stdout, /kicked-codex/);
+    assert.match(r.stdout, /Fix the footer/);
+    assert.doesNotMatch(r.stdout, /Selected batch/);
+    assert.match(r.stdout, /ready-codex-two.*continuation pending/);
   });
 });
 
@@ -281,6 +400,121 @@ test('run: a repo-held pending continuation stays pending with the reason in the
   });
 });
 
+// ---------- interactive claim → experiment auto-initiation (parity with worker) ----------
+
+const DIAL_ON_TRIAGE = [
+  'experiments:',
+  '  enabled: true',
+  '  auto_initiate: true',
+  '  candidates: [claude, codex]',
+  '  judge: gemini',
+  '  budget_usd: 2.5',
+  '  timeout_minutes: 30',
+  '',
+].join('\n');
+
+function readAutoInitLog(name) {
+  const f = workspacePath(name, '_metrics', 'auto-initiation-log.jsonl');
+  if (!fs.existsSync(f)) return [];
+  return fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+}
+
+function experimentDirsFor(name) {
+  const d = workspacePath(name, '_experiments');
+  if (!fs.existsSync(d)) return [];
+  return fs.readdirSync(d).filter(e => e.startsWith('exp-'));
+}
+
+test('run auto-init: dial off is fully inert — brief prints, zero experiment artifacts', () => {
+  withWorkspace([{ slug: 'ready-a', files: ['a.js'] }], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', 'goals: []\n');
+    const r = run('run', name);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /Selected batch \(1\)/);
+    assert.match(r.stdout, /Per-spec brief/);
+    assert.equal(fs.existsSync(workspacePath(name, '_experiments')), false);
+    assert.equal(fs.existsSync(workspacePath(name, '_metrics', 'auto-initiation-log.jsonl')), false);
+  });
+});
+
+test('run auto-init: dial on queues a policy experiment after a fresh interactive claim', () => {
+  withWorkspace([{ slug: 'ready-a', files: ['a.js'] }], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', DIAL_ON_TRIAGE);
+    const r = run('run', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Selected batch \(1\)/);
+    assert.match(r.stdout, /Claim the whole batch first/);
+    assert.match(r.stdout, /Per-spec brief/);
+    assert.match(r.stdout, /auto-initiated experiment exp-/);
+
+    const exps = experimentDirsFor(name);
+    assert.equal(exps.length, 1);
+    const alog = readAutoInitLog(name);
+    assert.equal(alog.length, 1);
+    assert.equal(alog[0].decision, 'initiated');
+    assert.equal(alog[0].initiated_by, 'policy');
+    assert.equal(alog[0].experiment_id, exps[0]);
+    assert.equal(alog[0].spec, 'specs/ready-a/');
+
+    const { parseFrontmatter } = require('../lib/parse');
+    const meta = parseFrontmatter(
+      fs.readFileSync(workspacePath(name, '_experiments', exps[0], 'EXPERIMENT.md'), 'utf8')).meta;
+    assert.equal(meta.initiated_by, 'policy');
+  });
+});
+
+test('run auto-init: continuations never initiate — resume path leaves zero artifacts', () => {
+  withWorkspace([
+    { slug: 'kicked-one', stage: 'in-progress', files: ['src/a.js'] },
+    { slug: 'ready-free', stage: 'ready', files: ['src/b.js'] },
+  ], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', DIAL_ON_TRIAGE);
+    writeWorkspaceFile(name, 'in-progress/kicked-one/NOTES.md',
+      '## 2026-07-14 — kicked back\nFix the footer.\n');
+    writeWorkspaceFile(name, '_dispatch/kicked-one.json', JSON.stringify({
+      spec: 'kicked-one', mode: 'continuation', stage: 'in-progress',
+      notes_path: 'kicked-one/NOTES.md', status: 'pending', created: '2026-07-14',
+      reason: 'kicked back',
+    }));
+    const r = run('run', name);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /Continuation dispatches — resume these before fresh claims \(1\)/);
+    assert.doesNotMatch(r.stdout, /Selected batch/);
+    assert.doesNotMatch(r.stdout, /auto-initiated experiment/);
+    assert.equal(experimentDirsFor(name).length, 0);
+    assert.equal(fs.existsSync(workspacePath(name, '_metrics', 'auto-initiation-log.jsonl')), false);
+  });
+});
+
+test('run auto-init: dry-run prints the brief but never initiates', () => {
+  withWorkspace([{ slug: 'ready-a', files: ['a.js'] }], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', DIAL_ON_TRIAGE);
+    const r = run('run', name, '--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Selected batch \(1\)/);
+    assert.match(r.stdout, /Per-spec brief/);
+    assert.doesNotMatch(r.stdout, /auto-initiated experiment/);
+    assert.equal(experimentDirsFor(name).length, 0);
+    assert.equal(fs.existsSync(workspacePath(name, '_metrics', 'auto-initiation-log.jsonl')), false);
+  });
+});
+
+test('run auto-init: failure-silent — broken experiment path leaves the brief intact', () => {
+  withWorkspace([{ slug: 'ready-a', files: ['a.js'] }], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', DIAL_ON_TRIAGE);
+    // queueExperiment throws ENOTDIR when _experiments is a file
+    writeWorkspaceFile(name, '_experiments', 'not a directory');
+    const r = run('run', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Selected batch \(1\)/);
+    assert.match(r.stdout, /Per-spec brief/);
+    assert.match(r.stdout, /auto-initiation failed for specs\/ready-a\/ \(canonical claim unaffected\)/);
+    const err = readAutoInitLog(name).pop();
+    assert.equal(err.decision, 'error');
+    assert.match(err.reason, /auto-initiation failed/);
+  });
+});
+
 test('resume: a blocked spec surfaces its blocked_reason in the open loops', () => {
   withWorkspace([
     { slug: 'stuck', stage: 'tests', status: 'blocked', files: ['src/a.js'],
@@ -292,6 +526,199 @@ test('resume: a blocked spec surfaces its blocked_reason in the open loops', () 
   });
 });
 
+// ---------- tl up (alias: open) ----------
+
+test('up --dry-run: absent automation is inert — UI plan + next action, no schedule, no spawn', () => {
+  withWorkspace([{ slug: 'ready-a', files: ['a.js'] }], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', 'goals: []\n');
+    const r = run('up', name, '--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /not configured|no behavior change/i);
+    assert.match(r.stdout, /Next human action|ready/i);
+    assert.doesNotMatch(r.stdout, /wrote .*LaunchAgents/);
+    assert.doesNotMatch(r.stdout, /loaded via launchctl/);
+    // dry-run must never claim/move specs
+    assert.ok(fs.existsSync(workspacePath(name, 'specs', 'ready-a')));
+  });
+});
+
+test('open alias: dry-run still works (short-lived synonym of up)', () => {
+  withWorkspace([{ slug: 'ready-alias', files: ['a.js'] }], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', 'goals: []\n');
+    const r = run('open', name, '--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /===== UP:/);
+    assert.match(r.stdout, /Next human action|ready/i);
+  });
+});
+
+test('up: enabled with missing lane command fails loudly with a fix hint', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'lanes: {}',
+      'automation:',
+      '  enabled: true',
+      '  lanes: [claude]',
+      '',
+    ].join('\n'));
+    const r = run('up', name, '--dry-run');
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /lanes\.claude\.command is missing|automation profile is misconfigured/);
+    assert.match(r.stderr, /fix:/);
+  });
+});
+
+test('up --dry-run: enabled profile prints schedule plan without launching agent CLIs or launchctl', () => {
+  withWorkspace([{ slug: 'ready-b', files: ['b.js'] }], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'lanes:',
+      '  claude:',
+      '    command: "echo CLAUDE_SHOULD_NOT_RUN"',
+      'automation:',
+      '  enabled: true',
+      '  interval_minutes: 15',
+      '  lanes: [claude]',
+      '  verify: false',
+      '  experiment: off',
+      '',
+    ].join('\n'));
+    const r = run('up', name, '--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /dry run — would write:/);
+    assert.match(r.stdout, /dry run — would run:\s+launchctl/);
+    assert.match(r.stdout, /nothing written, nothing loaded, no agent spawned/);
+    assert.match(r.stdout, /tl-worker\.js/);
+    // agent CLI from the lane command must not appear as something that ran
+    assert.doesNotMatch(r.stdout, /CLAUDE_SHOULD_NOT_RUN/);
+    assert.doesNotMatch(r.stdout, /loaded via launchctl/);
+  });
+});
+
+test('up --dry-run: PAUSE reports paused', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'lanes:',
+      '  claude:',
+      '    command: "claude -p {prompt_file}"',
+      'automation:',
+      '  enabled: true',
+      '  lanes: [claude]',
+      '',
+    ].join('\n'));
+    writeWorkspaceFile(name, 'PAUSE', '');
+    const r = run('up', name, '--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /PAUSED|status: paused/i);
+  });
+});
+
+test('up --print-schedule: emits cron + launchd without installing', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'lanes:',
+      '  claude:',
+      '    command: "claude -p {prompt_file}"',
+      'automation:',
+      '  enabled: true',
+      '  lanes: [claude]',
+      '  verify: true',
+      'verification:',
+      '  verifier_lanes:',
+      '    gemini:',
+      '      agent: gemini',
+      '      mode: verify',
+      '      isolated: true',
+      '      sandbox: required',
+      '      allow_network: false',
+      '      command: [agy]',
+      '',
+    ].join('\n'));
+    const r = run('up', name, '--print-schedule');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Option A — cron/);
+    assert.match(r.stdout, /Option B — launchd/);
+    assert.match(r.stdout, /com\.tl\.open\./);
+    assert.match(r.stdout, /tl-worker\.js .* --agent claude/);
+    assert.match(r.stdout, /tl-worker\.js .* --mode verify/);
+    assert.doesNotMatch(r.stdout, /wrote |loaded via launchctl/);
+  });
+});
+
+test('up --dry-run: experiment off states inert; no drain in schedule', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'lanes:',
+      '  claude:',
+      '    command: "claude -p {prompt_file}"',
+      'automation:',
+      '  enabled: true',
+      '  lanes: [claude]',
+      '  experiment: off',
+      '',
+    ].join('\n'));
+    const r = run('up', name, '--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /experiment: off \(inert/);
+    assert.doesNotMatch(r.stdout, /experiment drain/);
+    assert.doesNotMatch(r.stdout, /experiment (apply|select)/);
+  });
+});
+
+test('up --dry-run: experiment drain prints exact drain commands; never auto-apply', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'lanes:',
+      '  claude:',
+      '    command: "claude -p {prompt_file}"',
+      '  codex:',
+      '    command: "codex exec -"',
+      'automation:',
+      '  enabled: true',
+      '  lanes: [claude, codex]',
+      '  experiment: drain',
+      '',
+    ].join('\n'));
+    const r = run('up', name, '--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /experiment: drain/);
+    assert.match(r.stdout, /will run:.*experiment drain --agent claude/);
+    assert.match(r.stdout, /will run:.*experiment drain --agent codex/);
+    assert.match(r.stdout, /never selects or applies winners/);
+    assert.match(r.stdout, /experiment drain/);
+    assert.doesNotMatch(r.stdout, /experiment (apply|select|reject)/);
+  });
+});
+
+test('up: invalid experiment value fails loudly with supported-values hint', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'lanes:',
+      '  claude:',
+      '    command: "claude -p {prompt_file}"',
+      'automation:',
+      '  enabled: true',
+      '  lanes: [claude]',
+      '  experiment: shadow',
+      '',
+    ].join('\n'));
+    const r = run('up', name, '--dry-run');
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /not a supported value|automation profile is misconfigured/);
+    assert.match(r.stderr, /off, drain|fix:/);
+  });
+});
+
+test('tl help groups commands under steer / run / review / learn', () => {
+  const r = run();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /steer — shape what to build/);
+  assert.match(r.stdout, /run — start it/);
+  assert.match(r.stdout, /review — sign off/);
+  assert.match(r.stdout, /learn — where am I/);
+  assert.match(r.stdout, /tl up\s+\[workspace\]/);
+  assert.match(r.stdout, /\(alias: open\)/);
+  assert.doesNotMatch(r.stdout, /^Usage:$/m);
+});
 function withSyncRulesFixture(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-sync-rules-'));
   try {
@@ -314,9 +741,9 @@ function withSyncRulesFixture(fn) {
 
 function readRealRuleFiles() {
   return {
-    agents: fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8'),
-    cursor: fs.readFileSync(path.join(ROOT, '.cursor', 'rules', 'tl.mdc'), 'utf8'),
-    gemini: fs.readFileSync(path.join(ROOT, 'GEMINI.md'), 'utf8'),
+    agents: fs.readFileSync(path.join(REPO_ROOT, 'AGENTS.md'), 'utf8'),
+    cursor: fs.readFileSync(path.join(REPO_ROOT, '.cursor', 'rules', 'tl.mdc'), 'utf8'),
+    gemini: fs.readFileSync(path.join(REPO_ROOT, 'GEMINI.md'), 'utf8'),
   };
 }
 
@@ -349,5 +776,69 @@ test('sync-rules --check exits non-zero and lists changed or missing generated f
     assert.match(check.stderr, /AGENTS\.md/);
     assert.match(check.stderr, /GEMINI\.md/);
     assert.doesNotMatch(check.stderr, /\.cursor\/rules\/tl\.mdc/);
+  });
+});
+
+test('generated rules state the universal done/ ceiling — builder and verifier both stop at in-review', () => {
+  withSyncRulesFixture(root => {
+    const write = runWithEnv({ TL_SYNC_RULES_ROOT: root }, 'sync-rules');
+    assert.equal(write.status, 0, write.stderr);
+    for (const rel of ['AGENTS.md', path.join('.cursor', 'rules', 'tl.mdc'), 'GEMINI.md']) {
+      const text = fs.readFileSync(path.join(root, rel), 'utf8');
+      assert.match(text, /never moves any spec to done\/ — its own or another's/, `${rel} must make the ceiling universal`);
+      assert.match(text, /builder and verifier both stop at in-review\//, `${rel} must name both roles`);
+      assert.doesNotMatch(text, /never signs off its own work/, `${rel} must not carry the old own-work loophole wording`);
+    }
+  });
+});
+
+test('tl verify --dispatch writes verify-request artifact (never spawns)', () => {
+  withWorkspace([{
+    slug: 'await-me',
+    stage: 'tests',
+    status: 'blocked',
+    frontmatter: 'claimed_by: cursor\nawaiting_verifier: true',
+    files: ['x.js'],
+  }], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'verification:',
+      '  verifier_lanes:',
+      '    gemini:',
+      '      agent: gemini',
+      '      isolated: true',
+      '      sandbox: required',
+      '      allow_network: false',
+      '      command: [agy]',
+      '',
+    ].join('\n'));
+    const r = run('verify', name, 'await-me', '--dispatch', '--target-lane', 'gemini');
+    assert.equal(r.status, 0, r.stderr + r.stdout);
+    assert.match(r.stdout, /Wrote verify request/);
+    assert.match(r.stdout, /never spawn/);
+    const reqDir = workspacePath(name, '_metrics', 'verify-requests');
+    const files = fs.readdirSync(reqDir).filter(f => f.endsWith('.json'));
+    assert.equal(files.length, 1);
+    const body = JSON.parse(fs.readFileSync(path.join(reqDir, files[0]), 'utf8'));
+    assert.equal(body.spec, 'await-me');
+    assert.equal(body.target_lane, 'gemini');
+    assert.equal(body.status, 'pending');
+  });
+});
+
+test('tl verify status surfaces queued and human-decision-required', () => {
+  withWorkspace([{
+    slug: 'hdr',
+    stage: 'tests',
+    status: 'blocked',
+    frontmatter: 'claimed_by: cursor\nawaiting_verifier: false\nverifier_status: human-decision-required\nblocked_reason: "verifier proposed a mutation — human decision required"',
+    files: ['x.js'],
+  }], name => {
+    const notes = workspacePath(name, 'tests', 'hdr', 'NOTES.md');
+    fs.writeFileSync(notes, '## Verifier mutation proposal — human decision required\n\n- `x.js`: fix it\n');
+    const r = run('verify', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /human-decision-required|Human decision required/i);
+    assert.match(r.stdout, /authorize-fix-forward/);
+    assert.match(r.stdout, /kick-back/);
   });
 });

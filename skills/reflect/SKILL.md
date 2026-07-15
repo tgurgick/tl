@@ -1,6 +1,6 @@
 ---
 name: reflect
-description: Learn from a tl workspace's history — read the override reasons and outcome feedback, propose evidence-backed changes to TRIAGE.yml (weights and rules), and scan the dependency graph for work that can run in parallel. Use when the user wants to tune prioritization, improve triage, find parallelizable work, or asks "what should we change about how we prioritize?". Proposes; never auto-applies.
+description: Learn from a tl workspace's history — read the override reasons and outcome feedback, propose evidence-backed changes to TRIAGE.yml (weights and rules), and scan the dependency graph for work that can run in parallel. Use when the user wants to tune prioritization, improve triage, find parallelizable work, or asks "what should we change about how we prioritize?" (learn). Proposes; never auto-applies.
 ---
 
 # /tl reflect

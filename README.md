@@ -19,29 +19,54 @@ Throughline (`tl`) is markdown-native project management for agent-driven develo
 ```
 /plugin marketplace add tgurgick/tl
 /plugin install tl@throughline
-
-/tl:new          # guided setup — goals, rules, first intents
-/tl:resume       # where did I leave off? what's unresolved? what's next?
-/tl:capture      # park a thought as a thread, zero ceremony
-/tl:triage       # rank the backlog (then schedule it daily)
-/tl:ui           # pop out the UI — Human / Split / Agent
 ```
 
-Prefer to clone? Work inside the repo — your workspaces live in the gitignored `projects/`, and the skill files in `skills/` are self-contained (`/plugin marketplace add .` also works from the repo root).
+Four verbs — one motion through the funnel:
+
+```
+# steer — shape what to build
+/tl:new          # once per project — goals, rules, first intents
+/tl:capture      # park a thought as a thread
+/tl:decompose    # fold an intent into buildable specs
+
+# run — start it, or leave automation to it
+tl up <ws>       # happy path: cockpit + automation schedule + next action
+                 # (open is a short-lived alias of up)
+/tl:run          # claim the ready queue and carry specs to in-review
+/tl:triage       # rank the backlog (schedule it daily)
+
+# review — sign off, unblock
+/tl:review       # accept in-review work to done, or kick back with notes
+/tl:verify       # independent check at the tests gate
+
+# learn — where am I, what changed, what should change
+/tl:resume       # catch up after time away
+/tl:map          # see goal → intent → spec → outcome
+/tl:recall       # "didn't we already discuss this?"
+```
+
+Prefer to clone? Work inside the repo — your workspaces live in the gitignored `projects/`, and the skill files in `skills/` are self-contained (`/plugin marketplace add .` also works from the repo root). From the checkout:
+
+```
+node bin/tl.js up <workspace>            # cockpit + automation + next action
+node bin/tl.js up <workspace> --dry-run  # preview; write nothing, spawn nothing
+# open is a short-lived synonym of up
+```
 
 ## UI
 
-A local web view of your workspaces — zero dependencies, no build step. The tabs:
+A local web view of your workspaces — zero dependencies, no build step. Primary nav labels match the four verbs (routes unchanged):
 
-- **Human** (default) — the desk you return to. The goal in focus (inline-editable: statement, weight, key results), the one recommended next action with its reason, the capped decay inbox (≤3 asks, each with resolve / park / research), and a counts row that expands into the two roadmap lenses — **Horizon** (a forward timeline of upcoming work, sized by effort) and **Map** (the throughline as a dependency DAG — specs as nodes laid out by dependency depth with edges drawn, each tinted by the goal it serves, every break flagged) — plus the ranked backlog, decisions, and parked threads. Warm paper, calm by design. The edits a human makes live here — capture, edit scope, change a priority, resolve a loop — and each writes the markdown directly.
-- **Agent** — mission control for watching agents work: intent swimlanes by stage (including **TRIAGE** held-for-release and **READY**), the file tree with change badges and heat, a terminal-style activity feed narrating every file event, and a live file viewer that follows each write and highlights the added lines. TRIAGE cards support **release → ready** (symmetric to in-review accept). Warm charcoal.
-- **Split** — Human as a narrow sidebar beside the full Agent board, so you can steer and watch at once.
+- **Learn** (default) — the desk you return to. Where am I: the goal in focus (inline-editable: statement, weight, key results), a read-only **automation** status line (observe only — `tl up` installs the schedule; the UI never spawns agents), the one recommended next action, the capped decay inbox (≤3 asks), and a counts row that expands into **Horizon** and **Map** (learn), plus backlog / decisions / parked threads (steer). Warm paper, calm by design.
+- **Run** — mission control for watching agents work: intent swimlanes by stage (including **TRIAGE** held-for-release and **READY**), the file tree with change badges and heat, a terminal-style activity feed, and a live file viewer. TRIAGE cards support **release → ready**. Warm charcoal.
+- **Review** — experiment candidates, traces, and the judge’s pick; winner apply/reject stays an explicit human action. (Same Experiments view; label only.)
+- **Split** — Learn beside Run (or Run beside Review), so you can steer and watch at once.
 
 ```
 node ui/server.js --open    # → http://localhost:4400  (or just run /tl:ui)
 ```
 
-It renders the markdown and JSONL directly — there's no database and no hidden state. When you edit on the Human side, it writes the same files you would by hand: a captured thought becomes a `threads/` file, a priority change sets `priority_set_by: human` and logs the *why* to `override-log.jsonl`, flagging the in-focus spec captures an open loop and copies a Claude handoff. Every change is a file edit — including the ones you make here.
+It renders the markdown and JSONL directly — there's no database and no hidden state. When you edit on the Learn desk, it writes the same files you would by hand: a captured thought becomes a `threads/` file, a priority change sets `priority_set_by: human` and logs the *why* to `override-log.jsonl`, flagging the in-focus spec captures an open loop and copies a Claude handoff. Every change is a file edit — including the ones you make here.
 
 ## Tool vs. workspace
 
@@ -52,13 +77,14 @@ Your actual work lives in **workspaces** — one folder per project under `proje
 ```
 throughline/                    # the tool (this repo, public)
 ├── .claude-plugin/             # plugin manifest — installs as "tl"
-├── skills/                     # /tl new, resume, capture, promote, groom, decompose, run, review, recall, map, triage, reflect, dedup, bug-capture, goal, ui
+├── skills/                     # /tl new, up (alias open), resume, capture, promote, groom, decompose, run, review, recall, map, triage, reflect, dedup, bug-capture, goal, ui
 ├── _templates/                 # SCHEMA.md, intent.md, spec/, bug.md, ...
 ├── _patterns/                  # PATTERNS.md — spec-authoring guide
 ├── examples/sample-project/    # a populated workspace to copy from
-├── ui/                         # local web UI — Human / Split / Agent (zero-dep node)
+├── ui/                         # local web UI — Learn / Run / Review (zero-dep node)
 ├── docs/                       # design process docs
 │   ├── agent-experiments.md    # portable task/candidate/judge model + TL mapping
+│   ├── headless-lanes.md       # tl up + worker ticks / cron escape hatch
 │   └── repo-split.md
 │
 └── projects/                   # your workspaces (gitignored, private)
@@ -115,6 +141,7 @@ Each workspace has its own `TRIAGE.yml` — one file encoding that project's pro
 - **Allocation targets** — target split across bugs, features, tech debt, research
 - **Priority rules** — automatic overrides (regressions → P0, widespread crashes → P0, stale bugs → flag)
 - **`auto_review`** (optional) — per-type fast-track dial: when `true` for a spec's `type`, `/tl run` still lands it in `in-review` but stamps `auto_reviewed: true` for a lighter-touch human review. Never skips the human gate or `FEEDBACK.md`.
+- **`automation`** (optional) — the `tl open` schedule profile: interval, headless lanes to tick, a verify toggle, an experiment dial. One block replaces N hand-written crons; absent means no schedules (see below).
 
 Edit the config when goals change. The backlog re-sorts on the next triage run. Because the config is per-project, two workspaces can run completely different priorities side by side.
 
@@ -129,6 +156,10 @@ The full algorithm for each skill lives in its `skills/<name>/SKILL.md` — that
 Maintenance: run `tl sync-rules` after editing skills to refresh generated agent rule files, or `tl sync-rules --check` in verification to fail when those files drift from `skills/*/SKILL.md`.
 
 Run them on demand from any Claude Code session, or schedule them as routines — triage and dedup need no network, so a local scheduled task (or a cron'd headless run, e.g. `claude -p "/tl triage my-app"`) covers the core loop. The intended cadence: bug-capture every 15 minutes, dedup daily at 6am, triage daily at 8am — sweep before you rank.
+
+### /tl open
+
+The day-to-day happy path. One command starts a project's operating path: brings up the cockpit (or reuses it), installs/refreshes that workspace's automation schedule from the `TRIAGE.yml` `automation:` profile (one per-workspace launchd plist on macOS, one paste-able cron line elsewhere — `--print-schedule` emits both in full), and ends on the one next human action. A listed lane missing its `lanes.<name>.command` fails loudly — no silent-green schedule. `PAUSE` stays the kill switch; `open` never claims or moves specs, and headless work still pools at `in-review/` for `/tl review`. Hand-rolled cron/launchd (`docs/headless-lanes.md`) remains the advanced escape hatch.
 
 ### /tl resume
 

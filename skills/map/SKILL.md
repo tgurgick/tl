@@ -1,6 +1,6 @@
 ---
 name: map
-description: Paint the throughline — the contribution ladder showing what every spec ladders up to (goal → intent → spec → outcome), overlaid with dependencies, and where the chain breaks. Use when the user asks what's this contributing to, what ladders up to this goal, show the roadmap/map, or where work has drifted from intent.
+description: Paint the throughline — the contribution ladder showing what every spec ladders up to (goal → intent → spec → outcome), overlaid with dependencies, and where the chain breaks. Use when the user asks what's this contributing to, what ladders up to this goal, show the roadmap/map, or where work has drifted from intent (learn).
 ---
 
 # /tl map

@@ -27,6 +27,12 @@ const { parseYaml, parseFrontmatter } = require('../lib/parse');
 const { safeRead, readFirst, isDir, mtime, safePath: libSafePath } = require('../lib/workspace');
 const { fmValue, setFrontmatterField } = require('../lib/frontmatter');
 const { buildProjectInsights, taskTitleFromBody, firstParagraph } = require('../lib/project-insights');
+const { automationStatus } = require('../lib/automation');
+const {
+  writeVerifyRequest, applyVerifyHumanDecision, readVerifierLanes,
+  verifierStatusOf, readVerifyRequests,
+} = require('../lib/worker');
+const { canAdvanceToReview } = require('../lib/verification-gate');
 
 // ---------- workspace reading ----------
 
@@ -81,6 +87,9 @@ function readStage(dir, stage, folder) {
       }
       const notes = safeRead(path.join(p, 'NOTES.md'));
       if (notes) item.notes = notes;
+      if (stage === 'tests' || stage === 'in-progress' || stage === 'in-review') {
+        item.verifier = verifierStatusOf(item, { wsDir: dir });
+      }
     }
     out.push(item);
   }
@@ -136,9 +145,37 @@ function readWorkspace(ws) {
     }
   }
 
+  // Read-only automation chip for Human/Resume — observe only; never spawn.
+  let automation = null;
+  try {
+    const st = automationStatus({ wsDir: dir, wsName: ws.name, root: ROOT, cfg: config || {} });
+    automation = {
+      signal: st.signal,                 // up | paused | misconfigured | off | not-installed
+      stuckAtTests: st.stuckAtTests,     // count at the verifier gate
+      paused: st.paused,
+      enabled: st.automation.enabled,
+      configured: st.automation.configured,
+      intervalMinutes: st.automation.intervalMinutes,
+      lanes: st.lanes,
+      issues: st.issues.map(i => ({ lane: i.lane, problem: i.problem })),
+      experiment: st.automation.experiment,
+    };
+  } catch { automation = null; }
+
+  let verifierLanes = [];
+  try { verifierLanes = readVerifierLanes(config || {}); } catch { verifierLanes = []; }
+  let verifyRequests = [];
+  try {
+    verifyRequests = readVerifyRequests(dir)
+      .filter(r => r.request && r.request.status === 'pending')
+      .map(r => ({ path: r.file, spec: r.request.spec, target_lane: r.request.target_lane }));
+  } catch { verifyRequests = []; }
+
   return {
     name: ws.name, example: ws.example,
-    config, intents, specs, threads, metrics,
+    config, intents, specs, threads, metrics, automation,
+    verifierLanes: verifierLanes.map(l => ({ id: l.id, agent: l.agent })),
+    verifyRequests,
     insights: buildProjectInsights({
       wsDir: dir,
       specs,
@@ -452,6 +489,88 @@ function broadcast(obj) {
 }
 setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 30000).unref();
 
+// Lifecycle stage folders. Near-simultaneous delete+add of the same slug across
+// these is a status move (specs→in-progress, …), not a scary delete+create.
+const STAGE_DIRS = new Set(['specs', 'in-progress', 'tests', 'in-review', 'done', 'triage']);
+const STAGE_PATH_RE = /^(specs|in-progress|tests|in-review|done|triage)\/([^/]+)(?:\/(.*))?$/;
+const FIXTURE_WS_RE = /^tl-clitest-/;
+const MOVE_CORRELATE_MS = 900;
+
+function stageParts(rel) {
+  const m = String(rel || '').match(STAGE_PATH_RE);
+  if (!m) return null;
+  return { stage: m[1], slug: m[2], rest: m[3] || '' };
+}
+
+// Buffer stage-folder events by workspace+slug so a rename across stages
+// collapses to one `move` SSE event instead of a DEL + ADD pair.
+const pendingMoves = new Map(); // ws|slug -> { events, timer }
+
+function flushMoveBucket(key) {
+  const bucket = pendingMoves.get(key);
+  if (!bucket) return;
+  pendingMoves.delete(key);
+  const events = bucket.events;
+  const deletedStages = new Set();
+  const addedStages = new Set();
+  for (const e of events) {
+    if (e.exists) addedStages.add(e._stage.stage);
+    else deletedStages.add(e._stage.stage);
+  }
+  const fromStages = [...deletedStages].filter(s => !addedStages.has(s));
+  const toStages = [...addedStages].filter(s => !deletedStages.has(s));
+  if (fromStages.length >= 1 && toStages.length >= 1) {
+    const fromStage = fromStages[0];
+    const toStage = toStages[0];
+    const slug = events[0]._stage.slug;
+    const ws = events[0].ws;
+    broadcast({
+      ws,
+      path: `${toStage}/${slug}`,
+      exists: true,
+      ts: Date.now(),
+      move: {
+        from: `${fromStage}/${slug}`,
+        to: `${toStage}/${slug}`,
+        fromStage,
+        toStage,
+        slug,
+      },
+    });
+    return;
+  }
+  for (const e of events) {
+    const payload = { ...e };
+    delete payload._stage;
+    broadcast(payload);
+  }
+}
+
+function enqueueOrBroadcast(payload) {
+  const info = stageParts(payload.path);
+  if (!info || !STAGE_DIRS.has(info.stage)) {
+    broadcast(payload);
+    return;
+  }
+  // Log line appends under a stage folder (cycle-log etc.) stay immediate —
+  // they aren't folder moves and shouldn't wait for correlate.
+  if (payload.log) {
+    broadcast(payload);
+    return;
+  }
+  const key = payload.ws + '|' + info.slug;
+  let bucket = pendingMoves.get(key);
+  if (!bucket) {
+    bucket = { events: [] };
+    pendingMoves.set(key, bucket);
+  }
+  payload._stage = info;
+  bucket.events.push(payload);
+  clearTimeout(bucket.timer);
+  bucket.timer = setTimeout(() => flushMoveBucket(key), MOVE_CORRELATE_MS);
+  if (bucket.timer.unref) bucket.timer.unref();
+}
+
 const debounceTimers = new Map();
 function watchTree(base, wsOf) {
   if (!isDir(base)) return;
@@ -467,6 +586,9 @@ function watchTree(base, wsOf) {
         debounceTimers.delete(key);
         const full = path.join(base, rel);
         const ws = wsOf(rel);
+        // CLI test fixtures create/destroy projects/tl-clitest-* rapidly —
+        // hide that churn from the Live feed (and from change/diff heat).
+        if (FIXTURE_WS_RE.test(ws.name)) return;
         const payload = {
           ws: ws.name, path: ws.rel, exists: fs.existsSync(full), ts: Date.now(),
         };
@@ -481,7 +603,7 @@ function watchTree(base, wsOf) {
           try { payload.log = { file: path.basename(ws.rel, '.jsonl'), line: JSON.parse(lines[lines.length - 1]) }; }
           catch { payload.log = { file: path.basename(ws.rel, '.jsonl'), line: null }; }
         }
-        broadcast(payload);
+        enqueueOrBroadcast(payload);
       }, 250));
     });
     watcher.on('error', () => {});
@@ -720,6 +842,28 @@ function hThreadStatus(ws, body, res) {
   return json(res, 200, { ok: true });
 }
 
+// Move a thread file to another workspace's threads/ — write-then-unlink so
+// a failed write never leaves the source gone.
+function hThreadMove(ws, body, res) {
+  const rel = String(body.path || '');
+  if (!/^threads\/.+\.md$/.test(rel)) return json(res, 400, { error: 'not a thread' });
+  const srcFull = safePath(ws, rel);
+  if (!srcFull || !fs.existsSync(srcFull)) return json(res, 404, { error: 'file not found' });
+  const destName = String(body.dest_ws || '').trim();
+  if (!destName || destName === ws.name) return json(res, 400, { error: 'bad destination workspace' });
+  const destWs = listWorkspaces().find(w => w.name === destName);
+  if (!destWs) return json(res, 404, { error: 'unknown destination workspace' });
+  const destFull = safePath(destWs, rel);
+  if (!destFull) return json(res, 400, { error: 'bad destination path' });
+  if (fs.existsSync(destFull)) return json(res, 409, { error: 'thread already exists at destination' });
+  const text = safeRead(srcFull);
+  if (text == null) return json(res, 500, { error: 'read failed' });
+  fs.mkdirSync(path.dirname(destFull), { recursive: true });
+  fs.writeFileSync(destFull, text);
+  fs.unlinkSync(srcFull);
+  return json(res, 200, { ok: true, path: rel, from_ws: ws.name, to_ws: destName });
+}
+
 function hResearch(ws, body, res) {
   const title = String(body.title || '').trim();
   if (!title) return json(res, 400, { error: 'empty topic' });
@@ -770,6 +914,50 @@ ${heading}
   return json(res, 200, { ok: true, path: 'specs/' + slug + '/' });
 }
 
+// ---------- review audit (provenance for the human gate) ----------
+// Incident 2026-07-14 (threads/2026-07-14-judge-drain-stage-advance-without-
+// verification.md): a cockpit accept left no trace, so a human accept was
+// indistinguishable on disk from an agent folder-move — attribution took a
+// human interview. Every accept/kick-back now stamps the spec's frontmatter
+// and appends one row to _metrics/review-log.jsonl. Recording only: accept
+// semantics are unchanged, and historical unstamped accepts stay valid.
+
+// gate status at review time: "verified" when lib/verification-gate's
+// canAdvanceToReview passes for the spec as it sits on disk, "unverified"
+// when it fails (e.g. ALIGNMENT.md missing under require_independent_verifier).
+// A failing gate never blocks the decision — it makes the gap visible.
+function reviewGateStatus(ws, specDir) {
+  try {
+    const spec = parseFrontmatter(safeRead(path.join(specDir, 'SPEC.md')) || '');
+    const alignText = safeRead(path.join(specDir, 'outcome', 'ALIGNMENT.md'));
+    const alignment = alignText == null ? null : parseFrontmatter(alignText);
+    let config = null;
+    try {
+      const t = readFirst(path.join(ws.dir, 'TRIAGE.yml'), path.join(ws.dir, 'triage.yml'));
+      config = t ? parseYaml(t) : null;
+    } catch { config = null; }
+    return canAdvanceToReview(spec, alignment, config).ok ? 'verified' : 'unverified';
+  } catch {
+    return 'unverified';
+  }
+}
+
+// replace-or-insert several frontmatter fields on a spec (reviewer stamp)
+function stampSpecFields(dir, fields) {
+  const f = path.join(dir, 'SPEC.md');
+  let t = safeRead(f);
+  if (t == null) return;
+  for (const [k, v] of Object.entries(fields)) t = setFrontmatterField(t, k, v);
+  fs.writeFileSync(f, t);
+}
+
+// append one row to _metrics/review-log.jsonl — append-only, never rewritten
+function appendReviewLog(ws, row) {
+  const dir = path.join(ws.dir, '_metrics');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.appendFileSync(path.join(dir, 'review-log.jsonl'), JSON.stringify(row) + '\n');
+}
+
 function hReview(ws, body, res) {
   // the human gate, from the browser: accept an in-review spec to done, or kick it back with a note
   const rel = String(body.spec || '').replace(/\/$/, '');
@@ -780,16 +968,26 @@ function hReview(ws, body, res) {
   if (!srcDir || !isDir(srcDir)) return json(res, 404, { error: 'spec not in review' });
   if (action === 'accept') {
     const dest = safePath(ws, 'done/' + slug); if (!dest) return json(res, 400, { error: 'bad path' });
+    const gate = reviewGateStatus(ws, srcDir);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.renameSync(srcDir, dest); setSpecStatus(dest, 'done');
-    return json(res, 200, { ok: true, path: 'done/' + slug + '/' });
+    stampSpecFields(dest, { accepted_by: 'human-cockpit', accepted_at: new Date().toISOString(), gate });
+    appendReviewLog(ws, {
+      date: new Date().toISOString(), spec: rel + '/', action: 'accepted', via: 'cockpit', gate,
+    });
+    return json(res, 200, { ok: true, path: 'done/' + slug + '/', gate });
   }
   if (action === 'reject') {
     const note = String(body.note || '').trim();
     const dest = safePath(ws, 'in-progress/' + slug); if (!dest) return json(res, 400, { error: 'bad path' });
+    const gate = reviewGateStatus(ws, srcDir);
     if (note) fs.appendFileSync(path.join(srcDir, 'NOTES.md'), `\n## ${isoDate()} — kicked back\n${note}\n`);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.renameSync(srcDir, dest); setSpecStatus(dest, 'in-progress');
+    stampSpecFields(dest, { kicked_back_by: 'human-cockpit', kicked_back_at: new Date().toISOString(), gate });
+    appendReviewLog(ws, {
+      date: new Date().toISOString(), spec: rel + '/', action: 'kicked-back', via: 'cockpit', gate,
+    });
     // continuation dispatch (contract in _templates/SCHEMA.md): a file trigger so
     // the next `tl run` — or a scheduled headless session — resumes this spec
     // without the human re-assembling context. Still files only, no execution.
@@ -802,7 +1000,7 @@ function hReview(ws, body, res) {
         reason: note ? 'kicked back: ' + note.split('\n')[0].slice(0, 140) : 'kicked back',
       }, null, 2) + '\n');
     }
-    return json(res, 200, { ok: true, path: 'in-progress/' + slug + '/' });
+    return json(res, 200, { ok: true, path: 'in-progress/' + slug + '/', gate });
   }
   return json(res, 400, { error: 'action must be accept or reject' });
 }
@@ -834,6 +1032,79 @@ function hNote(ws, body, res) {
   const entry = `\n## ${isoDate()} — note\n` + (anchor ? `> on: ${anchor}\n` : '') + text + '\n';
   fs.appendFileSync(path.join(dir, 'NOTES.md'), entry);
   return json(res, 200, { ok: true });
+}
+
+function hVerifyDispatch(ws, body, res) {
+  // Queue-only: write verify-request artifact(s). Never spawn agent CLIs.
+  const drain = body.drain === true;
+  const targetLane = String(body.target_lane || 'any-other').toLowerCase().trim() || 'any-other';
+  const lanes = readVerifierLanes(parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '') || {});
+  if (!lanes.length) return json(res, 400, { error: 'no verification.verifier_lanes configured' });
+
+  const writeOne = (rel) => {
+    const dir = safePath(ws, rel);
+    if (!dir || !isDir(dir) || !fs.existsSync(path.join(dir, 'SPEC.md'))) {
+      throw Object.assign(new Error('spec not found: ' + rel), { status: 404 });
+    }
+    const text = safeRead(path.join(dir, 'SPEC.md')) || '';
+    const { meta } = parseFrontmatter(text);
+    if (meta.awaiting_verifier !== true) {
+      throw Object.assign(new Error('spec is not awaiting verifier'), { status: 400 });
+    }
+    const builder = String(meta.claimed_by || meta.agent || '').toLowerCase();
+    if (targetLane !== 'any-other' && targetLane !== 'any' && targetLane === builder) {
+      throw Object.assign(new Error('target_lane must differ from claimed_by (builder)'), { status: 400 });
+    }
+    return writeVerifyRequest(ws.dir, { spec: rel, targetLane, source: 'cockpit' });
+  };
+
+  try {
+    if (drain) {
+      const testsDir = path.join(ws.dir, 'tests');
+      const written = [];
+      if (isDir(testsDir)) {
+        for (const entry of fs.readdirSync(testsDir).sort()) {
+          const p = path.join(testsDir, entry);
+          if (!isDir(p) || !fs.existsSync(path.join(p, 'SPEC.md'))) continue;
+          const { meta } = parseFrontmatter(safeRead(path.join(p, 'SPEC.md')) || '');
+          if (meta.awaiting_verifier !== true) continue;
+          const builder = String(meta.claimed_by || meta.agent || '').toLowerCase();
+          if (targetLane !== 'any-other' && targetLane !== 'any' && targetLane === builder) continue;
+          written.push(writeVerifyRequest(ws.dir, {
+            spec: 'tests/' + entry + '/', targetLane, source: 'cockpit-drain',
+          }));
+        }
+      }
+      return json(res, 200, { ok: true, written: written.map(w => w.path), count: written.length });
+    }
+    const rel = String(body.spec || '').replace(/\/$/, '');
+    if (!/^tests\//.test(rel) && !/^in-progress\//.test(rel)) {
+      return json(res, 400, { error: 'Dispatch verify only applies to tests/ (or in-progress) specs' });
+    }
+    const got = writeOne(rel);
+    return json(res, 200, { ok: true, path: got.path, request: got.request });
+  } catch (e) {
+    return json(res, e.status || 400, { error: e && e.message ? e.message : String(e) });
+  }
+}
+
+function hVerifyDecision(ws, body, res) {
+  // Explicit human choice on a verifier mutation proposal — never auto-applies patches.
+  const rel = String(body.spec || '').replace(/\/$/, '');
+  const action = String(body.action || '').toLowerCase();
+  if (!/^tests\//.test(rel)) return json(res, 400, { error: 'only tests-gate specs accept verify decisions' });
+  if (!['authorize-fix-forward', 'kick-back'].includes(action)) {
+    return json(res, 400, { error: 'action must be authorize-fix-forward or kick-back' });
+  }
+  const slug = rel.split('/').pop();
+  try {
+    const got = applyVerifyHumanDecision(ws.dir, {
+      slug, action, note: String(body.note || '').trim(),
+    });
+    return json(res, 200, { ok: true, ...got });
+  } catch (e) {
+    return json(res, 400, { error: e && e.message ? e.message : String(e) });
+  }
 }
 
 // ---------- frontmatter list edits (map repair) ----------
@@ -895,9 +1166,10 @@ function setFrontmatterList(text, key, values) {
 
 function hMapRepair(ws, body, res) {
   // heal a throughline break from the Map: attach an orphan spec to an existing
-  // intent, create a new goal-carrying intent for it, or point a goal-less
-  // intent at a TRIAGE.yml goal. Files only — frontmatter edits plus one
-  // scaffolded intent from _templates/intent.md; the server never executes.
+  // intent, create a new goal-carrying intent (optionally linking a spec — or
+  // spec-less, for a starving goal), or point a goal-less intent at a TRIAGE.yml
+  // goal. Files only — frontmatter edits plus one scaffolded intent from
+  // _templates/intent.md; the server never executes.
   const action = String(body.action || '');
   let goalIds = [];
   try {
@@ -906,6 +1178,7 @@ function hMapRepair(ws, body, res) {
   } catch { /* no goals — create/set-goal will refuse below */ }
 
   // the spec under repair: a folder in a known stage, holding a SPEC.md
+  // (optional for create-intent — starving-goal repair creates an intent with no spec)
   const specRel = String(body.spec || '').replace(/\/$/, '');
   const specFile = /^(triage|specs|in-progress|tests|in-review|done)\/[^/]+$/.test(specRel)
     ? safePath(ws, specRel + '/SPEC.md') : null;
@@ -931,7 +1204,8 @@ function hMapRepair(ws, body, res) {
     // the never-write-a-goal-less-intent guard: creating requires a real goal
     if (!goal) return json(res, 400, { error: 'a goal is required — an intent must ladder to one' });
     if (!goalIds.includes(goal)) return json(res, 400, { error: 'unknown goal — pick one from TRIAGE.yml' });
-    if (!specFile || !fs.existsSync(specFile)) return json(res, 404, { error: 'spec not found' });
+    // spec is optional: orphans pass one; starving-goal create passes none
+    if (specRel && (!specFile || !fs.existsSync(specFile))) return json(res, 404, { error: 'spec not found' });
     const rel = `intents/${isoDate()}-${slugify(title)}.md`;
     const full = safePath(ws, rel);
     if (!full) return json(res, 400, { error: 'bad path' });
@@ -944,11 +1218,12 @@ function hMapRepair(ws, body, res) {
     text = setFrontmatterField(text, 'project', ws.name);
     text = setFrontmatterField(text, 'status', 'draft');
     text = setFrontmatterList(text, 'goals', [goal]);
-    text = appendToFrontmatterList(text, 'specs', 'specs/' + slug + '/');
+    if (specRel) text = appendToFrontmatterList(text, 'specs', 'specs/' + slug + '/');
+    else text = setFrontmatterList(text, 'specs', []);
     text = text.replace(/\{title\}/g, title);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, text);
-    fs.writeFileSync(specFile, setFrontmatterField(safeRead(specFile), 'intent', rel));
+    if (specRel) fs.writeFileSync(specFile, setFrontmatterField(safeRead(specFile), 'intent', rel));
     return json(res, 200, { ok: true, path: rel });
   }
 
@@ -971,15 +1246,33 @@ function hExperimentQueue(ws, body, res) {
   const spec = String(body.spec || '').replace(/\/$/, '').trim();
   const runtime = String(body.runtime || 'fixture').toLowerCase();
   if (!['fixture', 'local'].includes(runtime)) return json(res, 400, { error: 'runtime must be fixture or local' });
+  // local runtime carries the two bridge fields processQueueRequests requires:
+  // a runner lane (registered adapter) + the repo candidates run against.
+  // Fail fast here with a friendly 400; the bridge re-validates on drain and
+  // is the validator of record (malformed files are rewritten "invalid").
+  const RUNNERS = ['codex', 'gemini', 'claude', 'cursor', 'shell'];
+  let runner = '', repo = '', command = '';
+  if (runtime === 'local') {
+    runner = String(body.runner || '').trim().toLowerCase();
+    if (!RUNNERS.includes(runner)) return json(res, 400, { error: `local runtime requires a runner: ${RUNNERS.join(' | ')}` });
+    repo = String(body.repo || '').replace(/[\r\n]+/g, '').trim().slice(0, 300);
+    if (!repo) return json(res, 400, { error: 'local runtime requires a repo path — candidates run against an isolated copy of it' });
+    command = String(body.command || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 500);
+    if (runner === 'shell' && !command) return json(res, 400, { error: 'the shell runner requires a command' });
+  }
   // candidate roles: one primary, zero or more shadows — sanitized to safe slugs
   const slug = s => String(s || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
-  const primary = slug(body.primary) || (runtime === 'fixture' ? 'fixture-a' : '');
+  const primary = slug(body.primary) || (runtime === 'fixture' ? 'fixture-a' : (runner ? `${runner}-a` : ''));
   if (!primary) return json(res, 400, { error: 'a primary candidate is required' });
   const shadows = (Array.isArray(body.shadows) ? body.shadows : [])
     .map(slug).filter(Boolean).slice(0, 8);
   const judge = slug(body.judge) || (runtime === 'fixture' ? 'fixture-judge' : 'judge');
-  const budgetUsd = Number.isFinite(+body.budget_usd) && +body.budget_usd >= 0 ? +body.budget_usd : null;
-  const timeoutMin = Number.isFinite(+body.timeout_minutes) && +body.timeout_minutes >= 0 ? +body.timeout_minutes : null;
+  // empty string must stay null — +'' is 0, and a 0-minute timeout on a queue
+  // row would clamp a local run to a ~1ms spawn timeout (instant timed_out);
+  // a zero timeout is equally meaningless, so timeout requires > 0
+  const num = (v, min) => (v === '' || v === null || v === undefined || !Number.isFinite(+v) || +v < min) ? null : +v;
+  const budgetUsd = num(body.budget_usd, 0);
+  const timeoutMin = num(body.timeout_minutes, Number.MIN_VALUE);
   // one config file per request, named by timestamp so concurrent queues don't collide
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const rel = `_experiments/queue/${stamp}-${slug(spec) || runtime}.json`;
@@ -1004,6 +1297,8 @@ function hExperimentQueue(ws, body, res) {
     status: 'queued',              // queue workers advance this; the UI only requests
     source: 'ui-dashboard',
     runtime,                       // fixture = deterministic proof; local = a local adapter run
+    ...(runtime === 'local' ? { runner, repo } : {}),
+    ...(runtime === 'local' && command ? { command } : {}),
     tl_spec: spec,
     primary, shadows, judge,
     budget_usd: budgetUsd,
@@ -1024,10 +1319,13 @@ const ROUTES = {
   '/api/map-repair': hMapRepair,
   '/api/priority': hPriority,
   '/api/thread-status': hThreadStatus,
+  '/api/thread-move': hThreadMove,
   '/api/research': hResearch,
   '/api/review': hReview,
   '/api/release': hRelease,
   '/api/note': hNote,
+  '/api/verify-dispatch': hVerifyDispatch,
+  '/api/verify-decision': hVerifyDecision,
 };
 
 function handlePost(pathname, body, res) {

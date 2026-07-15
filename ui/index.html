@@ -187,14 +187,14 @@ body.m-experiments #view-experiments { flex: 0 0 100%; max-width: none; opacity:
   overflow: hidden;
 }
 @media (max-width: 1000px) { body.m-human .insights-rail { width: 320px; } }
-/* the human pane scrolls — the #view-resume overflow:hidden above is for the slide
-   animation; without this override, expanded content is cut off at the viewport */
+/* the human / split resume panes scroll — the #view-resume overflow:hidden above is
+   for the slide animation; without this override, expanded content is cut off */
 body.m-human #view-resume { flex-direction: column; overflow-y: auto; }
 body.m-human .resume-shell { width: 100%; display: flex; }
 body.m-human .insights-rail { display: block; position: sticky; top: 0; align-self: flex-start; height: calc(100vh - 49px - 33px); overflow-y: auto; }
 body.m-human .datestrip > div { max-width: none; margin: 0; padding: 8px 32px; }
 body.m-human .paper { flex: 1 1 auto; max-width: 60rem; margin: 0; padding: 40px 52px 80px; }
-body.m-split #view-resume { flex-direction: column; }
+body.m-split #view-resume { flex-direction: column; overflow-y: auto; }
 body.m-split .resume-shell { display: block; }
 body.m-split .insights-rail { width: 0; opacity: 0; padding-left: 0; padding-right: 0; border-color: transparent; pointer-events: none; }
 body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
@@ -228,6 +228,14 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .bp-status .age-inline { color: var(--faint); }
 .bp-status .ar { color: var(--faint); transition: transform .12s; display: inline-block; }
 .bp-status.open .ar { transform: rotate(90deg); }
+/* read-only automation signal — observe only; never a spawn button */
+.bp-auto { font-family: var(--mono); font-size: .68rem; color: var(--dim); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bp-auto .al { letter-spacing: .08em; text-transform: uppercase; font-size: .58rem; color: var(--faint); }
+.bp-auto .sig { color: var(--mid); }
+.bp-auto .sig.up { color: var(--ok); }
+.bp-auto .sig.paused { color: #b8893a; }
+.bp-auto .sig.misconfigured { color: #b85a5a; }
+.bp-auto .stuck { color: #b8893a; }
 
 .bp-value { font-family: var(--serif); font-size: .82rem; font-style: italic; color: var(--mid); line-height: 1.5; margin: 0 0 10px; max-width: 62ch; cursor: pointer; }
 .bp-value .vl { font-family: var(--mono); font-style: normal; font-size: .58rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ok); margin-right: 7px; }
@@ -361,6 +369,11 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .row-body.open { display: block; }
 .row-body .path { font-family: var(--mono); font-size: .58rem; color: var(--faint); margin-bottom: 6px; }
 .row-body .md { font-size: .8rem; color: var(--mid); }
+.row-body .row-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.row-body .row-acts select { font-family: var(--mono); font-size: .62rem; padding: 2px 4px; border: 1px solid var(--line2); border-radius: 3px; background: var(--card); color: var(--ink); }
+.row-body .row-acts button { font-family: var(--mono); font-size: .58rem; border-radius: 3px; padding: 2px 8px; cursor: pointer; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
+.row-body .row-acts button:hover { color: var(--ink); border-color: var(--ink); }
+.row-body .row-acts button.close:hover { color: var(--bad); border-color: var(--bad); }
 .footnote { margin-top: 46px; text-align: center; font-family: var(--mono); font-size: .62rem; color: var(--faint); }
 .fn-cmds { margin-top: 8px; font-size: .58rem; color: var(--faint); opacity: .7; letter-spacing: .02em; }
 .empty { font-size: .78rem; color: var(--dim); padding: 8px 0; }
@@ -416,6 +429,7 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .rp-new { display: flex; flex-direction: column; gap: 8px; }
 .rp-new input, .rp-new select { width: 100%; box-sizing: border-box; font-family: var(--sans); font-size: .82rem; color: var(--ink); background: var(--card); border: 1px solid var(--line2); border-radius: 4px; padding: 8px 10px; }
 .rp-new input:focus, .rp-new select:focus { border-color: var(--accent); outline: none; }
+.rp-new select:disabled { opacity: .72; cursor: not-allowed; color: var(--mid); }
 .rp-new button { align-self: flex-start; font-family: var(--mono); font-size: .68rem; border-radius: 4px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
 .rp-new button:hover { color: var(--accent); border-color: var(--accent); }
 .rp-hint { font-family: var(--mono); font-size: .58rem; color: var(--faint); }
@@ -443,6 +457,10 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .gate-verified { color: #7fa06a; }
 .gate-selfcheck { color: #c79a5b; }
 .gate-await { color: #c79a5b; }
+.gate-v-queued { color: #c79a5b; }
+.gate-v-running { color: #6b8fc7; }
+.gate-v-blocked { color: #a83232; }
+.gate-v-human { color: #c0622a; }
 .lcard .t { font-size: .78rem; line-height: 1.4; color: var(--ink); }
 .lcard .lc-pri { font-family: var(--mono); font-size: .54rem; font-weight: 600; padding: 1px 5px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; }
 .lc-pri.p0 { color: #a83232; background: rgba(168,50,50,.13); }
@@ -460,6 +478,18 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lcard.has-owner .t { padding-right: 32px; }
 .lcard.done .t { text-decoration: line-through; text-decoration-color: rgba(111,174,132,.6); color: var(--dim); }
 .lc-note { margin-top: 7px; font-family: var(--mono); font-size: .56rem; color: #b57fc7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lcard .lc-hold { font-family: var(--mono); font-size: .54rem; padding: 1px 6px; border-radius: 2px; color: #8a8070; background: rgba(138,128,112,.14); display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* triage lane — subtle inline release (drawer action still available) */
+.lcard .lc-release {
+  margin-top: 8px; align-self: flex-start;
+  font-family: var(--mono); font-size: .56rem; letter-spacing: .02em;
+  color: var(--dim); background: transparent;
+  border: 1px solid transparent; border-radius: 3px;
+  padding: 2px 6px; cursor: pointer; opacity: 0.55;
+}
+.lcard:hover .lc-release { opacity: 1; border-color: var(--line); color: var(--ok); }
+.lcard .lc-release:hover { background: rgba(58,125,85,.08); border-color: rgba(58,125,85,.35); }
+.lcard .lc-release:disabled { opacity: 0.4; cursor: wait; }
 .lcard .pbar { height: 2px; background: rgba(255,255,255,.06); border-radius: 2px; overflow: hidden; margin-top: 8px; }
 .lcard .pbar i { display: block; height: 100%; width: 40%; border-radius: 2px;
   background: linear-gradient(90deg, rgba(226,165,94,.4), var(--accent)); animation: tl-slide 2.2s ease-in-out infinite; }
@@ -720,11 +750,11 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
     </div>
   </div>
   <nav>
-    <button class="tab active" data-view="human">Human</button>
-    <button class="tab" data-view="split" aria-label="Split: Human + Agent" title="Split: Human + Agent">|</button>
-    <button class="tab" data-view="agent" id="liveTab"><span class="live-dot"></span>Agent</button>
-    <button class="tab" data-view="split-exp" aria-label="Split: Agent + Experiments" title="Split: Agent + Experiments">|</button>
-    <button class="tab" data-view="experiments" id="expTab">Experiments</button>
+    <button class="tab active" data-view="human" title="Learn — where am I; steer &amp; review from this desk">Learn</button>
+    <button class="tab" data-view="split" aria-label="Split: Learn + Run" title="Split: Learn + Run">|</button>
+    <button class="tab" data-view="agent" id="liveTab" title="Run — watch agents work"><span class="live-dot"></span>Run</button>
+    <button class="tab" data-view="split-exp" aria-label="Split: Run + Review" title="Split: Run + Review">|</button>
+    <button class="tab" data-view="experiments" id="expTab" title="Review — experiment candidates &amp; winners">Review</button>
   </nav>
 </header>
 
@@ -758,7 +788,7 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 <section id="view-experiments" class="pane agent">
   <div class="exp-deck">
     <div class="exp-queue">
-      <div class="panel-head">EXPERIMENTS <button class="exp-new" id="expNew" title="Queue a fixture/local experiment">+ new</button></div>
+      <div class="panel-head">REVIEW · EXPERIMENTS <button class="exp-new" id="expNew" title="Queue a fixture/local experiment">+ new</button></div>
       <div class="body" id="expList"></div>
     </div>
     <div class="exp-detail">
@@ -822,6 +852,13 @@ function ownerBadge(s) {
   if (!a || !AGENT_IC[a]) return '';
   return `<span class="lc-owner" title="claimed by ${AGENT_LABEL[a]}">${AGENT_IC[a]('currentColor')}</span>`;
 }
+// Shaping hold reason on triage-lane cards — hold_reason frontmatter or a generic legacy chip.
+function holdReasonChip(meta) {
+  const reason = (meta && meta.hold_reason) ? String(meta.hold_reason).trim() : '';
+  const label = reason || 'needs shaping';
+  const title = reason ? `Held for shaping: ${reason}` : 'Held for shaping — no reason recorded (legacy)';
+  return `<span class="lc-hold" title="${esc(title)}">${esc(label)}</span>`;
+}
 // Verification provenance for in-review cards, from the frontmatter stamps the
 // verify flow writes (verified_by / verification_type — see SCHEMA.md). An
 // independently verified spec, a self-checked one, and a pre-gate one must be
@@ -832,6 +869,25 @@ function verifyBadge(s) {
   const by = String(s.meta.verified_by || '').toLowerCase();
   if (vt === 'self-check') return `<span class="gate gate-selfcheck" title="builder verified itself — you are the second set of eyes">⚠ self-check</span>`;
   if (by) return `<span class="gate gate-verified" title="independently verified by ${esc(by)}">✓ ${esc(by)}</span>`;
+  return '';
+}
+// Live verifier state on tests-gate cards (queued / running / blocked /
+// human-decision-required) plus verified-by provenance when stamped.
+function verifierStateBadge(s) {
+  const st = (s.verifier && s.verifier.status) || String(s.meta.verifier_status || '').toLowerCase();
+  const by = (s.verifier && s.verifier.verified_by) || String(s.meta.verified_by || '').toLowerCase();
+  if (st === 'human-decision-required') {
+    return `<span class="gate gate-v-human" title="verifier proposed a mutation — choose authorize fix-forward or kick back">⚑ human decision</span>`;
+  }
+  if (st === 'running') return `<span class="gate gate-v-running" title="isolated verifier is running">↻ verifying</span>`;
+  if (st === 'blocked') {
+    const why = s.meta.blocked_reason ? esc(String(s.meta.blocked_reason).slice(0, 120)) : 'verification blocked';
+    return `<span class="gate gate-v-blocked" title="${why}">⊘ blocked</span>`;
+  }
+  if (st === 'queued' || s.meta.awaiting_verifier === true) {
+    return `<span class="gate gate-v-queued" title="awaiting independent verifier (dispatch or scheduled tick)">⊘ queued</span>`;
+  }
+  if (by) return `<span class="gate gate-verified" title="verified by ${esc(by)}">✓ ${esc(by)}</span>`;
   return '';
 }
 
@@ -943,13 +999,38 @@ function openDrawer(item) {
   const reviewHtml = item.stage === 'in-review' ? `
     ${verifyBadge(item) ? `<div class="dr-review" style="border:0;padding-bottom:0">${verifyBadge(item)}</div>` : ''}
     <div class="dr-review"><button class="dr-accept">accept ✓ → done</button><button class="dr-reject">kick back</button></div>` : '';
-  // the triage gate, in the pop-out: release → ready, symmetric to accept above
+  // the shaping hold pen, in the pop-out: release → ready when shaped
   const releaseHtml = item.stage === 'triage' ? `
-    <div class="dr-review"><button class="dr-release">release → ready</button></div>` : '';
+    <div class="dr-review"><button class="dr-release">shaped — release → ready</button></div>` : '';
   // queue an experiment for this spec — opens the queue form pre-filled with the spec path.
   // only for real specs (folders), and not decay-inbox decision pop-outs.
   const expHtml = (isSpec && !item._decide) ? `
     <div class="dr-exp"><button class="dr-experiment">⚗ experiment →</button></div>` : '';
+  // Dispatch verify — file write only; workers / tl verify --execute drain it.
+  const awaitingV = item.stage === 'tests' && item.meta && item.meta.awaiting_verifier === true;
+  const humanV = item.stage === 'tests' && (
+    (item.verifier && item.verifier.status === 'human-decision-required')
+    || String(item.meta.verifier_status || '').toLowerCase() === 'human-decision-required'
+  );
+  const builder = String((item.meta && (item.meta.claimed_by || item.meta.agent)) || '').toLowerCase();
+  const vLanes = (item._verifierLanes || [])
+    .map(l => l.id || l.agent)
+    .filter(id => id && id !== builder);
+  const dispatchHtml = awaitingV ? `
+    <div class="dr-review">
+      <button class="dr-dispatch-verify" title="writes a verify-request artifact — never spawns an agent">Dispatch verify</button>
+      <button class="dr-drain-verify" title="queue verify-requests for every awaiting-verifier spec">Drain queue</button>
+    </div>
+    <div class="dr-notes" style="padding-top:0">
+      <div class="dr-notes-h">Target lane <span class="dim">≠ builder ${esc(builder || '?')} — UI never spawns</span></div>
+      <select class="dr-verify-lane">${['any-other'].concat(vLanes).map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select>
+    </div>` : '';
+  const mutationHtml = humanV ? `
+    <div class="dr-review" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div class="dim" style="font-size:.72rem">Verifier proposed a mutation — nothing was auto-applied. Choose:</div>
+      <button class="dr-accept dr-authorize-fix">authorize fix-forward →</button>
+      <button class="dr-reject dr-verify-kick">kick back →</button>
+    </div>` : '';
   // the decay-inbox decision, in the pop-out: same actions askRow offers, so you can decide here
   const dec = item._decide;
   let decideBtns = '';
@@ -965,6 +1046,8 @@ function openDrawer(item) {
     <div class="meta">${pills}</div>
     ${reviewHtml}
     ${releaseHtml}
+    ${dispatchHtml}
+    ${mutationHtml}
     ${expHtml}
     ${decideHtml}
     ${outcomeHtml}
@@ -994,6 +1077,42 @@ function openDrawer(item) {
     // "experiment →" queues a fixture/local run for this spec via the queue form
     const expBtn = $('drawer').querySelector('.dr-experiment');
     if (expBtn) expBtn.onclick = () => openExperimentQueueForm(item._ws, item.path);
+  }
+  if (awaitingV) {
+    const laneSel = () => ($('drawer').querySelector('.dr-verify-lane') || {}).value || 'any-other';
+    const dv = $('drawer').querySelector('.dr-dispatch-verify');
+    if (dv) dv.onclick = async () => {
+      try {
+        await postJSON('/api/verify-dispatch', { ws: item._ws, spec: item.path, target_lane: laneSel() });
+        alert('Verify request written. Workers / tl verify --execute will drain it — the UI never spawns agents.');
+        loadSelected();
+      } catch (err) { alert(err.message); }
+    };
+    const drain = $('drawer').querySelector('.dr-drain-verify');
+    if (drain) drain.onclick = async () => {
+      try {
+        const r = await postJSON('/api/verify-dispatch', { ws: item._ws, drain: true, target_lane: laneSel() });
+        alert(`Queued ${r.count || 0} verify request(s).`);
+        loadSelected();
+      } catch (err) { alert(err.message); }
+    };
+  }
+  if (humanV) {
+    const decideV = async (action) => {
+      const note = prompt(action === 'authorize-fix-forward'
+        ? 'Authorize fix-forward — optional note for the next agent (mutations are NOT auto-applied)'
+        : 'Kick back — what should the builder fix?');
+      if (note === null) return;
+      try {
+        await postJSON('/api/verify-decision', { ws: item._ws, spec: item.path, action, note });
+        document.body.classList.remove('open');
+        loadSelected();
+      } catch (err) { alert(err.message); }
+    };
+    const af = $('drawer').querySelector('.dr-authorize-fix');
+    if (af) af.onclick = () => decideV('authorize-fix-forward');
+    const kb = $('drawer').querySelector('.dr-verify-kick');
+    if (kb) kb.onclick = () => decideV('kick-back');
   }
   if (isSpec) {
     decorateBlocks($('drawer').querySelector('.dr-body'), item, notes.filter(n => n.anchor));
@@ -1103,6 +1222,41 @@ function openGoalChooser(ws, intent) {
   });
   document.body.classList.add('open');
   wireModalClose();
+}
+
+// a starving goal: nothing ladders up — draft a new intent with the goal locked (no spec)
+function openStarvingGoalChooser(ws, goal) {
+  const gid = String(goal.id || '');
+  const label = goal.description || gid;
+  $('drawer').innerHTML = `
+    <button type="button" class="dr-close" aria-label="Close">×</button>
+    <div class="path">TRIAGE.yml · ${esc(gid)}</div>
+    <h2>Repair: goal <b>${esc(label)}</b> has nothing laddering up</h2>
+    <p class="rp-lead">Create an intent that ladders to this goal. No spec yet — just reconnect the throughline.</p>
+    <div class="rp-h">create a new intent</div>
+    <div class="rp-new">
+      <input class="rp-title" placeholder="intent title — the outcome, not the task">
+      <select class="rp-goal" disabled aria-label="Goal (locked)"><option value="${esc(gid)}" selected>${esc(label)}</option></select>
+      <button class="rp-create">create intent →</button>
+      <span class="rp-hint">goal is locked · scaffolded from _templates/intent.md · no spec attached</span>
+    </div>`;
+  const btn = $('drawer').querySelector('.rp-create');
+  btn.onclick = async () => {
+    const title = $('drawer').querySelector('.rp-title').value.trim();
+    if (!title) return alert('the intent needs a title');
+    if (!gid) return alert('missing goal id');
+    btn.disabled = true;
+    try {
+      // no spec — create-intent accepts goal-only scaffolding for starving goals
+      await postJSON('/api/map-repair', { ws: ws.name, action: 'create-intent', title, goal: gid });
+      document.body.classList.remove('open');
+      loadSelected();
+    } catch (err) { alert(err.message); btn.disabled = false; }
+  };
+  document.body.classList.add('open');
+  wireModalClose();
+  const titleEl = $('drawer').querySelector('.rp-title');
+  if (titleEl) titleEl.focus();
 }
 
 /* ════ RESUME ════ */
@@ -1344,12 +1498,12 @@ function renderInsightsRail(wss) {
 
   rail.innerHTML = `
     <div class="ins-block">
-      <span class="il">Experiments</span>
+      <span class="il">Review · experiments</span>
       <p class="ins-sub">${esc(exLine)}</p>
       ${latestHighlight}
     </div>
     <div class="ins-block">
-      <span class="il">Agents running</span>
+      <span class="il">Run · agents</span>
       <p class="ins-stat">${ins.active_agent_count || 0}</p>
       ${agentRows}
     </div>
@@ -1369,10 +1523,351 @@ function renderInsightsRail(wss) {
     ${modelRows ? `<div class="ins-block"><span class="il">Models</span>${modelRows}</div>` : ''}`;
 }
 
-// human-tab open-state that must survive re-renders — SSE refreshes rebuild the paper
-// every few seconds while agents work; without this, a clicked-open decisions/parked
-// list (and any row expanded within it) snaps shut before it can be read
-const resumeOpen = { counts: {}, rows: new Set() };
+/* === resume-recommended BEGIN (keep in lockstep with lib/resume-recommended.js) === */
+// lib/resume-recommended.js — shared "recommended next" + open-loop ranking
+// for /tl resume and the cockpit Resume tab. Pure functions over already-parsed
+// workspace shapes (specs, threads, goals, intents). Zero dependencies.
+//
+// Priority for recommended next (highest first — keep skill + UI in lockstep):
+//   1. open question/risk/decision blocking the top ready spec
+//   2. top-weighted goal with zero active specs (not when all linked work is done)
+//   3. longest-idle in-progress with NOTES.md (kickback / mid-flight)
+//   4. top ready spec
+//   5. any open question
+//   6. in-progress without NOTES → all clear
+//   7. empty queue → decompose ask
+//
+// UMD: CommonJS for tests/CLI; `globalThis.ResumeRecommended` for the cockpit
+// (ui/index.html inlines the same factory — keep both copies in lockstep).
+
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root) root.ResumeRecommended = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+'use strict';
+
+const ACTIVE = new Set(['ready', 'in-progress', 'tests', 'in-review']);
+const PRIO = { p0: 0, p1: 1, p2: 2, p3: 3 };
+const OPEN_TYPES = new Set(['question', 'risk', 'decision']);
+const DAY = 86400000;
+
+function normPath(p) {
+  return String(p || '').replace(/^\.\//, '').replace(/\/$/, '').trim();
+}
+
+function slugOf(p) {
+  return normPath(p).split('/').pop().replace(/\.md$/, '');
+}
+
+function pathsMatch(a, b) {
+  const na = normPath(a), nb = normPath(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  return slugOf(na) === slugOf(nb);
+}
+
+function meta(item) {
+  return (item && item.meta) || {};
+}
+
+function topGoal(goals) {
+  if (!goals || !goals.length) return null;
+  return goals.slice().sort((a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0))[0];
+}
+
+function sortedReady(specs) {
+  return (specs || [])
+    .filter(s => s.stage === 'ready')
+    .sort((a, b) => (PRIO[meta(a).priority] ?? 9) - (PRIO[meta(b).priority] ?? 9)
+      || (a.mtime || 0) - (b.mtime || 0));
+}
+
+function openTypedThreads(threads) {
+  return (threads || []).filter(t => {
+    const type = String(meta(t).type || '').toLowerCase();
+    const status = String(meta(t).status || '').toLowerCase();
+    return OPEN_TYPES.has(type) && status === 'open';
+  });
+}
+
+function threadBlocksSpec(thread, spec) {
+  const linked = meta(thread).linked_spec;
+  if (!linked || !spec) return false;
+  return pathsMatch(linked, spec.path);
+}
+
+function specsForGoal(goal, { specs, intents }) {
+  if (!goal) return [];
+  const goalId = String(goal.id || '');
+  const intentPaths = new Set(
+    (intents || [])
+      .filter(it => (meta(it).goals || []).map(String).includes(goalId))
+      .map(it => normPath(it.path))
+  );
+  return (specs || []).filter(s => intentPaths.has(normPath(meta(s).intent)));
+}
+
+/** True when the goal has zero active work and is not fully complete (all done). */
+function isGoalStarving(goal, ctx) {
+  if (!goal) return false;
+  const linked = specsForGoal(goal, ctx);
+  if (!linked.length) return true; // no work ladders to it yet
+  if (linked.some(s => ACTIVE.has(s.stage))) return false;
+  if (linked.every(s => s.stage === 'done')) return false;
+  return true; // e.g. only triage leftovers — still needs a human call
+}
+
+/** True when an intent has zero active specs and is not fully complete. */
+function isIntentStarving(intent, specs) {
+  const status = String(meta(intent).status || '').toLowerCase();
+  if (status !== 'decomposed' && status !== 'approved') return false;
+  const its = (specs || []).filter(s => normPath(meta(s).intent) === normPath(intent.path));
+  if (its.some(s => s.stage === 'ready' || s.stage === 'in-progress' || s.stage === 'tests' || s.stage === 'in-review')) return false;
+  if (its.length && its.every(s => s.stage === 'done')) return false;
+  return true;
+}
+
+function longestIdleInProgress(specs, { requireNotes = false } = {}) {
+  let list = (specs || []).filter(s => s.stage === 'in-progress');
+  if (requireNotes) list = list.filter(s => !!s.notes);
+  if (!list.length) return null;
+  return list.slice().sort((a, b) => (a.mtime || 0) - (b.mtime || 0))[0];
+}
+
+/**
+ * Pick the single recommended-next item for Resume "In focus".
+ * @returns {{ kind: string, item: object|null, reason: string, items?: object[] }}
+ */
+function chooseRecommendedNext({ specs = [], threads = [], goals = [], intents = [] } = {}) {
+  const ready = sortedReady(specs);
+  const topReady = ready[0] || null;
+  const openThreads = openTypedThreads(threads);
+
+  if (topReady) {
+    const blocking = openThreads.find(t => threadBlocksSpec(t, topReady));
+    if (blocking) {
+      return {
+        kind: 'blocking-thread',
+        item: blocking,
+        reason: `Open ${meta(blocking).type} blocking the top ready spec — answer it before running the queue.`,
+      };
+    }
+  }
+
+  const goal = topGoal(goals);
+  if (goal && isGoalStarving(goal, { specs, intents })) {
+    return {
+      kind: 'starving-goal',
+      item: goal,
+      reason: 'Top-weighted goal has zero active specs — decompose an intent or revisit the goal.',
+    };
+  }
+
+  const withNotes = longestIdleInProgress(specs, { requireNotes: true });
+  if (withNotes) {
+    const kicked = /kicked back/i.test(String(withNotes.notes || ''));
+    return {
+      kind: 'kickback',
+      item: withNotes,
+      reason: kicked
+        ? 'Longest-idle in-progress with kickback NOTES — binding corrections for the next run.'
+        : 'Longest-idle in-progress with NOTES.md — mid-flight feedback needs attention.',
+    };
+  }
+
+  if (topReady) {
+    return {
+      kind: 'spec',
+      item: topReady,
+      reason: `Top of the queue${meta(topReady).status === 'blocked' ? ', but blocked' : ', ready'} — read it, then /tl run.`,
+    };
+  }
+
+  const openQ = openThreads.find(t => String(meta(t).type || '').toLowerCase() === 'question');
+  if (openQ) {
+    return {
+      kind: 'question',
+      item: openQ,
+      reason: 'An open question, upstream of new work.',
+    };
+  }
+
+  const inprog = (specs || []).filter(s => s.stage === 'in-progress');
+  if (inprog.length) {
+    return {
+      kind: 'clear',
+      item: null,
+      items: inprog,
+      reason: 'Agents working; nothing needs you.',
+    };
+  }
+
+  return {
+    kind: 'empty',
+    item: null,
+    reason: 'Queue empty — decompose the next slice of an intent.',
+  };
+}
+
+/**
+ * Collect decay-inbox candidates (uncapped). Caller ranks + slices to ≤3.
+ */
+function collectOpenLoops({
+  specs = [], threads = [], intents = [], goals = [],
+  now = Date.now(), idleMs = 10 * DAY, triageMs = 14 * DAY,
+} = {}) {
+  const loops = [];
+  const push = (kind, item, title, sub, age, extra = {}) => {
+    loops.push({ kind, item, title, sub, age: age == null ? 0 : age, ...extra });
+  };
+
+  for (const t of openTypedThreads(threads)) {
+    const type = String(meta(t).type || '').toLowerCase();
+    push(type, t, t.title, type.toUpperCase() + (meta(t).origin ? ' · ' + meta(t).origin : '') + ' · open', t.mtime, { thread: true });
+  }
+
+  for (const s of specs || []) {
+    if (String(meta(s).status || '').toLowerCase() === 'blocked') {
+      push('blocked', s, s.title, 'BLOCKED · idle', s.mtime);
+    }
+  }
+
+  for (const s of specs || []) {
+    if (s.stage === 'done' && !s.feedback && meta(s).type !== 'research') {
+      push('feedback', s, s.title + ' — FEEDBACK not written', 'FEEDBACK', s.mtime);
+    }
+  }
+
+  // NOTES.md on in-progress outranks plain idle — surface even before the idle threshold
+  for (const s of specs || []) {
+    if (s.stage !== 'in-progress') continue;
+    if (s.notes) {
+      const kicked = /kicked back/i.test(String(s.notes));
+      push('notes', s, s.title + (kicked ? ' — kickback note' : ' — has NOTES'), kicked ? 'KICKBACK' : 'NOTES', s.mtime);
+    } else if (now - (s.mtime || 0) > idleMs) {
+      push('idle', s, s.title + ' — stalled?', 'IDLE', s.mtime);
+    }
+  }
+
+  for (const s of specs || []) {
+    if (s.stage === 'triage' && now - (s.mtime || 0) > triageMs) {
+      push('triage', s, s.title + ' — promote or kill?', 'TRIAGE', s.mtime);
+    }
+  }
+
+  for (const s of specs || []) {
+    if (s.stage === 'in-review') {
+      push('review', s, s.title + ' — awaiting your sign-off', 'REVIEW', s.mtime);
+    }
+  }
+
+  for (const s of specs || []) {
+    if (s.stage === 'done' && meta(s).type === 'research') {
+      push('research', s, String(s.title || '').replace(/^Research:\s*/i, '') + ' — recommendation ready', 'RESEARCH', s.mtime);
+    }
+  }
+
+  const goal = topGoal(goals);
+  if (goal && isGoalStarving(goal, { specs, intents })) {
+    push('starving', { ...goal, _goal: true }, (goal.description || goal.id) + ' — no active work', 'GOAL · starving', 0, { goal: true });
+  }
+
+  for (const it of intents || []) {
+    if (!isIntentStarving(it, specs)) continue;
+    // skip if already covered by top-goal starving for the same intent's only goal
+    const its = (specs || []).filter(s => normPath(meta(s).intent) === normPath(it.path));
+    const doneN = its.filter(s => s.stage === 'done').length;
+    push('starving', it, it.title + ' — no active work', its.length ? `INTENT · ${doneN}/${its.length} specs done` : 'INTENT · not yet decomposed', 0, { intent: true });
+  }
+
+  return loops;
+}
+
+/**
+ * Rank open loops by impact (skill): (1) blocking in-focus, (2) starving top goal,
+ * (3) NOTES/kickback before plain idle, then severity, then oldest first.
+ */
+function rankOpenLoops(loops, { focusItem = null, topGoalId = null } = {}) {
+  const focusPath = focusItem && focusItem.path ? focusItem.path : null;
+  const focusSlug = focusPath ? slugOf(focusPath) : null;
+
+  const blocksFocus = (l) => {
+    if (!focusPath || !l.thread) return false;
+    return threadBlocksSpec(l.item, { path: focusPath });
+  };
+
+  const starvesTop = (l) => {
+    if (l.kind !== 'starving') return false;
+    if (l.goal && topGoalId && String(l.item.id) === String(topGoalId)) return true;
+    if (l.intent && topGoalId) {
+      return (meta(l.item).goals || []).map(String).includes(String(topGoalId));
+    }
+    return !!l.goal;
+  };
+
+  // Base severity after the three impact overrides (lower = more urgent)
+  const SEV = {
+    notes: 0, review: 1, research: 2, risk: 3, starving: 4,
+    question: 5, blocked: 6, idle: 7, feedback: 8, decision: 9, triage: 10,
+  };
+
+  return loops.slice().sort((a, b) => {
+    const a0 = blocksFocus(a) ? 0 : 1;
+    const b0 = blocksFocus(b) ? 0 : 1;
+    if (a0 !== b0) return a0 - b0;
+    const a1 = starvesTop(a) ? 0 : 1;
+    const b1 = starvesTop(b) ? 0 : 1;
+    if (a1 !== b1) return a1 - b1;
+    // NOTES/kickback before plain idle (also encoded in SEV, but keep explicit)
+    const aNotes = a.kind === 'notes' ? 0 : 1;
+    const bNotes = b.kind === 'notes' ? 0 : 1;
+    if (aNotes !== bNotes) return aNotes - bNotes;
+    const sa = SEV[a.kind] ?? 50;
+    const sb = SEV[b.kind] ?? 50;
+    if (sa !== sb) return sa - sb;
+    return (a.age || 0) - (b.age || 0);
+  });
+}
+
+/** Cap after rank — skill + UI share the ≤3 "needs you now" ceiling. */
+function selectOpenLoops(loops, ctx, cap = 3) {
+  const ranked = rankOpenLoops(loops, ctx);
+  // Drop the hero item if it already appears as a loop (avoid duplicating the ask)
+  const focus = ctx && ctx.focusItem;
+  const filtered = focus
+    ? ranked.filter(l => {
+        if (l.item === focus) return false;
+        if (focus.path && l.item && pathsMatch(l.item.path, focus.path)) return false;
+        if (focus.id && l.goal && String(l.item.id) === String(focus.id)) return false;
+        return true;
+      })
+    : ranked;
+  return { shown: filtered.slice(0, cap), rest: filtered.slice(cap), ranked: filtered };
+}
+
+return {
+  chooseRecommendedNext,
+  collectOpenLoops,
+  rankOpenLoops,
+  selectOpenLoops,
+  isGoalStarving,
+  isIntentStarving,
+  topGoal,
+  sortedReady,
+  pathsMatch,
+  ACTIVE,
+  DAY,
+};
+});
+
+/* === resume-recommended END === */
+
+// Resume open-state that must survive re-renders — SSE refreshes rebuild the paper
+// every few seconds while agents work; without this, clicked-open sections snap shut
+// before they can be read. keys: counts/status/scope by workspace name; rows by path.
+// mapView: per-ws {x,y,w,h} so SSE/refresh rebuilds don't snap zoom/pan back to default
+const resumeOpen = { counts: {}, rows: new Set(), status: {}, scope: {}, mapView: {} };
 function renderResume(wss) {
   $('dsProj').textContent = wss.map(w => w.name).join(' · ');
   $('dsDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -1406,13 +1901,57 @@ function renderResume(wss) {
     const RECENT = 6;  // keep the list short — most recent only; the rest live in done/
     [...inprog.map(s => ({ s, k: '▸', c: '#6b57c7' })), ...done.slice(0, RECENT).map(s => ({ s, k: '✓', c: '#3a7d55' }))].forEach(({ s, k, c }) => {
       const r = document.createElement('div'); r.className = 'loop-row';
-      r.innerHTML = `<span class="gly mono" style="font-size:.62rem;color:${c}">${k}</span><div class="txt"><div class="t">${esc(s.title)}</div></div><span class="age">${rel(s.mtime)}</span>`;
+      const noteLine = s.notes
+        ? ((s.notes.match(/— kicked back\n([\s\S]+?)(?:\n## |\n*$)/) || s.notes.match(/— note\n([\s\S]+?)(?:\n## |\n*$)/) || [, ''])[1] || '').trim().split('\n')[0]
+        : '';
+      const noteHint = noteLine
+        ? `<div class="sub" style="color:#b57fc7">${/kicked back/i.test(s.notes) ? 'kickback: ' : 'note: '}${esc(noteLine.slice(0, 72))}${noteLine.length > 72 ? '…' : ''}</div>`
+        : '';
+      r.innerHTML = `<span class="gly mono" style="font-size:.62rem;color:${c}">${k}</span><div class="txt"><div class="t">${esc(s.title)}</div>${noteHint}</div><span class="age">${rel(s.mtime)}</span>`;
       r.onclick = () => openDrawer(s); statusEx.appendChild(r);
     });
     if (done.length > RECENT) statusEx.insertAdjacentHTML('beforeend', `<div class="loop-row" style="color:var(--faint);font-size:.7rem">+ ${done.length - RECENT} older in done/</div>`);
     if (!inprog.length && !done.length) statusEx.innerHTML = '<div class="empty">nothing completed yet</div>';
-    status.onclick = () => { status.classList.toggle('open'); statusEx.classList.toggle('open'); };
+    status.onclick = () => {
+      const open = status.classList.toggle('open');
+      statusEx.classList.toggle('open', open);
+      resumeOpen.status[ws.name] = open;
+    };
+    if (resumeOpen.status[ws.name]) {
+      status.classList.add('open');
+      statusEx.classList.add('open');
+    }
     block.appendChild(status); block.appendChild(statusEx);
+
+    // ── automation (read-only — Human/Resume observe only; never spawn) ──
+    const auto = ws.automation;
+    if (auto) {
+      const autoEl = document.createElement('p');
+      autoEl.className = 'bp-auto';
+      const sig = auto.signal || 'off';
+      const laneNames = (auto.lanes || []).map(l => l.name).filter(Boolean).join(', ');
+      const parts = [
+        `<span class="al">automation</span>`,
+        `<span class="sig ${esc(sig)}">${esc(sig)}</span>`,
+      ];
+      if (sig === 'up' && auto.intervalMinutes) {
+        parts.push(`<span>every ${esc(String(auto.intervalMinutes))}m${laneNames ? ' · ' + esc(laneNames) : ''}</span>`);
+      } else if (sig === 'not-installed') {
+        parts.push(`<span>run <code>tl up ${esc(ws.name)}</code></span>`);
+      } else if (sig === 'misconfigured' && auto.issues && auto.issues.length) {
+        parts.push(`<span>${esc(auto.issues[0].problem || 'lane command missing')}</span>`);
+      } else if (sig === 'paused') {
+        parts.push(`<span>PAUSE file present</span>`);
+      } else if (sig === 'off') {
+        parts.push(`<span>add automation: to TRIAGE.yml</span>`);
+      }
+      if (auto.stuckAtTests > 0) {
+        parts.push(`<span class="stuck">stuck at tests: ${auto.stuckAtTests}</span>`);
+      }
+      autoEl.innerHTML = parts.join(' · ');
+      autoEl.title = 'run — read-only; tl up installs the schedule; the UI never spawns agents';
+      block.appendChild(autoEl);
+    }
 
     // ── value delivered (one calm sentence, client-side from outcome/FEEDBACK.md) ──
     // Display rule: scan the most recent 1–3 done specs, render the first usable
@@ -1466,7 +2005,10 @@ function renderResume(wss) {
             <span class="sl">Key results</span>${krs.map((k, i) => `<input class="s-kr" data-i="${i}" value="${at(k)}">`).join('') || '<div class="empty">none</div>'}
             <div class="scope-actions"><button class="s-cancel">cancel</button><button class="s-save">save →</button></div>
           </div>`;
-        scopeEx.querySelector('.s-cancel').onclick = () => scopeEx.classList.remove('open');
+        scopeEx.querySelector('.s-cancel').onclick = () => {
+          scopeEx.classList.remove('open');
+          resumeOpen.scope[ws.name] = false;
+        };
         scopeEx.querySelector('.s-save').onclick = async () => {
           const nd = scopeEx.querySelector('.s-desc').value.trim();
           const nw = scopeEx.querySelector('.s-wt').value.trim();
@@ -1475,114 +2017,124 @@ function renderResume(wss) {
             if (nd && nd !== desc) await postJSON('/api/goal', { ws: ws.name, field: 'description', old: desc, new: nd });
             if (nw && nw !== wRaw) await postJSON('/api/goal', { ws: ws.name, field: 'weight', old: wRaw, new: nw });
             for (const k of nkr) { const ov = krs[k.i]; if (k.v && k.v !== ov) await postJSON('/api/goal', { ws: ws.name, field: 'kr', old: ov, new: k.v }); }
+            resumeOpen.scope[ws.name] = false;
             loadSelected();
           } catch (e) { alert(e.message); loadSelected(); }
         };
       };
-      const toggle = () => { if (!scopeEx.classList.contains('open')) buildScope(); scopeEx.classList.toggle('open'); };
+      const toggle = () => {
+        if (!scopeEx.classList.contains('open')) buildScope();
+        const open = scopeEx.classList.toggle('open');
+        resumeOpen.scope[ws.name] = open;
+      };
       goalEl.querySelector('.gtext').onclick = toggle;
       goalEl.querySelector('.ed').onclick = toggle;
+      if (resumeOpen.scope[ws.name]) { buildScope(); scopeEx.classList.add('open'); }
     } else {
       goalEl.innerHTML = `<span class="gmeta">No goal configured · edit TRIAGE.yml</span>`;
     }
     block.appendChild(goalEl); block.appendChild(scopeEx);
 
-    // ── hero (in focus) ──
-    const openQ = threads.find(t => t.meta.type === 'question' && t.meta.status === 'open');
-    let next = null, kind = '';
-    if (ready.length) { next = ready[0]; kind = 'spec'; }
-    else if (openQ) { next = openQ; kind = 'question'; }
-
+    // ── hero (in focus) — same priority order as /tl resume (lib/resume-recommended.js) ──
+    const RR = globalThis.ResumeRecommended;
+    const pick = RR.chooseRecommendedNext({ specs, threads, goals, intents: ws.intents || [] });
     const hero = document.createElement('div');
     hero.className = 'hero';
-    if (next) {
-      const slug = (next.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
-      const p = (next.meta.priority || '').toUpperCase();
-      const chip = kind === 'spec' ? `${esc(slug)}${p ? ' · ' + esc(p) : ''}` : `${esc(slug)} · question`;
-      const reason = kind === 'spec'
-        ? `Needs you: top of the queue${next.meta.status === 'blocked' ? ', but blocked' : ', ready'} — read it, then <code>/tl run</code>.`
-        : `Needs you: an open question, upstream of new work.`;
+
+    const renderFileHero = (item, chip, reason, hintNoun) => {
+      const summary = item.title || item.description || item.id || '';
       hero.innerHTML = `
-        <div class="head"><span class="fl">In focus</span><span class="chip">${chip}</span></div>
-        <p class="summary">${esc(next.title)}</p>
-        <p class="reason">${reason}</p>
-        <p class="hint">click to ${kind === 'spec' ? 'read the spec' : 'read the thread'} ↓</p>
+        <div class="head"><span class="fl">Learn · in focus</span><span class="chip">${chip}</span></div>
+        <p class="summary">${esc(summary)}</p>
+        <p class="reason">Needs you: ${esc(reason)}</p>
+        <p class="hint">click to ${hintNoun} ↓</p>
         <div class="hero-body"><div class="md">loading…</div></div>`;
       let loaded = false;
       const hb = hero.querySelector('.hero-body');
       hb.onclick = e => e.stopPropagation();
       hero.onclick = async () => {
         hero.classList.toggle('open');
-        hero.querySelector('.hint').textContent = hero.classList.contains('open') ? 'click to collapse ↑' : 'click to read ↓';
+        hero.querySelector('.hint').textContent = hero.classList.contains('open') ? 'click to collapse ↑' : `click to ${hintNoun} ↓`;
         if (hero.classList.contains('open') && !loaded) {
           loaded = true;
           try {
-            const f = await (await fetch(`/api/file?ws=${encodeURIComponent(ws.name)}&path=${encodeURIComponent(specFileOf(next))}`)).json();
-            const body = (f.content || '').replace(/^---\n[\s\S]*?\n---\n/, '').replace(/^\s*# .*\n+/, '');
+            const f = await (await fetch(`/api/file?ws=${encodeURIComponent(ws.name)}&path=${encodeURIComponent(specFileOf(item))}`)).json();
+            let body = (f.content || '').replace(/^---\n[\s\S]*?\n---\n/, '').replace(/^\s*# .*\n+/, '');
+            if (item.notes && pick.kind === 'kickback') {
+              body = '## NOTES.md\n\n' + item.notes.trim() + '\n\n---\n\n' + body;
+            }
             hb.querySelector('.md').innerHTML = md(body);
-            addHeroFeedback(hb, ws.name, next);
+            if (item.path && !String(item.path).startsWith('threads/')) addHeroFeedback(hb, ws.name, item);
           } catch { hb.querySelector('.md').textContent = 'could not load file'; }
         }
       };
-    } else if (inprog.length) {
+    };
+
+    if (pick.kind === 'blocking-thread' || pick.kind === 'question') {
+      const t = pick.item;
+      const type = (t.meta && t.meta.type) || 'question';
+      renderFileHero(t, `${esc(slugOf(t.path))} · ${esc(type)}`, pick.reason, 'read the thread');
+    } else if (pick.kind === 'spec' || pick.kind === 'kickback') {
+      const s = pick.item;
+      const p = (s.meta.priority || '').toUpperCase();
+      const chip = pick.kind === 'kickback'
+        ? `${esc(slugOf(s.path))} · ${/kicked back/i.test(s.notes || '') ? 'kickback' : 'notes'}`
+        : `${esc(slugOf(s.path))}${p ? ' · ' + esc(p) : ''}`;
+      renderFileHero(s, chip, pick.reason, 'read the spec');
+    } else if (pick.kind === 'starving-goal') {
       hero.className = 'hero flat';
+      const g = pick.item;
       hero.innerHTML = `
-        <div class="head"><span class="fl">In focus</span><span class="chip clear">all clear</span></div>
-        <p class="summary">${inprog.length} ${inprog.length > 1 ? 'agents are' : 'agent is'} working. Nothing needs you right now.</p>
-        <p class="reason">${inprog.map(s => esc((s.path || '').replace(/\/$/, '').split('/').pop())).join(' · ')} in progress · no open questions blocking.</p>
+        <div class="head"><span class="fl">Learn · in focus</span><span class="chip">goal health</span></div>
+        <p class="summary">${esc(g.description || g.id)} — no active specs</p>
+        <p class="reason">Needs you: ${esc(pick.reason)}</p>
+        <p class="hint">decompose the next slice · or revisit this goal's weight</p>`;
+    } else if (pick.kind === 'clear') {
+      hero.className = 'hero flat';
+      const items = pick.items || inprog;
+      hero.innerHTML = `
+        <div class="head"><span class="fl">Learn · in focus</span><span class="chip clear">all clear</span></div>
+        <p class="summary">${items.length} ${items.length > 1 ? 'agents are' : 'agent is'} working. Nothing needs you right now.</p>
+        <p class="reason">${items.map(s => esc(slugOf(s.path))).join(' · ')} in progress · no open questions blocking.</p>
         <p class="hint" style="cursor:pointer">watch in live look →</p>`;
       hero.querySelector('.hint').onclick = () => setMode('agent');
     } else {
       hero.className = 'hero flat';
       hero.innerHTML = `
-        <div class="head"><span class="fl">In focus</span></div>
+        <div class="head"><span class="fl">Learn · in focus</span></div>
         <p class="summary">Queue is empty — decompose the next slice of an intent into a spec.</p>
-        <p class="reason">Nothing ready, in progress, or unresolved. The intent → spec handoff is yours.</p>`;
+        <p class="reason">${esc(pick.reason)}</p>`;
     }
     block.appendChild(hero);
 
-    // ── decay inbox (capped to 3 asks; research is a first-class response) ──
-    const now = Date.now(), DAY = 86400000;
-    const loops = [];
-    threads.filter(t => ['question', 'risk', 'decision'].includes(t.meta.type) && t.meta.status === 'open')
-      .forEach(t => loops.push({ kind: t.meta.type, item: t, thread: true, title: t.title, sub: t.meta.type.toUpperCase() + (t.meta.origin ? ' · ' + t.meta.origin : '') + ' · ' + rel(t.mtime), age: t.mtime }));
-    specs.filter(s => s.meta.status === 'blocked')
-      .forEach(s => loops.push({ kind: 'blocked', item: s, title: s.title, sub: 'BLOCKED · ' + rel(s.mtime), age: s.mtime }));
-    specs.filter(s => s.stage === 'done' && !s.feedback && s.meta.type !== 'research')
-      .forEach(s => loops.push({ kind: 'feedback', item: s, title: s.title + ' — FEEDBACK not written', sub: 'FEEDBACK · ' + rel(s.mtime), age: s.mtime }));
-    specs.filter(s => s.stage === 'in-progress' && now - s.mtime > 10 * DAY)
-      .forEach(s => loops.push({ kind: 'idle', item: s, title: s.title + ' — stalled?', sub: 'IDLE · ' + rel(s.mtime), age: s.mtime }));
-    specs.filter(s => s.stage === 'triage' && now - s.mtime > 14 * DAY)
-      .forEach(s => loops.push({ kind: 'triage', item: s, title: s.title + ' — promote or kill?', sub: 'TRIAGE · ' + rel(s.mtime), age: s.mtime }));
-    specs.filter(s => s.stage === 'in-review')
-      .forEach(s => loops.push({ kind: 'review', item: s, title: s.title + ' — awaiting your sign-off', sub: 'REVIEW · ' + rel(s.mtime), age: s.mtime }));
-    specs.filter(s => s.stage === 'done' && s.meta.type === 'research')
-      .forEach(s => loops.push({ kind: 'research', item: s, title: s.title.replace(/^Research:\s*/i, '') + ' — recommendation ready', sub: 'RESEARCH · ' + rel(s.mtime), age: s.mtime }));
-    ws.intents.filter(it => {
-      if (it.meta.status !== 'decomposed' && it.meta.status !== 'approved') return false;
-      const its = specs.filter(s => (s.meta.intent || '').replace(/^\.\//, '').trim() === it.path);
-      if (its.some(s => s.stage === 'ready' || s.stage === 'in-progress')) return false; // has active work
-      if (its.length && its.every(s => s.stage === 'done')) return false;                 // complete, not starving
-      return true;
-    })
-      .forEach(it => {
-        const its = specs.filter(s => (s.meta.intent || '').replace(/^\.\//, '').trim() === it.path);
-        const doneN = its.filter(s => s.stage === 'done').length;
-        loops.push({ kind: 'starving', item: { ...it, _ws: ws.name }, title: it.title + ' — no active work', sub: its.length ? `INTENT · ${doneN}/${its.length} specs done` : 'INTENT · not yet decomposed', age: 0 });
-      });
+    // ── decay inbox (capped to 3; same ranking as /tl resume) ──
+    const rawLoops = RR.collectOpenLoops({ specs, threads, intents: ws.intents || [], goals, now: Date.now() });
+    // refresh relative ages in sub labels for display
+    rawLoops.forEach(l => {
+      if (l.age && !/·/.test(l.sub)) l.sub = l.sub + ' · ' + rel(l.age);
+      else if (l.age && l.thread) l.sub = (l.item.meta.type || '').toUpperCase() + (l.item.meta.origin ? ' · ' + l.item.meta.origin : '') + ' · ' + rel(l.age);
+      else if (l.age && !l.goal && !l.intent) {
+        const base = (l.sub || '').split(' · ')[0];
+        l.sub = base + ' · ' + rel(l.age);
+      }
+    });
+    const focusItem = pick.item && (pick.item.path || pick.item.id) ? pick.item : null;
+    const { shown, rest } = RR.selectOpenLoops(rawLoops, { focusItem, topGoalId: top && top.id }, 3);
+    const loops = shown.concat(rest); // for empty check we use shown+rest
 
-    const SEV = { review: 0, research: 1, risk: 2, starving: 3, question: 4, blocked: 5, idle: 6, feedback: 7, decision: 8, triage: 9 };
-    loops.sort((a, b) => (SEV[a.kind] - SEV[b.kind]) || (a.age - b.age));
-    const LCOL = { review: '#b57fc7', research: '#6b57c7', risk: '#a83232', starving: '#b5712a', question: '#6b57c7', blocked: '#c0622a', idle: '#c0622a', feedback: '#c0622a', decision: '#6b57c7', triage: '#8a8070' };
-    const LIC = { review: IC.check, research: IC.question, risk: IC.risk, starving: IC.risk, question: IC.question, blocked: IC.ban, idle: IC.ban, feedback: IC.chat, decision: IC.chat, triage: IC.archive };
+    const LCOL = { review: '#b57fc7', research: '#6b57c7', risk: '#a83232', starving: '#b5712a', question: '#6b57c7', blocked: '#c0622a', idle: '#c0622a', notes: '#b57fc7', feedback: '#c0622a', decision: '#6b57c7', triage: '#8a8070' };
+    const LIC = { review: IC.check, research: IC.question, risk: IC.risk, starving: IC.risk, question: IC.question, blocked: IC.ban, idle: IC.ban, notes: IC.chat, feedback: IC.chat, decision: IC.chat, triage: IC.archive };
 
     const askRow = l => {
       const r = document.createElement('div'); r.className = 'ask';
-      r.innerHTML = `${LIC[l.kind](LCOL[l.kind])}<div class="txt"><div class="t">${esc(l.title)}</div><div class="sub">${esc(l.sub)}</div></div><div class="acts"></div>`;
+      const ic = (LIC[l.kind] || IC.chat)(LCOL[l.kind] || '#8a8070');
+      r.innerHTML = `${ic}<div class="txt"><div class="t">${esc(l.title)}</div><div class="sub">${esc(l.sub)}</div></div><div class="acts"></div>`;
       const topic = l.title.replace(/\s+—.*$/, '');
-      // carry the decision context into the pop-out so the same actions work there
       const decideItem = { ...l.item, _ws: ws.name, _decide: { thread: !!l.thread, kind: l.kind, topic } };
-      r.querySelector('.txt').onclick = () => openDrawer(decideItem);
+      r.querySelector('.txt').onclick = () => {
+        if (l.goal) return; // goal objects aren't files
+        openDrawer(decideItem);
+      };
       const acts = r.querySelector('.acts');
       const mk = (label, cls, fn) => { const b = document.createElement('button'); if (cls) b.className = cls; b.textContent = label; b.onclick = e => { e.stopPropagation(); fn(b); }; acts.appendChild(b); };
       const post = (p, body) => (async () => { try { await postJSON(p, { ws: ws.name, ...body }); } catch (e) { alert(e.message); } loadSelected(); })();
@@ -1591,11 +2143,14 @@ function renderResume(wss) {
         mk('park', '', () => post('/api/thread-status', { path: l.item.path, status: 'parked' }));
         mk('research', 'research', () => post('/api/research', { title: topic, source: l.item.path }));
       } else if (l.kind === 'starving') {
+        const target = l.goal
+          ? `In project ${ws.name}, the top goal "${l.item.description || l.item.id}" has zero active specs — decompose the next slice of an intent that ladders to it, or revisit the goal.`
+          : `In project ${ws.name}, decompose ${l.item.path} into its next ready spec.`;
         mk('decompose next', '', async b => {
-          try { await navigator.clipboard.writeText(`In project ${ws.name}, decompose ${l.item.path} into its next ready spec.`); b.textContent = 'copied ✓'; }
+          try { await navigator.clipboard.writeText(target); b.textContent = 'copied ✓'; }
           catch { b.textContent = 'copy failed'; }
         });
-        mk('close', '', () => post('/api/thread-status', { path: l.item.path, status: 'done' }));
+        if (l.intent && l.item.path) mk('close', '', () => post('/api/thread-status', { path: l.item.path, status: 'done' }));
       } else {
         mk(l.kind === 'research' ? 'decide' : 'open', '', () => openDrawer(decideItem));
         if (l.kind === 'blocked' || l.kind === 'triage') mk('research', 'research', () => post('/api/research', { title: topic }));
@@ -1603,14 +2158,13 @@ function renderResume(wss) {
       return r;
     };
 
-    if (!loops.length) {
+    if (!shown.length && !rest.length) {
       const none = document.createElement('div'); none.className = 'asks-none';
       none.innerHTML = `${IC.check('#3a7d55')}<span>No open loops — nothing unresolved.</span>`;
       block.appendChild(none);
     } else {
       const inbox = document.createElement('div'); inbox.className = 'asks';
-      loops.slice(0, 3).forEach(l => inbox.appendChild(askRow(l)));
-      const rest = loops.slice(3);
+      shown.forEach(l => inbox.appendChild(askRow(l)));
       if (rest.length) {
         const more = document.createElement('div'); more.className = 'asks-more';
         more.textContent = `+ ${rest.length} more loose end${rest.length > 1 ? 's' : ''} ›`;
@@ -1635,19 +2189,50 @@ function renderResume(wss) {
     };
 
     const counts = document.createElement('div'); counts.className = 'bp-counts';
-    counts.innerHTML = `<span class="ci" data-x="hz">horizon</span><span class="ci" data-x="mp">map</span><span class="ci" data-x="bl">backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">parked <b>${parked.length}</b></span>`;
+    counts.innerHTML = `<span class="ci" data-x="hz">learn · horizon</span><span class="ci" data-x="mp">learn · map</span><span class="ci" data-x="bl">steer · backlog <b>${backlog.length}</b></span><span class="ci" data-x="dc">steer · decisions <b>${decs.length}</b></span><span class="ci" data-x="pk">steer · parked <b>${parked.length}</b></span>`;
     const countsEx = document.createElement('div'); countsEx.className = 'expand';
 
     // a decisions/parked row toggles the thread body inline beneath it — click to read, click to collapse
-    const expandableRow = (r, t) => {
+    const expandableRow = (r, t, actsFn) => {
       const key = ws.name + '|' + t.path;
       const bodyEl = document.createElement('div'); bodyEl.className = 'row-body';
       const src = (t.body || '').replace(/^\s*# .*\n+/, '').trim();
       bodyEl.innerHTML = `<div class="path">${esc(t.path)}</div>` +
         (src ? `<div class="md">${md(src)}</div>` : '<div class="empty">nothing beneath — the title is the whole note</div>');
+      if (actsFn) {
+        const acts = document.createElement('div'); acts.className = 'row-acts';
+        acts.onclick = e => e.stopPropagation();
+        actsFn(acts, t);
+        bodyEl.appendChild(acts);
+      }
       if (resumeOpen.rows.has(key)) bodyEl.classList.add('open');
       r.onclick = () => { const open = bodyEl.classList.toggle('open'); resumeOpen.rows[open ? 'add' : 'delete'](key); };
       countsEx.appendChild(r); countsEx.appendChild(bodyEl);
+    };
+
+    const parkedActs = (acts, t) => {
+      const others = available.filter(w => w.name !== ws.name);
+      if (others.length) {
+        const sel = document.createElement('select');
+        others.forEach(w => { const o = document.createElement('option'); o.value = w.name; o.textContent = w.name; sel.appendChild(o); });
+        const move = document.createElement('button');
+        move.textContent = 'move →';
+        move.onclick = async () => {
+          const dest = sel.value;
+          if (!confirm(`Move "${t.title}" to ${dest}?`)) return;
+          try { await postJSON('/api/thread-move', { ws: ws.name, path: t.path, dest_ws: dest }); loadSelected(); }
+          catch (e) { alert(e.message); }
+        };
+        acts.appendChild(sel); acts.appendChild(move);
+      }
+      const close = document.createElement('button');
+      close.className = 'close'; close.textContent = 'close';
+      close.onclick = async () => {
+        if (!confirm(`Close "${t.title}"? Sets status: closed — recoverable on disk, not shown in parked.`)) return;
+        try { await postJSON('/api/thread-status', { ws: ws.name, path: t.path, status: 'closed' }); loadSelected(); }
+        catch (e) { alert(e.message); }
+      };
+      acts.appendChild(close);
     };
 
     const builders = {
@@ -1826,37 +2411,84 @@ function renderResume(wss) {
           } else {
             defView = { x: 0, y: 0, w: W, h: Hsvg };
           }
-          // never zoom past the full graph; keep aspect sane against the viewport
-          const clampSpan = v => {
-            v.w = Math.max(60, Math.min(v.w, W * 3));
-            v.h = Math.max(60, Math.min(v.h, Hsvg * 3));
-            return v;
+          // match the SVG element's aspect so "meet" never letterboxes — otherwise independently
+          // clamping w/h (or a square frame in a wide viewport) changes pillars mid-zoom and jumps.
+          // builders.mp runs before countsEx gets `.open` (display:none → 0×0 rect), so fit must
+          // wait for layout (rAF / ResizeObserver) — otherwise the first zoom jumps as pillars appear.
+          const fitAspect = v => {
+            const r = svg.getBoundingClientRect();
+            if (!(r.width > 0 && r.height > 0)) return false;
+            const ea = r.width / r.height, va = v.w / v.h;
+            if (va < ea) { const nw = v.h * ea; v.x -= (nw - v.w) / 2; v.w = nw; }
+            else if (va > ea) { const nh = v.w / ea; v.y -= (nh - v.h) / 2; v.h = nh; }
+            return true;
           };
-          clampSpan(defView);
+          // joint span limits — one zoom factor for both axes so aspect stays fixed.
+          // ceilings must track the fitted default: a very wide graph aspect-fits to
+          // h >> Hsvg*3, and a ceiling below the default would force-jump the first
+          // wheel tick and dead-zone zoom-out (hi never drops below 1 for the same reason).
+          const MIN_SPAN = 60;
+          let maxW = W * 3, maxH = Hsvg * 3;
+          const clampFactor = (vw, vh, f) => {
+            const lo = Math.max(MIN_SPAN / vw, MIN_SPAN / vh);
+            const hi = Math.max(1, Math.min(maxW / vw, maxH / vh));
+            return Math.min(Math.max(f, lo), hi);
+          };
           let view = { ...defView };
-          const apply = () => svg.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
-          apply();
-          const reset = () => { view = { ...defView }; apply(); };
+          const saved = resumeOpen.mapView[ws.name];
+          if (saved && saved.w > 0 && saved.h > 0) view = { ...saved };
+          const apply = () => {
+            svg.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
+            resumeOpen.mapView[ws.name] = { ...view };
+          };
+          const syncLayout = () => {
+            fitAspect(defView);
+            maxW = Math.max(W * 3, defView.w);
+            maxH = Math.max(Hsvg * 3, defView.h);
+            if (!fitAspect(view)) return false;
+            apply();
+            return true;
+          };
+          const ensureLayout = () => {
+            if (syncLayout()) return;
+            requestAnimationFrame(() => {
+              if (syncLayout()) return;
+              requestAnimationFrame(syncLayout);
+            });
+          };
+          ensureLayout();
+          if (typeof ResizeObserver !== 'undefined') {
+            new ResizeObserver(() => { syncLayout(); }).observe(wrap);
+          }
+          const reset = () => { view = { ...defView }; fitAspect(view); apply(); };
           if (resetBtn) resetBtn.onclick = e => { e.stopPropagation(); reset(); };
           // map client px → SVG user coords under the current viewBox.
-          // preserveAspectRatio="meet" letterboxes, so the drawn area is inset within the element —
-          // account for that inset or cursor-anchored zoom drifts when aspect ratios differ.
+          // preserveAspectRatio="meet" letterboxes when aspects differ — account for that inset.
           const geom = () => {
             const r = svg.getBoundingClientRect();
-            const scale = Math.min(r.width / view.w, r.height / view.h);  // "meet" uses the smaller
+            const scale = Math.min(r.width / view.w, r.height / view.h);  // px per user-unit ("meet")
             const dw = view.w * scale, dh = view.h * scale;
             return { r, scale, offX: r.left + (r.width - dw) / 2, offY: r.top + (r.height - dh) / 2 };
           };
           const toUser = (cx, cy) => { const g = geom(); return { x: view.x + (cx - g.offX) / g.scale, y: view.y + (cy - g.offY) / g.scale }; };
           svg.addEventListener('wheel', e => {
             e.preventDefault();
-            const before = toUser(e.clientX, e.clientY);   // user point under the cursor now
-            const f = Math.exp(e.deltaY * 0.0015);         // wheel up = zoom in
-            view.w = Math.max(60, Math.min(view.w * f, W * 3));
-            view.h = Math.max(60, Math.min(view.h * f, Hsvg * 3));
+            if (!(svg.getBoundingClientRect().width > 0)) return;
+            let dy = e.deltaY;
+            if (e.deltaMode === 1) dy *= 16;       // lines → px
+            else if (e.deltaMode === 2) dy *= 400; // pages → px
+            const before = toUser(e.clientX, e.clientY);
+            const f = clampFactor(view.w, view.h, Math.exp(dy * 0.0015)); // wheel up = zoom in
+            if (f === 1) return;
+            // scale about the cursor so the user-point stays under it
+            view.x = before.x - (before.x - view.x) * f;
+            view.y = before.y - (before.y - view.y) * f;
+            view.w *= f; view.h *= f;
             apply();
-            const after = toUser(e.clientX, e.clientY);    // where that pixel now lands
-            view.x += before.x - after.x; view.y += before.y - after.y;  // shift so it's fixed again
+            // second pass catches letterbox / float drift so the pixel stays locked
+            const after = toUser(e.clientX, e.clientY);
+            view.x += before.x - after.x;
+            view.y += before.y - after.y;
             apply();
           }, { passive: false });
           // drag to pan; a real drag suppresses the node click that would otherwise fire on mouseup
@@ -1869,7 +2501,7 @@ function renderResume(wss) {
           });
           svg.addEventListener('pointermove', e => {
             if (!drag) return;
-            const scale = geom().scale;                 // user-units per client px, under "meet"
+            const scale = geom().scale;                 // px per user-unit, under "meet"
             const dx = (e.clientX - drag.sx) / scale, dy = (e.clientY - drag.sy) / scale;
             if (Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) > 3) drag.moved = true;
             view.x = drag.ox - dx; view.y = drag.oy - dy; apply();
@@ -1892,8 +2524,8 @@ function renderResume(wss) {
         if (orphanSpecs.length || goalless.length || starving.length) {
           const bk = document.createElement('div'); bk.className = 'map-breaks';
           bk.innerHTML = `<div class="mb-head">Throughline breaks</div>`;
-          starving.forEach(g => bk.insertAdjacentHTML('beforeend', `<div class="break-row">goal <b>${esc(g.description || g.id)}</b> has nothing laddering up</div>`));
           // a break row is the corrective action: click → chooser, not just the record
+          starving.forEach(g => { const r = document.createElement('div'); r.className = 'break-row'; r.innerHTML = `goal <b>${esc(g.description || g.id)}</b> has nothing laddering up<span class="fix">repair ›</span>`; r.onclick = () => openStarvingGoalChooser(ws, g); bk.appendChild(r); });
           goalless.forEach(it => { const r = document.createElement('div'); r.className = 'break-row'; r.innerHTML = `intent <b>${esc(it.title)}</b> serves no goal<span class="fix">repair ›</span>`; r.onclick = () => openGoalChooser(ws, it); bk.appendChild(r); });
           orphanSpecs.forEach(s => { const r = document.createElement('div'); r.className = 'break-row'; r.innerHTML = `spec <b>${esc(slugOf(s.path))}</b> has no intent<span class="fix">repair ›</span>`; r.onclick = () => openBreakChooser(ws, s); bk.appendChild(r); });
           countsEx.appendChild(bk);
@@ -1938,7 +2570,7 @@ function renderResume(wss) {
           lane.appendChild(lab); lane.appendChild(track);
           wrap.appendChild(lane);
         });
-        wrap.insertAdjacentHTML('beforeend', `<div class="hz-legend"><i><span style="color:#3a7d55">█</span> done</i><i><span style="color:var(--accent)">█</span> in progress</i><i><span style="color:var(--accent)">▢</span> ready</i><i><span style="color:var(--dim)">▢</span> triage</i><i>‖ now</i><i style="margin-left:auto">width = effort</i></div>`);
+        wrap.insertAdjacentHTML('beforeend', `<div class="hz-legend"><i><span style="color:#3a7d55">█</span> done</i><i><span style="color:var(--accent)">█</span> in progress</i><i><span style="color:var(--accent)">▢</span> ready</i><i><span style="color:var(--dim)">▢</span> shaping</i><i>‖ now</i><i style="margin-left:auto">width = effort</i></div>`);
         countsEx.appendChild(wrap);
       },
       bl: () => {
@@ -1976,7 +2608,7 @@ function renderResume(wss) {
           };
           countsEx.appendChild(row);
         });
-        countsEx.insertAdjacentHTML('beforeend', `<div style="display:flex;gap:14px;margin-top:10px;font-family:var(--mono);font-size:.58rem;color:var(--dim)"><span><span style="color:#3a7d55">●</span> ready</span><span><span style="color:#c0622a">●</span> blocked</span><span><span style="color:#8a8070">●</span> triage</span><span style="margin-left:auto">click a priority to override</span></div>`);
+        countsEx.insertAdjacentHTML('beforeend', `<div style="display:flex;gap:14px;margin-top:10px;font-family:var(--mono);font-size:.58rem;color:var(--dim)"><span><span style="color:#3a7d55">●</span> ready</span><span><span style="color:#c0622a">●</span> blocked</span><span><span style="color:#8a8070">●</span> shaping</span><span style="margin-left:auto">click a priority to override</span></div>`);
       },
       dc: () => {
         countsEx.innerHTML = '';
@@ -1986,7 +2618,7 @@ function renderResume(wss) {
       pk: () => {
         countsEx.innerHTML = '';
         if (!parked.length) { countsEx.innerHTML = '<div class="empty">nothing parked</div>'; return; }
-        parked.forEach(t => { const r = document.createElement('div'); r.className = 'loop-row'; r.innerHTML = `${IC.archive('#8a8070')}<div class="txt"><div class="t">${esc(t.title)}</div><div class="sub">${(t.meta.type || '').toUpperCase()} · ${rel(t.mtime)}</div></div>`; expandableRow(r, t); });
+        parked.forEach(t => { const r = document.createElement('div'); r.className = 'loop-row'; r.innerHTML = `${IC.archive('#8a8070')}<div class="txt"><div class="t">${esc(t.title)}</div><div class="sub">${(t.meta.type || '').toUpperCase()} · ${rel(t.mtime)}</div></div>`; expandableRow(r, t, parkedActs); });
       },
     };
     let openCount = null;
@@ -2011,7 +2643,7 @@ function renderResume(wss) {
 
     // ── park a thought (prominent, at the bottom) ──
     const park = document.createElement('div'); park.className = 'park';
-    park.innerHTML = `<span class="park-label">Park a thought</span><input class="park-input" placeholder="something to explore later — ⏎ saves">`;
+    park.innerHTML = `<span class="park-label">Steer · park a thought</span><input class="park-input" placeholder="something to explore later — ⏎ saves">`;
     const pinp = park.querySelector('.park-input');
     pinp.onkeydown = async e => {
       if (e.key !== 'Enter') return; e.preventDefault();
@@ -2034,7 +2666,7 @@ function renderResume(wss) {
 
 /* ════ LIVE LOOK ════ */
 const STAGES = [
-  ['triage', 'TRIAGE', '#8a8070'],
+  ['triage', 'SHAPING', '#8a8070'],
   ['ready', 'READY', '#c9c2b4'],
   ['in-progress', 'IN PROGRESS', '#e2a55e'],
   ['tests', 'TESTS', '#6b8fc7'],
@@ -2047,7 +2679,11 @@ function renderLanes(wss) {
   root.innerHTML = '';
   const multi = wss.length > 1;
   const all = [];
-  for (const ws of wss) for (const s of ws.specs) { s._ws = ws.name; all.push(s); }
+  for (const ws of wss) for (const s of ws.specs) {
+    s._ws = ws.name;
+    s._verifierLanes = ws.verifierLanes || [];
+    all.push(s);
+  }
 
   for (const [stage, name, color] of STAGES) {
     let items = all.filter(s => s.stage === stage);
@@ -2072,12 +2708,35 @@ function renderLanes(wss) {
       // no height and never collides with the gate label or the timestamp
       if (stage === 'in-progress') inner += `<div class="pbar"><i></i></div>
         <div class="meta"><span class="lc-status">⚡ active</span><span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
-      if (stage === 'tests') inner += `<div class="meta"><span class="gate gate-tests">⏳ tests</span>${s.meta.awaiting_verifier === true ? `<span class="gate gate-await" title="stopped at the tests gate — needs a non-builder agent (tl verify)">⊘ awaiting verifier</span>` : ''}<span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
+      if (stage === 'tests') {
+        const vBadge = verifierStateBadge(s) || (s.meta.awaiting_verifier === true
+          ? `<span class="gate gate-await" title="stopped at the tests gate — needs a non-builder agent">⊘ awaiting verifier</span>` : '');
+        inner += `<div class="meta"><span class="gate gate-tests">⏳ tests</span>${vBadge}<span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
+      }
       if (stage === 'in-review') inner += `<div class="meta"><span class="gate gate-review">◆ needs review</span>${verifyBadge(s)}<span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
       if (showOwner) inner += owner;
       if (s.notes) inner += `<div class="lc-note">✎ ${esc((s.notes.match(/— note\n(.+)/) || s.notes.match(/\n([^\n#].+)/) || [, ''])[1] || 'note').slice(0, 60)}</div>`;
+      // SHAPING only: reason chip + release → ready without opening the drawer
+      if (stage === 'triage') {
+        inner += `<div class="meta">${holdReasonChip(s.meta)}</div>`;
+        inner += `<button type="button" class="lc-release" title="Shaped — move to the ready queue">shaped → ready</button>`;
+      }
       card.innerHTML = inner;
       card.onclick = () => openDrawer(s);
+      if (stage === 'triage') {
+        const btn = card.querySelector('.lc-release');
+        if (btn) btn.onclick = async e => {
+          e.stopPropagation();
+          btn.disabled = true;
+          try {
+            await postJSON('/api/release', { ws: s._ws, spec: s.path });
+            loadSelected();
+          } catch (err) {
+            btn.disabled = false;
+            alert(err.message);
+          }
+        };
+      }
       body.appendChild(card);
     });
     lane.appendChild(body);
@@ -2307,6 +2966,22 @@ function openExperimentQueueForm(wsName, spec, prefill = {}) {
     <div class="exp-form">
       <label>runtime</label>
       <select class="q-runtime"><option value="fixture"${sel(pf.runtime, 'fixture')}>fixture — deterministic local proof</option><option value="local"${sel(pf.runtime, 'local')}>local — a local adapter run</option></select>
+      <div class="q-local"${pf.runtime === 'local' ? '' : ' style="display:none"'}>
+        <label>runner (the adapter lane a worker drains)</label>
+        <select class="q-runner">
+          <option value="codex"${sel(pf.runner, 'codex')}>codex — codex exec, sandboxed</option>
+          <option value="gemini"${sel(pf.runner, 'gemini')}>gemini — agy, skip-permissions</option>
+          <option value="claude"${sel(pf.runner, 'claude')}>claude — headless print mode</option>
+          <option value="cursor"${sel(pf.runner, 'cursor')}>cursor — cursor-agent, trusted dir</option>
+          <option value="shell"${sel(pf.runner, 'shell')}>shell — run a command</option>
+        </select>
+        <label>repo (candidates run against an isolated copy)</label>
+        <input class="q-repo" value="${esc(pf.repo || '')}" placeholder="/path/to/repo">
+        <div class="q-shell-only" style="display:none">
+          <label>command (shell runner only)</label>
+          <input class="q-command" value="${esc(pf.command || '')}" placeholder="npm test">
+        </div>
+      </div>
       <label>tl spec (optional)</label>
       <input class="q-spec" value="${esc(spec || '')}" placeholder="in-progress/some-spec/">
       <div class="row2">
@@ -2328,9 +3003,18 @@ function openExperimentQueueForm(wsName, spec, prefill = {}) {
         <div><label>budget (USD)</label><input class="q-budget" type="number" min="0" step="0.5" placeholder="none"></div>
         <div><label>timeout (min)</label><input class="q-timeout" type="number" min="0" step="1" placeholder="none"></div>
       </div>
-      <div class="hint">${variant ? "A variant queues a fresh request tagged replay_of — traceable to its origin. Your model, judge, and change tweaks ride along for the worker." : 'Leave primary/judge blank to use fixture defaults. Fixture runtime produces a deterministic proof without calling any provider.'}</div>
+      <div class="hint">${variant ? "A variant queues a fresh request tagged replay_of — traceable to its origin. Your model, judge, and change tweaks ride along for the worker." : 'Leave primary/judge blank to use fixture defaults. Fixture runtime produces a deterministic proof without calling any provider. Local runtime needs a runner lane + repo — a worker drains it headlessly (quirks encoded per docs/headless-lanes.md).'}</div>
       <div class="exp-actions"><button class="q-cancel">cancel</button><button class="q-save">${variant ? 'queue variant →' : 'queue →'}</button></div>
     </div>`;
+  // local runtime reveals the bridge fields (runner + repo); shell reveals command
+  const syncLocal = () => {
+    const isLocal = dr.querySelector('.q-runtime').value === 'local';
+    dr.querySelector('.q-local').style.display = isLocal ? '' : 'none';
+    dr.querySelector('.q-shell-only').style.display = isLocal && dr.querySelector('.q-runner').value === 'shell' ? '' : 'none';
+  };
+  dr.querySelector('.q-runtime').onchange = syncLocal;
+  dr.querySelector('.q-runner').onchange = syncLocal;
+  syncLocal();
   dr.querySelector('.q-cancel').onclick = () => document.body.classList.remove('open');
   dr.querySelector('.q-save').onclick = async () => {
     const body = {
@@ -2343,6 +3027,13 @@ function openExperimentQueueForm(wsName, spec, prefill = {}) {
       budget_usd: dr.querySelector('.q-budget').value.trim(),
       timeout_minutes: dr.querySelector('.q-timeout').value.trim(),
     };
+    if (body.runtime === 'local') {
+      // the bridge fields — processQueueRequests refuses a local request without them
+      body.runner = dr.querySelector('.q-runner').value;
+      body.repo = dr.querySelector('.q-repo').value.trim();
+      const cmd = dr.querySelector('.q-command').value.trim();
+      if (cmd) body.command = cmd;
+    }
     if (variant) {
       body.replay_of = pf.variantOf;
       const notes = dr.querySelector('.q-notes').value.trim();
@@ -2459,10 +3150,11 @@ function logLine(time, verb, vColor, msg, detail) {
   feed.scrollTop = feed.scrollHeight;
 }
 
-const NOISE_DIRS = ['specs', 'in-progress', 'done', 'triage', 'intents', 'threads', '_metrics', 'context', 'outcome'];
+const NOISE_DIRS = ['specs', 'in-progress', 'tests', 'in-review', 'done', 'triage', 'intents', 'threads', '_metrics', 'context', 'outcome'];
 function classify(e) {
-  const C = getComputedStyle(document.body);
   const ok = '#6fae84', info = '#9b8cf0', warn = '#e2a55e', bad = '#d96a5a', dim = '#8a8070';
+  // Defense in depth: server already drops tl-clitest-* fixtures; skip if any leak.
+  if (e.ws && /^tl-clitest-/.test(e.ws)) return null;
   if (e.log) {
     const l = e.log.line || {};
     switch (e.log.file) {
@@ -2474,13 +3166,17 @@ function classify(e) {
       default: return ['LOG', dim, e.log.file + '.jsonl', '+1 line'];
     }
   }
+  // Server-paired lifecycle move (specs/foo → in-progress/foo, etc.)
+  if (e.move && e.move.from && e.move.to) {
+    return ['MOVE', info, `${e.move.from}/ → ${e.move.to}/`, 'lifecycle'];
+  }
   const p = e.path || '';
   if (!e.log && e.exists && !/\.\w+$/.test(p)) {
     const segs = p.split('/');
     if (NOISE_DIRS.includes(segs[segs.length - 1])) return null;
-    return ['MOVE', info, p, ''];
+    return ['NEW', info, p, 'folder'];
   }
-  if (!e.exists) return ['DEL', bad, p, ''];
+  if (!e.exists) return ['DEL', bad, p, 'deleted'];
   const d = e.change ? `+${e.change.added}${e.change.removed ? ' −' + e.change.removed : ''}` : '';
   if (/^threads\//.test(p)) return ['THREAD', info, p.replace(/^threads\//, ''), e.change && e.change.status === 'A' ? 'captured' : 'updated'];
   if (/priorities\.md$/i.test(p)) return ['RANK', warn, 'PRIORITIES.md rewritten', d];

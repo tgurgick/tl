@@ -41,6 +41,7 @@ Each verb is one `skills/<name>/SKILL.md` — read the skill and follow its step
 - `tl loop` — Run a tl workspace's specs in a loop toward a goal — triage, run the conflict-free batch to in-review, check the goal's key results, and iterate until they're met, the queue is empty, or a safety cap trips.
 - `tl map` — Paint the throughline — the contribution ladder showing what every spec ladders up to (goal → intent → spec → outcome), overlaid with dependencies, and where the chain breaks.
 - `tl new` — Guided setup of a new tl project workspace — interviews for goals, allocation targets, priority rules, and first intents, then scaffolds projects/<name>/ and runs the first triage.
+- `tl open` — Start a project's operating path in one command (`tl up`; `open` is a short-lived alias) — bring up the cockpit, install or refresh the workspace's automation schedule from TRIAGE.yml, and surface the one next human action.
 - `tl promote` — Turn a parked thread into a draft intent through a short Q&A — read the thread, interview for the outcome, the goal it ladders to, and success metrics, then propose an intent and, on approval, write it and flip the thread to promoted.
 - `tl recall` — Unified retrieval across a tl workspace's memory — search intents, specs (all stages), threads, and done outcomes to answer "didn't we already discuss this?".
 - `tl reflect` — Learn from a tl workspace's history — read the override reasons and outcome feedback, propose evidence-backed changes to TRIAGE.yml (weights and rules), and scan the dependency graph for work that can run in parallel.
@@ -48,18 +49,18 @@ Each verb is one `skills/<name>/SKILL.md` — read the skill and follow its step
 - `tl review` — Sign off the work waiting in a tl workspace's in-review stage — show what each spec changed against its acceptance criteria, then accept it to done or kick it back to in-progress with notes.
 - `tl run` — Work the ready queue — claim the largest conflict-free batch of ready specs and carry each to in-review.
 - `tl sync` — Sync a tl workspace with JIRA — import assigned issues as specs and epics as intents, push TL status and human priority changes back.
-- `tl triage` — Rank a tl workspace's backlog — score specs against the goals, allocation targets, and rules in its TRIAGE.yml, detect human priority overrides, and rewrite PRIORITIES.md.
-- `tl ui` — Start the Throughline web UI and pop it open in the browser — live board, ranked backlog, activity feed, and file changes for watching agents work.
+- `tl triage` — Rank a tl workspace's backlog — score specs against the goals, allocation targets, and rules in its TRIAGE.yml, detect human priority overrides, and rewrite PRIORITIES.md via targeted priority-field edits — never whole-frontmatter rewrites, never stage folders or claim fields, and re-stat before every write (a spec that moved since inventory is skipped, not restored).
+- `tl ui` — Start the Throughline web UI and pop it open in the browser — live board (Learn / Run / Review surfaces), ranked backlog, activity feed, and file changes for watching agents work.
 - `tl verify` — Independently verify specs waiting at the TESTS gate — a non-builder agent reviews the diff against the acceptance criteria and review gates, remediates with the builder (bounded), writes the ALIGNMENT record, and advances the spec to in-review.
 
 ## Critical rules
 
 1. **Status IS the folder.** A spec's lifecycle stage is its directory. To change the stage, move the folder: specs/ (ready) → in-progress/ → tests/ → in-review/ → done/. If a status: field and the folder disagree, the folder wins.
 2. **Claim by moving.** To start a spec, move specs/<slug>/ → in-progress/<slug>/ and set status: in-progress. The move is the claim — once it leaves specs/, no other agent can pick it up.
-3. **Stop at in-review — never done.** When work is complete and verification is green, write outcome/FEEDBACK.md and move the spec to in-review/ (status: in-review). An agent never signs off its own work; only a human accepts it to done/. This gate is what makes parallel fan-out safe.
+3. **Stop at in-review — never done.** When work is complete and verification is green, write outcome/FEEDBACK.md and move the spec to in-review/ (status: in-review). An agent never moves any spec to done/ — its own or another's: builder and verifier both stop at in-review/, and only a human accepts work into done/. This gate is what makes parallel fan-out safe.
 4. **Honor scope and NOTES.** Do the work only within the spec's Files to touch; treat Do not touch as a hard boundary. If a spec has NOTES.md, it is as binding as the acceptance criteria.
 5. **Capture threads.** Anything worth not losing but out of scope — a decision, follow-up, risk, or discovery — becomes a file in threads/ (see the capture verb). An undocumented discovery is a leak; it does not justify widening the current spec.
-6. **Files only.** Every change is a markdown/JSONL edit plus a folder move. No hidden state, no separate queue — specs/ is the queue, the folders are the status.
+6. **Files only.** Every change is a markdown/JSONL edit plus a folder move. No hidden state; specs/ is the only queue for *new* work, but a pending `_dispatch/` continuation outranks fresh claims — the folders are the status.
 
 ## Quickstart: work one spec
 

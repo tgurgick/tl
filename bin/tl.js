@@ -6,9 +6,11 @@
 // SKILL.md as a prompt for whatever agent is running. The CLI does the
 // bookkeeping; the agent supplies the reasoning.
 //
-//   tl resume [ws]        reconstruct context — stage counts, ready top, open loops
+//   tl up     [ws]        start the operating path — cockpit + automation + next action
 //   tl run    [ws] [spec] work the ready queue — pick the conflict-free batch
 //   tl review [ws]        sign off in-review work — criteria + feedback
+//   tl resume [ws]        reconstruct context — stage counts, ready top, open loops
+//   (`open` is a short-lived alias of `up`)
 //
 // Workspace resolution mirrors the skills: an arg names a workspace under
 // projects/, or if exactly one exists use it, else list and error.
@@ -16,9 +18,41 @@
 const fs = require('fs');
 const path = require('path');
 
-// The repo root is the parent of bin/ — the CLI is installed from this repo.
-const ROOT = path.resolve(__dirname, '..');
-const SKILLS = path.join(ROOT, 'skills');
+// The install root is the parent of bin/ — where skills/, ui/, and lib/ live.
+// Projects may live elsewhere: TL_ROOT / --root override ROOT (mirrors
+// ui/server.js --root) so tests and multi-root setups can point projects/ at
+// a scratch tree without relocating the tool itself.
+const INSTALL_ROOT = path.resolve(__dirname, '..');
+
+function flagValue(argv, name) {
+  const dash = '--' + name;
+  const eq = dash + '=';
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === dash && argv[i + 1] && !String(argv[i + 1]).startsWith('-')) return argv[i + 1];
+    if (argv[i].startsWith(eq)) return argv[i].slice(eq.length);
+  }
+  return null;
+}
+
+function resolveRoot(argv = process.argv.slice(2)) {
+  const fromFlag = flagValue(argv, 'root');
+  if (fromFlag) return path.resolve(fromFlag);
+  if (process.env.TL_ROOT) return path.resolve(process.env.TL_ROOT);
+  return INSTALL_ROOT;
+}
+
+function stripRootFlag(argv) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--root') { i++; continue; }
+    if (argv[i].startsWith('--root=')) continue;
+    out.push(argv[i]);
+  }
+  return out;
+}
+
+const ROOT = resolveRoot();
+const SKILLS = path.join(INSTALL_ROOT, 'skills');
 
 // Shared logic lives in lib/ so the CLI and ui/server.js can't drift into
 // separate copies of the parser, the batch rules, or the path guard.
@@ -28,8 +62,18 @@ const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflic
 const { runFixtureExperiment } = require('../lib/experiment-fixture');
 const { selectWinner, applyWinner, rejectWinner, sendWinnerToReview } = require('../lib/experiment-apply');
 const { queueExperiment, drainQueue, readQueueRows } = require('../lib/experiment-queue');
+const { replayExperiment, replayReport, parseCandidate, createSuite, listSuites, selectSuiteExperiments, replaySuite } = require('../lib/experiment-replay');
 const { canAdvanceToReview, verificationPolicy } = require('../lib/verification-gate');
-const { execFileSync } = require('child_process');
+const {
+  readAutomation, laneIssues, scheduleArtifacts, installLaunchd, automationStatus,
+  experimentScheduleSummary,
+} = require('../lib/automation');
+const {
+  verifyTick, applyVerifyHumanDecision, verifierStatusOf, readVerifierLanes,
+  verifierLaneIssues, builderOf, writeVerifyRequest, readVerifyRequests,
+  maybeAutoInitiateExperiment, workspaceRepoDir,
+} = require('../lib/worker');
+const { execFileSync, spawn, spawnSync } = require('child_process');
 
 // ---------- workspace resolution (same convention as the skills) ----------
 
@@ -116,7 +160,7 @@ function readAllSpecs(dir) {
 function dirtyGitPaths() {
   try {
     const raw = execFileSync('git', ['status', '--porcelain'], {
-      cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+      cwd: INSTALL_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
     });
     const paths = [];
     for (const line of raw.split('\n')) {
@@ -134,14 +178,16 @@ function dirtyGitPaths() {
 
 // Does this workspace's `repo` frontmatter point at the current TL repo? Only
 // then do dirty git paths of THIS checkout belong in the conflict set. Best
-// effort: tolerate `~`, trailing slashes, and relative forms.
+// effort: tolerate `~`, trailing slashes, and relative forms. Compare against
+// INSTALL_ROOT (the real checkout), not a TL_ROOT/--root projects overlay.
 function workspaceIsThisRepo(specs) {
   const repoRef = specs.map(s => s.meta && s.meta.repo).find(Boolean);
   if (!repoRef) return false;
   let r = String(repoRef).trim().replace(/\/+$/, '');
   if (r.startsWith('~')) r = path.join(process.env.HOME || '', r.slice(1));
   try {
-    return path.resolve(r) === path.resolve(ROOT) || path.basename(path.resolve(r)) === path.basename(ROOT);
+    return path.resolve(r) === path.resolve(INSTALL_ROOT)
+      || path.basename(path.resolve(r)) === path.basename(INSTALL_ROOT);
   } catch { return false; }
 }
 
@@ -316,15 +362,226 @@ function topGoal(triage) {
   return goals.slice().sort((a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0))[0];
 }
 
+// ---------- tl up (alias: open) ----------
+
+// The one next human action — resume-shaped and deterministic, so `tl up`
+// ends on a single pointer instead of a wall of state. Priority order: the
+// review gate first (sign-off is the human's job the automation can't do),
+// then verifier hand-offs, then blocked work, then pending kickbacks, then
+// the ready queue, then an empty backlog.
+function nextHumanAction(wsName, specs, conts, automationRunning) {
+  const inReview = specs.filter(s => s.stage === 'in-review');
+  if (inReview.length) {
+    return {
+      action: `Review ${inReview.length} spec${inReview.length === 1 ? '' : 's'} awaiting sign-off — run: tl review ${wsName}`,
+      reason: 'completed work pools at in-review; only a human accepts it to done/',
+    };
+  }
+  const awaiting = specs.filter(s => s.meta.awaiting_verifier === true && ['tests', 'in-progress'].includes(s.stage));
+  if (awaiting.length) {
+    return {
+      action: `Verify ${awaiting.length} spec${awaiting.length === 1 ? '' : 's'} at the tests gate — run: tl verify ${wsName} --agent <not-the-builder>`,
+      reason: 'builders stopped at tests/ per the independent-verifier policy; a different agent must check the work',
+    };
+  }
+  const blocked = specs.filter(s => String(s.meta.status || '').toLowerCase() === 'blocked' && s.meta.awaiting_verifier !== true);
+  if (blocked.length) {
+    const b = blocked[0];
+    return {
+      action: `Unblock ${b.title} (${b.path})${b.meta.blocked_reason ? ' — ' + String(b.meta.blocked_reason).trim() : ''}`,
+      reason: 'blocked work stalls the throughline until a human clears the reason',
+    };
+  }
+  if (conts.live.length) {
+    return {
+      action: `${conts.live.length} kicked-back spec${conts.live.length === 1 ? ' waits' : 's wait'} for resume — ${automationRunning ? 'the owning lane\'s next tick picks it up' : 'run: tl run ' + wsName}`,
+      reason: 'pending continuations outrank fresh claims',
+    };
+  }
+  const ready = specs.filter(s => s.stage === 'ready');
+  if (ready.length) {
+    return {
+      action: `${ready.length} ready spec${ready.length === 1 ? '' : 's'} queued — ${automationRunning ? 'automation drains them on its next tick' : 'run: tl run ' + wsName + ' (or enable automation:)'}`,
+      reason: 'the ready/ stage is the queue',
+    };
+  }
+  const triage = specs.filter(s => s.stage === 'triage');
+  if (triage.length) {
+    return {
+      action: `${triage.length} spec${triage.length === 1 ? '' : 's'} held for shaping in triage/ — shape the blocker or release to specs/ (cockpit release button, or a folder move)`,
+      reason: 'triage/ is the shaping hold pen; nothing runs until authorized and released to ready',
+    };
+  }
+  return {
+    action: 'Backlog empty — capture a thought (tl capture) or decompose the next intent (tl decompose).',
+    reason: '',
+  };
+}
+
+// Is the cockpit already listening? A short local probe — never a hang.
+function probeUi(port) {
+  return new Promise(resolve => {
+    const http = require('http');
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/workspaces', timeout: 400 }, res => {
+      res.resume();
+      resolve(true);
+    });
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+  });
+}
+
+const UI_PORT = 4400;
+
+// tl up [ws] [--dry-run] [--print-schedule] — one command starts a
+// project's operating path: cockpit up, automation schedule installed or
+// refreshed from TRIAGE.yml `automation:`, one next human action. It never
+// claims or moves specs; the schedule's worker ticks spawn the sessions that
+// do, and everything still pools at the human review gate. `open` is a
+// short-lived alias of the same handler.
+//
+// --print-schedule is a first-class outcome, not a debug flag: agent-side
+// installs can hang on macOS permission prompts, so the complete paste-able
+// cron line + launchd plist must always be one command away.
+async function cmdUp(args) {
+  let dryRun = false, printSchedule = false;
+  const pos = [];
+  for (const a of args) {
+    if (a === '--dry-run') dryRun = true;
+    else if (a === '--print-schedule') printSchedule = true;
+    else pos.push(a);
+  }
+  const ws = resolveWorkspace(pos[0]);
+  const cfg = parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '') || {};
+  const automation = readAutomation(cfg);
+
+  // Loud failure before anything is installed or printed as installable: a
+  // listed lane without a command would be a schedule that ticks into error
+  // every interval — or worse, one that looks green while nothing moves.
+  const issues = laneIssues(automation, cfg);
+  if (automation.enabled && issues.length) {
+    for (const i of issues) process.stderr.write(`tl up: ${i.problem} — fix: ${i.hint}\n`);
+    fail('automation profile is misconfigured — no schedule was generated or installed.');
+  }
+
+  // Schedule ticks `cd` into the install root (bin/tl-worker.js lives there);
+  // ROOT may be a TL_ROOT/--root projects overlay without the tool tree.
+  const artifacts = automation.enabled
+    ? scheduleArtifacts({ root: INSTALL_ROOT, wsName: ws.name, automation })
+    : null;
+
+  // ---- --print-schedule: paste-able artifacts only, nothing else ----
+  if (printSchedule) {
+    if (!automation.enabled) {
+      fail('automation is not enabled for "' + ws.name + '" — add an automation: block to its TRIAGE.yml (contract: _templates/SCHEMA.md; sample: docs/headless-lanes.md).');
+    }
+    out('# ===== tl up --print-schedule: ' + ws.name + ' =====');
+    out('#');
+    out('# Option A — cron (any platform):');
+    out('#');
+    out(artifacts.cron);
+    out('#');
+    out('# Option B — launchd (macOS). Write the plist below to:');
+    out('#   ' + artifacts.plist.path);
+    out('# then load it yourself (this can trigger a macOS permission prompt):');
+    out('#   launchctl load ' + artifacts.plist.path);
+    out('#');
+    out(artifacts.plist.content);
+    return;
+  }
+
+  // skill stays at skills/open/ (least churn); the CLI command is `up`.
+  printSkill('open');
+  out('\n===== UP: ' + ws.name + (dryRun ? ' (dry run)' : '') + ' =====\n');
+
+  // ---- (b) the cockpit: start or reuse, idempotent ----
+  out('## Cockpit (UI)');
+  const uiUp = await probeUi(UI_PORT);
+  if (uiUp) {
+    out(`already running — http://localhost:${UI_PORT} (reused)`);
+  } else if (dryRun) {
+    out(`would start: node ui/server.js --port ${UI_PORT} --root ${ROOT}  → http://localhost:${UI_PORT}`);
+  } else {
+    const child = spawn(process.execPath, [path.join(INSTALL_ROOT, 'ui', 'server.js'), '--port', String(UI_PORT), '--root', ROOT], {
+      detached: true, stdio: 'ignore',
+    });
+    child.unref();
+    out(`started — http://localhost:${UI_PORT}`);
+  }
+
+  // ---- (c) automation: install or refresh the single per-workspace schedule ----
+  out('\n## Automation');
+  if (!automation.configured) {
+    out(`not configured — no behavior change. To schedule headless lanes, add an automation: block to ${ws.name}/TRIAGE.yml (contract: _templates/SCHEMA.md; sample: docs/headless-lanes.md).`);
+  } else if (!automation.enabled) {
+    out('configured but disabled (automation.enabled is not literal true) — nothing installed.');
+  } else {
+    out(`profile: every ${automation.intervalMinutes}m · lanes: ${automation.lanes.join(', ') || '(none)'}`
+      + (automation.verify ? ' · verify tick: isolated verifier worker (≤1 awaiting-verifier claim per tick)' : '')
+      + ` · experiment: ${automation.experiment}`);
+    out(experimentScheduleSummary(automation));
+    if (automation.experiment === 'drain') {
+      for (const c of artifacts.commands.filter(x => x.kind === 'experiment-drain')) {
+        out(`  will run: ${c.command}`);
+      }
+    }
+    if (dryRun) {
+      out('dry run — would write: ' + artifacts.plist.path);
+      out('dry run — would run:   launchctl unload/load ' + artifacts.plist.path + '  (macOS; can trigger a permission prompt)');
+      out('dry run — cron alternative (paste yourself):');
+      out(artifacts.cron);
+      out(`nothing written, nothing loaded, no agent spawned. \`tl up ${ws.name} --print-schedule\` emits the full paste-able plist + cron.`);
+    } else if (process.platform === 'darwin') {
+      const res = installLaunchd(artifacts.plist, {
+        exec: (c, a) => execFileSync(c, a, { stdio: 'ignore' }),
+      });
+      if (res.written) out('wrote ' + artifacts.plist.path);
+      if (res.loaded) out('loaded via launchctl — ticking every ' + automation.intervalMinutes + 'm.');
+      if (res.error) {
+        out('install incomplete: ' + res.error);
+        out('paste path instead: tl up ' + ws.name + ' --print-schedule');
+      }
+    } else {
+      out('non-macOS: tl never runs crontab for you — paste this into `crontab -e`:');
+      out(artifacts.cron);
+    }
+    out('log: ' + artifacts.logPath);
+  }
+
+  // Status after any install, so the state line reflects what just happened.
+  const status = automationStatus({ wsDir: ws.dir, wsName: ws.name, root: INSTALL_ROOT, cfg });
+  if (status.paused) {
+    out(`PAUSED — projects/${ws.name}/PAUSE is present: every lane tick exits without spawning. Remove the file to resume.`);
+  }
+  out('status: ' + status.state + (status.stuckAtTests
+    ? ` · stuck at tests: ${status.stuckAtTests} (awaiting verification — tl verify ${ws.name})`
+    : ''));
+
+  // ---- (d) one next human action ----
+  const specs = readAllSpecs(ws.dir);
+  const conts = readContinuations(ws.dir, specs);
+  out('\n## Next human action');
+  const next = nextHumanAction(ws.name, specs, conts, automation.enabled && !status.paused && !issues.length);
+  out(next.action);
+  if (next.reason) out('why: ' + next.reason);
+
+  hr();
+  out('tl up never claims or moves specs — worker ticks spawn run sessions, and finished work pools at in-review/ for `tl review`. Workspace "' + ws.name + '".');
+}
+
 // ---------- tl run ----------
 
 function cmdRun(args) {
-  // extract --agent <me> (heterogeneous routing) from the positional args
+  // extract --agent <me> (heterogeneous routing) and --dry-run from positionals.
+  // Dry-run prints the same brief but never auto-initiates experiments (parity
+  // with the headless worker tick's dry_run early return).
   let agent = null;
+  let dryRun = false;
   const pos = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--agent') agent = String(args[++i] || '').toLowerCase();
     else if (args[i].startsWith('--agent=')) agent = args[i].slice(8).toLowerCase();
+    else if (args[i] === '--dry-run') dryRun = true;
     else pos.push(args[i]);
   }
   const ws = resolveWorkspace(pos[0]);
@@ -352,7 +609,10 @@ function cmdRun(args) {
   // The existence check is fs, never a shell-out.
   const preflight = {
     isRepo: p => fs.existsSync(path.join(p, '.git')),
-    tlRoot: ROOT,
+    // Containment is about the real checkout (INSTALL_ROOT), not a projects/
+    // overlay from TL_ROOT/--root — otherwise the tl-developing-tl exemption
+    // breaks when tests point ROOT at a scratch tree.
+    tlRoot: INSTALL_ROOT,
     workspaceRepo: workspaceRepoRef(ws.dir),
   };
   const allReady = specs.filter(s => s.stage === 'ready');
@@ -367,7 +627,27 @@ function cmdRun(args) {
   // Continuation dispatches outrank fresh claims: kicked-back / mid-flight work
   // resumes before anything new is started (skills/run step 0). The ready queue
   // waits for the next run; its specs are listed as held, not claimed.
+  // Ownership mirrors lib/worker.js continuationEligible: claimed_by is binding;
+  // only when unclaimed does agent:/any decide. Without --agent, all live conts
+  // remain visible (unchanged). With --agent, other-lane-only → fall through.
   const conts = readContinuations(ws.dir, specs);
+  const continuationEligible = (spec, lane) => {
+    const claimed = String(spec.meta.claimed_by || '').toLowerCase();
+    if (claimed) return claimed === lane;
+    const a = String(spec.meta.agent || 'any').toLowerCase();
+    return a === lane || a === 'any';
+  };
+  const continuationOwner = (spec) => {
+    const claimed = String(spec.meta.claimed_by || '').toLowerCase();
+    if (claimed) return claimed;
+    return String(spec.meta.agent || 'any').toLowerCase();
+  };
+  const otherLaneLive = agent
+    ? conts.live.filter(c => !continuationEligible(c.spec, agent))
+    : [];
+  const live = agent
+    ? conts.live.filter(c => continuationEligible(c.spec, agent))
+    : conts.live;
   if (conts.stale.length) {
     out('## Stale continuation dispatches');
     for (const c of conts.stale) {
@@ -375,16 +655,24 @@ function cmdRun(args) {
     }
     out('');
   }
-  if (conts.live.length && named) {
-    // a named run is an explicit human choice — surface the pending resume, honor the name.
-    out('Note: ' + conts.live.length + ' pending continuation dispatch(es) — kicked-back work is waiting (resume it first unless this named run is intentional).\n');
+  if (otherLaneLive.length && !live.length) {
+    // Other agents' kickbacks must not hold this lane's ready queue.
+    out('## Other-lane continuation dispatches');
+    for (const c of otherLaneLive) {
+      out(`- ${c.spec.title} (${c.spec.path}) [${c.file}] — owned by ${continuationOwner(c.spec)}`);
+    }
+    out('');
   }
-  if (conts.live.length && !named) {
+  if (live.length && named) {
+    // a named run is an explicit human choice — surface the pending resume, honor the name.
+    out('Note: ' + live.length + ' pending continuation dispatch(es) — kicked-back work is waiting (resume it first unless this named run is intentional).\n');
+  }
+  if (live.length && !named) {
     // Several kickbacks can be pending at once — they fan out like a fresh
     // batch: ordered (priority, then oldest kickback), capped at the calm cap,
     // and conflict-checked against each other so two resumed specs never share
     // a file. Held continuations stay pending for the next run, with a reason.
-    const resumed = selectContinuations(conts.live, { cap, preflight });
+    const resumed = selectContinuations(live, { cap, preflight });
     out('## Continuation dispatches — resume these before fresh claims (' + resumed.batch.length + ')');
     for (const c of resumed.batch) {
       out(`\n### ${c.spec.title}  (${c.spec.path}) [${c.file}]`);
@@ -392,9 +680,10 @@ function cmdRun(args) {
       out('**NOTES.md excerpt (binding — read the full file first)**');
       out(notesExcerpt(c.spec.notes));
     }
-    if (resumed.held.length || ready.length) {
+    if (resumed.held.length || ready.length || otherLaneLive.length) {
       out('\n## Held back for the next run');
       for (const c of resumed.held) out(`- ${c.spec.title} (${c.spec.path}) [${c.file}] — ${c.holdReason} (dispatch stays pending)`);
+      for (const c of otherLaneLive) out(`- ${c.spec.title} (${c.spec.path}) [${c.file}] — owned by ${continuationOwner(c.spec)}`);
       for (const s of ready) out(`- ${s.title} (${s.path}) — continuation pending, resume in-progress work first`);
     }
     hr();
@@ -460,6 +749,25 @@ function cmdRun(args) {
     out('\n## Claim the whole batch first (folder moves before any work)');
     for (const s of batch) {
       out(`- ${s.path} → in-progress/${specSlug(s.path)}/  (set status: in-progress, stamp claimed_by + claimed_at)`);
+    }
+  }
+
+  // Fresh interactive claims: same auto-initiation as the headless worker
+  // (maybeAutoInitiateExperiment) after the claim is committed in the brief.
+  // Continuations return earlier and never reach here. Dry runs skip. The
+  // helper is failure-silent by contract; the outer try is belt-and-braces so
+  // a broken experiment path never blocks or delays the canonical run brief.
+  if (batch.length && !dryRun) {
+    for (const s of batch) {
+      try {
+        maybeAutoInitiateExperiment({
+          wsDir: ws.dir,
+          specPath: s.path,
+          spec: s,
+          repoDir: workspaceRepoDir(ws.dir, s),
+          print: out,
+        });
+      } catch { /* never throw past the brief */ }
     }
   }
 
@@ -531,32 +839,85 @@ function cmdReview(args) {
 
 // ---------- tl verify ----------
 
-// The independent-verifier handoff: list specs waiting at the TESTS gate with
-// `awaiting_verifier: true`, excluding any this agent built — a builder never
-// verifies its own work. Prints the verify SKILL plus a per-spec brief
-// (criteria, the builder's FEEDBACK claim, the VERIFY request, gate policy).
+// Independent-verifier handoff + isolated-worker drain. Default is status/
+// brief output (builder exclusion, queued/running/blocked/human-decision-
+// required, verified-by). `--execute` runs one isolated verify tick (same as
+// `tl-worker --mode verify`). Human mutation decisions are explicit CLI flags
+// — never auto-applied.
 function cmdVerify(args) {
-  let agent = null;
+  let agent = null, execute = false, decide = null, note = '', dispatch = false, targetLane = 'any-other';
   const pos = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--agent') agent = String(args[++i] || '').toLowerCase();
     else if (args[i].startsWith('--agent=')) agent = args[i].slice(8).toLowerCase();
+    else if (args[i] === '--execute') execute = true;
+    else if (args[i] === '--dispatch') dispatch = true;
+    else if (args[i] === '--target-lane') targetLane = String(args[++i] || 'any-other').toLowerCase();
+    else if (args[i].startsWith('--target-lane=')) targetLane = args[i].slice(14).toLowerCase();
+    else if (args[i] === '--authorize-fix-forward') decide = 'authorize-fix-forward';
+    else if (args[i] === '--kick-back') decide = 'kick-back';
+    else if (args[i] === '--note') note = String(args[++i] || '');
+    else if (args[i].startsWith('--note=')) note = args[i].slice(7);
     else pos.push(args[i]);
   }
   const ws = resolveWorkspace(pos[0]);
   const named = pos[1];
+  const triage = parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '') || {};
+
+  if (decide) {
+    if (!named) fail('Human decision requires a spec slug: tl verify <ws> <spec> --authorize-fix-forward|--kick-back');
+    try {
+      const got = applyVerifyHumanDecision(ws.dir, { slug: named, action: decide, note });
+      out(`Human decision recorded: ${decide} → ${got.path}`);
+      out('No mutation was auto-applied. A continuation dispatch is pending for the next run.');
+    } catch (e) { fail(e && e.message ? e.message : String(e)); }
+    return;
+  }
+
+  if (dispatch) {
+    if (!named) fail('Dispatch requires a spec: tl verify <ws> <spec> --dispatch [--target-lane <lane>|any-other]');
+    try {
+      const got = writeVerifyRequest(ws.dir, { spec: named, targetLane, source: 'cli' });
+      out(`Wrote verify request ${got.path} (target_lane: ${got.request.target_lane}).`);
+      out('UI/CLI never spawn verifier CLIs — drain with `tl verify --execute` or the scheduled verify tick.');
+    } catch (e) { fail(e && e.message ? e.message : String(e)); }
+    return;
+  }
+
+  if (execute) {
+    const which = bin => {
+      try {
+        const r = spawnSync('which', [bin], { encoding: 'utf8' });
+        return r.status === 0 ? String(r.stdout || '').trim() : '';
+      } catch { return ''; }
+    };
+    const result = verifyTick({
+      root: INSTALL_ROOT, wsDir: ws.dir, wsName: ws.name,
+      preferLane: agent || null, which,
+    });
+    out(`verify tick: code ${result.code}` + (result.picked ? ` · ${result.picked}` : '')
+      + (result.outcome ? ` · ${result.outcome}` : '')
+      + (result.reason ? ` · ${result.reason}` : ''));
+    if (result.code !== 0) process.exit(result.code);
+    return;
+  }
+
   printSkill('verify');
 
   const specs = readAllSpecs(ws.dir);
-  const triage = parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '');
   const policy = verificationPolicy(triage);
+  const vLanes = readVerifierLanes(triage);
+  const vIssues = verifierLaneIssues(triage);
 
-  const builderOf = s => String(s.meta.claimed_by || s.meta.agent || '').toLowerCase();
-  let awaiting = specs.filter(s => ['tests', 'in-progress'].includes(s.stage) && s.meta.awaiting_verifier === true);
+  let awaiting = specs.filter(s => ['tests', 'in-progress'].includes(s.stage) && (
+    s.meta.awaiting_verifier === true
+    || String(s.meta.verifier_status || '').toLowerCase() === 'human-decision-required'
+    || String(s.meta.verifier_status || '').toLowerCase() === 'blocked'
+  ));
   if (named) {
     const want = specSlug(named);
     awaiting = awaiting.filter(s => specSlug(s.path) === want);
-    if (!awaiting.length) fail(`Named spec "${named}" is not awaiting verification. Awaiting: ${specs.filter(s => s.meta.awaiting_verifier === true).map(s => s.path).join(', ') || '(none)'}`);
+    if (!awaiting.length) fail(`Named spec "${named}" is not in the verify surface. Queue: ${specs.filter(s => s.meta.awaiting_verifier === true).map(s => s.path).join(', ') || '(none)'}`);
   }
   const mine = agent ? awaiting.filter(s => builderOf(s) === agent) : [];
   if (agent) awaiting = awaiting.filter(s => builderOf(s) !== agent);
@@ -564,6 +925,16 @@ function cmdVerify(args) {
   out('\n===== VERIFY QUEUE: ' + ws.name + (agent ? ' (verifier: ' + agent + ')' : '') + ' =====\n');
   out('Policy: require_independent_verifier: ' + policy.required +
     (policy.allowSelfCheckFor.length ? ' · self-check allowed for: ' + policy.allowSelfCheckFor.join(', ') : ' · self-check allowed for: (none)'));
+  out('Verifier lanes: ' + (vLanes.map(l => l.id).join(', ') || '(none configured)'));
+  if (vIssues.length) {
+    out('Lane issues:');
+    for (const i of vIssues) out(`  - ${i.lane || '?'}: ${i.problem}`);
+  }
+  const pendingReqs = readVerifyRequests(ws.dir).filter(r => r.request.status === 'pending');
+  if (pendingReqs.length) {
+    out(`Pending dispatch requests: ${pendingReqs.length}`);
+    for (const r of pendingReqs) out(`  - ${r.file} → ${r.request.spec} (target: ${r.request.target_lane})`);
+  }
 
   if (mine.length) {
     out('\n## Built by you — cannot verify (' + mine.length + ')');
@@ -575,15 +946,25 @@ function cmdVerify(args) {
     return;
   }
 
-  out(`\n## Awaiting verification (${awaiting.length}, oldest first)\n`);
+  out(`\n## Verify surface (${awaiting.length}, oldest first)\n`);
   for (const s of awaiting.sort((a, b) => a.mtime - b.mtime)) {
+    const st = verifierStatusOf(s, { wsDir: ws.dir });
     out('### ' + s.title + '  (' + s.path + ')');
-    out(`Builder: ${builderOf(s) || '(unstamped)'} · type: ${s.meta.type || '?'} · requested: ${s.meta.requested_at || '?'}`);
+    out(`Status: ${st.status}` + (st.verified_by ? ` · verified-by: ${st.verified_by}` : '')
+      + ` · builder: ${builderOf(s) || '(unstamped)'} · type: ${s.meta.type || '?'} · requested: ${s.meta.requested_at || '?'}`);
+    if (s.meta.blocked_reason) out(`Blocked reason: ${s.meta.blocked_reason}`);
     const verifyReq = s.dir ? safeRead(path.join(s.dir, 'VERIFY.md')) : null;
     if (verifyReq) { out('\n**VERIFY.md (the request)**'); out(verifyReq.trim()); }
     const acc = section(s.body, 'Acceptance criteria');
     if (acc) { out('\n**Acceptance criteria (verify against the diff, not the claim)**'); out(acc); }
     if (s.feedback) { out('\n**outcome/FEEDBACK.md (the builder\'s claim)**'); out(s.feedback.trim()); }
+    const notes = s.dir ? safeRead(path.join(s.dir, 'NOTES.md')) : null;
+    if (st.status === 'human-decision-required') {
+      out('\n**Human decision required** — mutation proposals were NOT applied.');
+      if (notes) out(notes.trim());
+      out(`Choices: tl verify ${ws.name} ${specSlug(s.path)} --authorize-fix-forward [--note "..."]`);
+      out(`         tl verify ${ws.name} ${specSlug(s.path)} --kick-back [--note "..."]`);
+    }
     const alignment = s.dir ? safeRead(path.join(s.dir, 'outcome', 'ALIGNMENT.md')) : null;
     const gate = canAdvanceToReview(s, alignment ? parseFrontmatter(alignment) : null, triage);
     out(`\nGate now: ${gate.ok ? 'would advance' : 'held'} — ${gate.reason}`);
@@ -591,7 +972,8 @@ function cmdVerify(args) {
   }
 
   hr();
-  out('Follow the verify SKILL: review each diff against criteria + review gates, remediate with the builder (bounded), write outcome/ALIGNMENT.md (verification_type: independent), stamp the spec frontmatter (verified_by, verification_type, awaiting_verifier: false), then advance it tests → in-review. Workspace "' + ws.name + '".');
+  out('Drain via isolated worker: `tl verify ' + ws.name + ' --execute`' + (agent ? ` --agent ${agent}` : '')
+    + ' (or the scheduled `tl-worker --mode verify` tick). Clean pass → in-review only; mutations stay held for an explicit human choice. Workspace "' + ws.name + '".');
 }
 
 // ---------- tl recall ----------
@@ -753,7 +1135,7 @@ function cmdRecall(args) {
 
 // Read every skills/<name>/SKILL.md and pull its name + description from the
 // frontmatter. Sorted by name for a stable, diff-friendly output.
-function readSkills(root = ROOT) {
+function readSkills(root = INSTALL_ROOT) {
   const skillsDir = path.join(root, 'skills');
   if (!isDir(skillsDir)) return [];
   const out = [];
@@ -782,10 +1164,10 @@ function firstSentence(s) {
 const CORE_RULES = [
   ['Status IS the folder', 'A spec\'s lifecycle stage is its directory. To change the stage, move the folder: specs/ (ready) → in-progress/ → tests/ → in-review/ → done/. If a status: field and the folder disagree, the folder wins.'],
   ['Claim by moving', 'To start a spec, move specs/<slug>/ → in-progress/<slug>/ and set status: in-progress. The move is the claim — once it leaves specs/, no other agent can pick it up.'],
-  ['Stop at in-review — never done', 'When work is complete and verification is green, write outcome/FEEDBACK.md and move the spec to in-review/ (status: in-review). An agent never signs off its own work; only a human accepts it to done/. This gate is what makes parallel fan-out safe.'],
+  ['Stop at in-review — never done', 'When work is complete and verification is green, write outcome/FEEDBACK.md and move the spec to in-review/ (status: in-review). An agent never moves any spec to done/ — its own or another\'s: builder and verifier both stop at in-review/, and only a human accepts work into done/. This gate is what makes parallel fan-out safe.'],
   ['Honor scope and NOTES', 'Do the work only within the spec\'s Files to touch; treat Do not touch as a hard boundary. If a spec has NOTES.md, it is as binding as the acceptance criteria.'],
   ['Capture threads', 'Anything worth not losing but out of scope — a decision, follow-up, risk, or discovery — becomes a file in threads/ (see the capture verb). An undocumented discovery is a leak; it does not justify widening the current spec.'],
-  ['Files only', 'Every change is a markdown/JSONL edit plus a folder move. No hidden state, no separate queue — specs/ is the queue, the folders are the status.'],
+  ['Files only', 'Every change is a markdown/JSONL edit plus a folder move. No hidden state; specs/ is the only queue for *new* work, but a pending `_dispatch/` continuation outranks fresh claims — the folders are the status.'],
 ];
 
 const GEN_MARKER = '<!-- generated by `tl sync-rules` from skills/*/SKILL.md — do not edit by hand -->';
@@ -943,7 +1325,7 @@ function genGemini(skills) {
 }
 
 function syncRulesRoot() {
-  return path.resolve(process.env.TL_SYNC_RULES_ROOT || ROOT);
+  return path.resolve(process.env.TL_SYNC_RULES_ROOT || INSTALL_ROOT);
 }
 
 function syncRuleTargets(root, skills) {
@@ -982,7 +1364,7 @@ function cmdSyncRules(args = []) {
   out(`Source: ${skills.length} skill${skills.length === 1 ? '' : 's'} under skills/*/SKILL.md`);
   out('');
   for (const t of targets) {
-    const rel = path.relative(ROOT, t.path);
+    const rel = path.relative(root, t.path);
     const before = safeRead(t.path);
     const status = before === null ? 'created' : (before === t.content ? 'unchanged' : 'updated');
     if (status !== 'unchanged') {
@@ -1053,7 +1435,7 @@ function cmdExperiment(args) {
     try {
       const result = queueExperiment(ws.dir, {
         spec,
-        repoDir: path.resolve(flags.repo || config.repo || ROOT),
+        repoDir: path.resolve(flags.repo || config.repo || INSTALL_ROOT),
         candidates: config.candidates,
         judge: config.judge,
         budgetUsd: flags.budget !== '' ? flags.budget : config.budget_usd,
@@ -1075,26 +1457,35 @@ function cmdExperiment(args) {
 
   // ---- tl experiment drain --agent <name> [ws] — one worker pass ----
   // Claims queued rows for this agent's lane only, runs them locally
-  // (fixture/shell in this slice), and queues judge rows for experiments
-  // whose candidate runs are all terminal. Never applies winners.
+  // (fixture/shell in this slice), queues judge rows for experiments whose
+  // candidate runs are all terminal, and executes queued judge rows in this
+  // lane headlessly (deterministic checks in code; model-judgment dimensions
+  // land in a lane-agnostic JUDGE-BRIEF.md). Never applies winners — a judge
+  // verdict is a nomination; apply/reject stays an explicit human action.
   if (subcmd === 'drain') {
     const positional = [];
-    const flags = { agent: '', max: '', evaluatePartial: [] };
+    const flags = { agent: '', max: '', evaluatePartial: [], skipJudges: false, repo: '', testCommand: '' };
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i];
       if (a === '--agent') flags.agent = rest[++i] || '';
       else if (a.startsWith('--agent=')) flags.agent = a.slice(8);
       else if (a === '--max') flags.max = rest[++i] || '';
       else if (a === '--evaluate-partial') flags.evaluatePartial.push(rest[++i] || '');
+      else if (a === '--skip-judges') flags.skipJudges = true;
+      else if (a === '--repo') flags.repo = rest[++i] || '';
+      else if (a === '--test-command') flags.testCommand = rest[++i] || '';
       else positional.push(a);
     }
-    if (!flags.agent) fail('Usage: tl experiment drain --agent <name> [workspace] [--max <n>] [--evaluate-partial <experiment-id>]');
+    if (!flags.agent) fail('Usage: tl experiment drain --agent <name> [workspace] [--max <n>] [--evaluate-partial <experiment-id>] [--skip-judges] [--repo <path>] [--test-command <cmd>]');
     const ws = resolveWorkspace(positional[0]);
     try {
       const result = drainQueue(ws.dir, {
         agent: flags.agent,
         max: flags.max !== '' ? flags.max : undefined,
         evaluatePartial: flags.evaluatePartial.filter(Boolean),
+        judges: !flags.skipJudges,
+        repoDir: path.resolve(flags.repo || INSTALL_ROOT),
+        testCommand: flags.testCommand || undefined,
       });
       out('===== tl experiment drain =====');
       out(`workspace: ${ws.name} · lane: ${flags.agent}`);
@@ -1102,6 +1493,10 @@ function cmdExperiment(args) {
       if (!result.ran.length) out('no queued rows in this lane.');
       for (const r of result.ran) out(`ran ${r.row.experiment_id}/${r.row.candidate_id} [${r.row.role}] → ${r.status}${r.reason ? ' — ' + r.reason : ''}`);
       for (const j of result.judges) out(`judge queued for ${j.experimentId} (${j.row.candidate_id}, lane ${j.row.agent_tool})`);
+      for (const j of result.judged || []) {
+        out(`judged ${j.row.experiment_id} (${j.row.candidate_id}) → ${j.status}${j.status === 'succeeded' ? ` — winner: ${j.winner || 'none (human decides)'}` : j.reason ? ' — ' + j.reason : ''}`);
+        if (j.status === 'succeeded') out(`  evaluation: _experiments/${j.row.experiment_id}/evaluation/${j.row.candidate_id}/`);
+      }
       const left = readQueueRows(ws.dir).filter(r => r.status === 'queued');
       out(`still queued: ${left.length} row(s)${left.length ? ' — lanes: ' + [...new Set(left.map(r => r.agent_tool))].join(', ') : ''}`);
     } catch (e) { fail(e.message); }
@@ -1116,6 +1511,174 @@ function cmdExperiment(args) {
     out(`experiment: _experiments/${result.experimentId}/`);
     out(`winner: ${result.winner}`);
     return;
+  }
+
+  // ---- tl experiment replay — rerun a historical task on a new runtime ----
+  // `tl experiment replay <experiment-id> --candidate <tool>[:<model>]` queues
+  // a replay experiment (exact mode by default: original spec_hash +
+  // base_commit; --mode spec reruns the current spec text; --mode auto lets
+  // replay decide). `tl experiment replay report` folds judged replays into
+  // _metrics/replay-log.jsonl: previous winner vs new candidate, deltas, and
+  // the threshold-enforced promotion recommendation. Replay evaluates — it
+  // never applies a patch and never moves a spec.
+  if (subcmd === 'replay') {
+    const positional = [];
+    const flags = { candidate: '', mode: '', repo: '', budget: '', timeout: '', id: '', command: '' };
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i];
+      if (a === '--candidate') flags.candidate = rest[++i] || '';
+      else if (a === '--mode') flags.mode = rest[++i] || '';
+      else if (a === '--repo') flags.repo = rest[++i] || '';
+      else if (a === '--budget') flags.budget = rest[++i] || '';
+      else if (a === '--timeout') flags.timeout = rest[++i] || '';
+      else if (a === '--id') flags.id = rest[++i] || '';
+      else if (a === '--command') flags.command = rest[++i] || '';
+      else positional.push(a);
+    }
+
+    // ---- tl experiment replay report [ws] — fold judged replays ----
+    if (positional[0] === 'report') {
+      const ws = resolveWorkspace(positional[1]);
+      try {
+        const result = replayReport(ws.dir);
+        out('===== tl experiment replay report =====');
+        out(`workspace: ${ws.name}`);
+        if (!result.appended) out('no newly judged replay experiments — nothing to fold.');
+        for (const r of result.rows) {
+          out(`${r.experiment_id} (replay of ${r.replay_of}${r.suite_id ? ', suite ' + r.suite_id : ''})`);
+          out(`  candidate ${r.candidate_id} [${r.agent_tool}${r.agent_model ? ':' + r.agent_model : ''}] status ${r.replay_status || 'unknown'}${r.fault ? ' fault ' + r.fault : ''}`);
+          out(`  previous winner: ${r.previous_winner || 'none'} → new winner: ${r.new_winner || 'none'}`);
+          out(`  Δ utility ${r.utility_delta ?? 'n/a'} · Δ quality ${r.quality_delta ?? 'n/a'} · Δ cost ${r.cost_delta ?? 'n/a'} · Δ latency ${r.latency_delta ?? 'n/a'}`);
+          if (r.fingerprint_changes.length) out(`  runtime changed: ${r.fingerprint_changes.join(', ')}`);
+          out(`  promotion: ${r.promotion_recommendation} — ${r.promotion_reason}`);
+        }
+        out(`appended: ${result.appended} row(s) → _metrics/replay-log.jsonl`);
+        out('Promotion is a recommendation only — changing default_primary stays a human TRIAGE.yml edit.');
+      } catch (e) { fail(e.message); }
+      return;
+    }
+
+    const names = listWorkspaces().map(w => w.name);
+    const wsArg = positional.length > 1 || names.includes(positional[0]) ? positional.shift() : undefined;
+    const experimentId = positional[0];
+    if (!experimentId || !flags.candidate) {
+      fail('Usage: tl experiment replay [workspace] <experiment-id> --candidate <tool>[:<model>] [--mode exact|spec|auto] [--repo <path>] [--budget <usd>] [--timeout <min>] [--command <cmd>] [--id <experiment-id>]\n       tl experiment replay report [workspace]');
+    }
+    const ws = resolveWorkspace(wsArg);
+    try {
+      const result = replayExperiment(ws.dir, experimentId, {
+        candidate: flags.command
+          ? { ...parseCandidate(flags.candidate), command: flags.command }
+          : flags.candidate,
+        mode: flags.mode || undefined,
+        repoDir: path.resolve(flags.repo || INSTALL_ROOT),
+        budgetUsd: flags.budget !== '' ? flags.budget : undefined,
+        timeoutMinutes: flags.timeout !== '' ? flags.timeout : undefined,
+        experimentId: flags.id || undefined,
+        source: 'cli',
+      });
+      out('===== tl experiment replay =====');
+      out(`workspace: ${ws.name}`);
+      out(`replay of: _experiments/${experimentId}/  (mode: ${result.mode})`);
+      out(`experiment: _experiments/${result.experimentId}/  (status: queued)`);
+      for (const r of result.rows) out(`  - ${r.candidate_id} [${r.role}] lane ${r.agent_tool}${r.agent_model_requested ? ' model ' + r.agent_model_requested : ''}`);
+      const fp = result.fingerprint;
+      out(`runtime fingerprint: tool ${fp.agent_tool} · model ${fp.agent_model} · tl ${fp.tl_version} · rules ${fp.rules_hash} · skills ${fp.skills_hash}`);
+      out(`replay metadata: _experiments/${result.experimentId}/REPLAY.json`);
+      out(`Drain the lane (tl experiment drain --agent ${result.rows[0].agent_tool} ${ws.name}), then fold results with: tl experiment replay report ${ws.name}`);
+    } catch (e) { fail(e.message); }
+    return;
+  }
+
+  // ---- tl experiment suite — benchmark suite definitions + suite replay ----
+  // A suite is a stored selector query over judged historical experiments,
+  // not a snapshot: `suite create` records it, `suite replay` re-selects at
+  // run time and queues one replay experiment per selected task.
+  if (subcmd === 'suite') {
+    const [action, ...suiteRest] = rest;
+    const positional = [];
+    const flags = { candidate: '', mode: '', repo: '', budget: '', timeout: '', sample: '', notes: '', specs: [], tags: [], taskTypes: [] };
+    for (let i = 0; i < suiteRest.length; i++) {
+      const a = suiteRest[i];
+      if (a === '--spec') flags.specs.push(suiteRest[++i] || '');
+      else if (a === '--tag') flags.tags.push(suiteRest[++i] || '');
+      else if (a === '--task-type') flags.taskTypes.push(suiteRest[++i] || '');
+      else if (a === '--sample') flags.sample = suiteRest[++i] || '';
+      else if (a === '--notes') flags.notes = suiteRest[++i] || '';
+      else if (a === '--candidate') flags.candidate = suiteRest[++i] || '';
+      else if (a === '--mode') flags.mode = suiteRest[++i] || '';
+      else if (a === '--repo') flags.repo = suiteRest[++i] || '';
+      else if (a === '--budget') flags.budget = suiteRest[++i] || '';
+      else if (a === '--timeout') flags.timeout = suiteRest[++i] || '';
+      else positional.push(a);
+    }
+    const names = listWorkspaces().map(w => w.name);
+
+    if (action === 'create') {
+      const wsArg = positional.length > 1 || names.includes(positional[0]) ? positional.shift() : undefined;
+      const name = positional[0];
+      if (!name) fail('Usage: tl experiment suite create [workspace] <name> [--spec <path>]… [--tag <tag>]… [--task-type <type>]… [--sample <n>] [--notes "<text>"]');
+      const ws = resolveWorkspace(wsArg);
+      try {
+        const { suite, file } = createSuite(ws.dir, name, {
+          specs: flags.specs.filter(Boolean),
+          tags: flags.tags.filter(Boolean),
+          taskTypes: flags.taskTypes.filter(Boolean),
+          sampleSize: flags.sample !== '' ? flags.sample : undefined,
+          notes: flags.notes,
+        });
+        const preview = selectSuiteExperiments(ws.dir, suite);
+        out('===== tl experiment suite create =====');
+        out(`workspace: ${ws.name}`);
+        out(`suite: ${suite.suite_id} → ${path.relative(ws.dir, file)}`);
+        out(`selectors: specs [${suite.selectors.specs.join(', ')}] · tags [${suite.selectors.tags.join(', ')}] · task_types [${suite.selectors.task_types.join(', ')}] · sample ${suite.sample_size ?? 'all'}`);
+        out(`currently matches ${preview.length} judged historical task(s)${preview.length ? ': ' + preview.map(m => m.experiment_id).join(', ') : ''}`);
+        out(`Replay it with: tl experiment suite replay ${suite.suite_id} --candidate <tool>[:<model>] ${ws.name}`);
+      } catch (e) { fail(e.message); }
+      return;
+    }
+
+    if (action === 'list') {
+      const ws = resolveWorkspace(positional[0]);
+      const suites = listSuites(ws.dir);
+      out('===== tl experiment suite list =====');
+      out(`workspace: ${ws.name}`);
+      if (!suites.length) out('no suites defined — create one with: tl experiment suite create <name> …');
+      for (const s of suites) {
+        const matches = selectSuiteExperiments(ws.dir, s);
+        out(`- ${s.suite_id}: specs [${(s.selectors.specs || []).join(', ')}] tags [${(s.selectors.tags || []).join(', ')}] task_types [${(s.selectors.task_types || []).join(', ')}] sample ${s.sample_size ?? 'all'} — matches ${matches.length} task(s)`);
+      }
+      return;
+    }
+
+    if (action === 'replay') {
+      const wsArg = positional.length > 1 || names.includes(positional[0]) ? positional.shift() : undefined;
+      const name = positional[0];
+      if (!name || !flags.candidate) fail('Usage: tl experiment suite replay [workspace] <name> --candidate <tool>[:<model>] [--mode exact|spec|auto] [--repo <path>] [--budget <usd>] [--timeout <min>] [--sample <n>]');
+      const ws = resolveWorkspace(wsArg);
+      try {
+        const result = replaySuite(ws.dir, name, {
+          candidate: flags.candidate,
+          mode: flags.mode || undefined,
+          repoDir: path.resolve(flags.repo || INSTALL_ROOT),
+          budgetUsd: flags.budget !== '' ? flags.budget : undefined,
+          timeoutMinutes: flags.timeout !== '' ? flags.timeout : undefined,
+          sampleSize: flags.sample !== '' ? flags.sample : undefined,
+        });
+        out('===== tl experiment suite replay =====');
+        out(`workspace: ${ws.name} · suite: ${result.suite.suite_id}`);
+        out(`selected ${result.selected.length} historical task(s)`);
+        for (const q of result.queued) out(`  queued _experiments/${q.experimentId}/ (mode ${q.mode}) ← replay of ${q.replayOf}`);
+        for (const s of result.skipped) out(`  skipped ${s.experiment_id} — ${s.reason}`);
+        if (result.queued.length) {
+          const lanes = [...new Set(result.queued.flatMap(q => q.rows.map(r => r.agent_tool)))];
+          out(`Drain with: tl experiment drain --agent ${lanes.join(' | ')} ${ws.name}, then: tl experiment replay report ${ws.name}`);
+        }
+      } catch (e) { fail(e.message); }
+      return;
+    }
+
+    fail('Usage: tl experiment suite <create|list|replay> …');
   }
 
   // Winner application — the explicit human gate. Running one of these
@@ -1133,7 +1696,7 @@ function cmdExperiment(args) {
       if (subcmd === 'select') record = selectWinner(ws.dir, experimentId, candidateId, opts);
       else if (subcmd === 'reject') record = rejectWinner(ws.dir, experimentId, candidateId, opts);
       else if (subcmd === 'send-to-review') record = sendWinnerToReview(ws.dir, experimentId, candidateId, opts);
-      else record = applyWinner(ws.dir, experimentId, candidateId, { ...opts, repoDir: path.resolve(flags.repo || ROOT) });
+      else record = applyWinner(ws.dir, experimentId, candidateId, { ...opts, repoDir: path.resolve(flags.repo || INSTALL_ROOT) });
       out(`===== tl experiment ${subcmd} =====`);
       out(`workspace: ${ws.name}`);
       out(`experiment: _experiments/${experimentId}/`);
@@ -1149,7 +1712,7 @@ function cmdExperiment(args) {
     return;
   }
 
-  fail('Usage: tl experiment <queue|drain|fixture|select|apply|reject|send-to-review> …');
+  fail('Usage: tl experiment <queue|drain|fixture|replay|suite|select|apply|reject|send-to-review> …');
 }
 
 // ---------- usage ----------
@@ -1158,32 +1721,67 @@ function usage(stream) {
   const w = s => (stream || process.stdout).write(s + '\n');
   w('tl — the throughline CLI');
   w('');
-  w('Deterministic file work, then prints the matching SKILL as a prompt for the agent.');
+  w('Four verbs. Underlying skills keep working; this is how you reach for them.');
   w('');
-  w('Usage:');
-  w('  tl resume [workspace]           Reconstruct context — stage counts, ready top, open loops');
+  w('steer — shape what to build');
+  w('  (skills / agent verbs: new, decompose, goal, promote, groom, capture, sync)');
+  w('');
+  w('run — start it, or leave automation to it');
+  w('  tl up     [workspace]           Happy path — cockpit + automation schedule + next human action');
+  w('              [--dry-run]         Show what would start/install; write nothing, load nothing, spawn nothing');
+  w('              [--print-schedule]  Emit the complete paste-able cron line + launchd plist, then exit');
+  w('              (alias: open)');
   w('  tl run    [workspace] [spec]    Work the ready queue — pick the conflict-free batch (or a named spec)');
   w('              [--agent <name>]    Only claim specs in this agent\'s lane (agent: <name> or any) — heterogeneous fan-out');
-  w('  tl review [workspace]           Sign off in-review work — criteria + feedback');
-  w('  tl verify [workspace] [spec]    Independent-verifier queue — specs awaiting a non-builder check');
-  w('              [--agent <name>]    Verify as this agent; specs you built are excluded');
-  w('  tl recall [workspace] <query>   Search intents/specs/threads/outcomes — "did we discuss this?"');
   w('  tl experiment queue [workspace] <spec>');
-  w('                                  Initiate an experiment: hash the spec, record base_commit, write candidate queue rows');
+  w('                                  (advanced) Initiate an experiment: hash the spec, record base_commit, write candidate queue rows');
   w('              [--config <file>]   Explicit candidates/judge JSON (default: deterministic fixture pair)');
   w('              [--budget <usd>] [--timeout <min>] [--repo <path>] [--id <experiment-id>]');
   w('  tl experiment drain --agent <name> [workspace]');
-  w('                                  Worker pass: claim + run queued rows for this agent\'s lane only');
-  w('              [--max <n>]         Cap how many rows one pass claims');
+  w('                                  (advanced) Worker pass: claim + run queued rows for this agent\'s lane only,');
+  w('                                  then execute queued judge rows in the lane (verdict + JUDGE-BRIEF.md)');
+  w('              [--max <n>]         Cap how many candidate rows one pass claims');
   w('              [--evaluate-partial <experiment-id>]');
   w('                                  Force-queue the judge even with non-terminal candidates');
+  w('              [--skip-judges]     Leave judge rows queued for the interactive skill path');
+  w('              [--repo <path>]     Repo for the judge\'s patch-apply check (default: this repo)');
+  w('              [--test-command <cmd>]');
+  w('                                  Judge gate: run tests in the isolated patched workdir');
   w('  tl experiment fixture [workspace]');
-  w('                                  Create a deterministic fixture experiment proof');
+  w('                                  (advanced) Create a deterministic fixture experiment proof');
+  w('  tl experiment replay [workspace] <experiment-id> --candidate <tool>[:<model>]');
+  w('                                  (advanced) Rerun a historical task on a new runtime — exact mode pins the');
+  w('                                  original spec_hash + base_commit; the candidate fingerprint is recorded');
+  w('              [--mode exact|spec|auto] [--repo <path>] [--budget <usd>] [--timeout <min>] [--command <cmd>]');
+  w('  tl experiment replay report [workspace]');
+  w('                                  Fold judged replays into _metrics/replay-log.jsonl: previous winner vs new');
+  w('                                  candidate deltas + threshold-enforced promotion recommendation');
+  w('  tl experiment suite create [workspace] <name> [--spec <p>]… [--tag <t>]… [--task-type <t>]… [--sample <n>]');
+  w('                                  Record a benchmark suite definition (a stored selector query, not a snapshot)');
+  w('  tl experiment suite list [workspace]');
+  w('  tl experiment suite replay [workspace] <name> --candidate <tool>[:<model>]');
+  w('                                  Queue replay experiments across the suite\'s judged historical tasks');
+  w('');
+  w('review — sign off, unblock, decide on experiment winners');
+  w('  tl review [workspace]           Sign off in-review work — criteria + feedback');
+  w('  tl verify [workspace] [spec]    Independent-verifier queue — status + briefs (non-builder)');
+  w('              [--agent <name>]    Prefer / filter this verifier lane; builders are excluded');
+  w('              [--execute]         Run one isolated verify tick (drains request or queue)');
+  w('              [--dispatch]        Write a verify-request artifact (no agent spawn)');
+  w('              [--target-lane <l>] For --dispatch: lane ≠ builder, or any-other');
+  w('              [--authorize-fix-forward|--kick-back] [--note "..."]');
+  w('                                  Explicit human decision on a mutation proposal (never auto-apply)');
   w('  tl experiment select|apply|reject|send-to-review [workspace] <experiment-id> <candidate-id>');
   w('                                  Winner application — the explicit HUMAN action on a winning patch');
   w('              [--by <who>]        Who decided (recorded in WINNER.json and _metrics/winner-log.jsonl)');
   w('              [--reason "<why>"]  Required for reject — rejections record why');
   w('              [--repo <path>]     Canonical repo for apply (default: this checkout)');
+  w('');
+  w('learn — where am I, what changed, what should change');
+  w('  tl resume [workspace]           Reconstruct context — stage counts, ready top, open loops');
+  w('  tl recall [workspace] <query>   Search intents/specs/threads/outcomes — "did we discuss this?"');
+  w('  (skills / agent verbs: map, reflect, insights)');
+  w('');
   w('  tl sync-rules [--check]         Regenerate per-agent rules, or check for generated-rule drift');
   w('');
   w('Workspace: an argument names a workspace under projects/; if exactly one exists it is used;');
@@ -1196,9 +1794,14 @@ function usage(stream) {
 // ---------- dispatch ----------
 
 function main() {
-  const [cmd, ...rest] = process.argv.slice(2);
+  // Global --root / TL_ROOT already resolved into ROOT at load; strip the
+  // flag so it is never mistaken for a subcommand.
+  const [cmd, ...rest] = stripRootFlag(process.argv.slice(2));
   switch (cmd) {
     case 'resume': return cmdResume(rest);
+    // up (and short-lived alias open) is async (a short UI port probe); errors still exit through fail().
+    case 'up':
+    case 'open': return void cmdUp(rest).catch(e => fail(e && e.message ? e.message : String(e)));
     case 'run': return cmdRun(rest);
     case 'review': return cmdReview(rest);
     case 'verify': return cmdVerify(rest);

@@ -1,6 +1,6 @@
 ---
 name: sync
-description: Sync a tl workspace with JIRA — import assigned issues as specs and epics as intents, push TL status and human priority changes back. Use when asked to sync JIRA, import JIRA issues or the sprint, push status back to the tracker, or as a scheduled run.
+description: Sync a tl workspace with JIRA — import assigned issues as specs and epics as intents, push TL status and human priority changes back. Use when asked to sync JIRA, import JIRA issues or the sprint, or push status back to the tracker (steer bridge). Can also run on a schedule.
 ---
 
 # /tl sync
@@ -53,7 +53,14 @@ Priority imported from JIRA is written with `priority_set_by: human` — the tea
 
 **1. Watermark.** Read the last successful run's timestamp from `_metrics/sync-log.jsonl` (the newest `run_started` line whose run completed). First run: no watermark, import everything the filter matches.
 
-**2. Query.** `GET {url}/rest/api/3/search/jql?jql=<import_filter>&fields=summary,description,issuetype,status,priority,assignee,parent,updated` — with `project = <project>` AND'd into the JQL, plus `updated >= <watermark>` when a watermark exists. Paginate with `nextPageToken` / `maxResults` until `isLast` (the legacy `/rest/api/3/search` endpoint is removed — do not use it). Cap at 20 pages defensively and report if the cap hits.
+**2. Query.** `GET {url}/rest/api/3/search/jql?jql=<import_filter>&fields=summary,description,issuetype,status,priority,assignee,parent,updated` — with `project = <project>` AND'd into the JQL, plus `updated >= <watermark>` when a watermark exists. Paginate with `nextPageToken` / `maxResults` until `isLast` (the legacy `/rest/api/3/search` endpoint is removed — do not use it).
+
+**Pagination guards.** JIRA's `nextPageToken` has known reliability bugs — tokens can repeat and `isLast` may never turn true — so the import loop defends on two axes:
+
+- **Token-repeat detection.** Remember the previous page's `nextPageToken`. After each fetch, if the new token is unchanged from the one just used → abort immediately with **"pagination token repeated — aborting import; watermark NOT advanced"**. Do not keep paging; a repeated token is an infinite loop, not a slow import.
+- **Page cap.** Hard cap at **20 pages**. If the cap hits before `isLast` → abort with a clear cap-hit message (e.g. "pagination page cap (20) reached — aborting import; watermark NOT advanced").
+
+**Watermark on pagination failure.** Both a token-repeat abort and a cap hit are **import failures**: append one `error` line to `_metrics/sync-log.jsonl` (`direction: import`, `action: error`, `detail` naming token-repeat vs. cap-hit), **do not** write `run_completed`, and **do not** advance the watermark. Issues imported before the abort stay on disk; the next run retries from the same watermark, so partial imports remain idempotent. Only a fully completed import (all pages through `isLast`, or a single page when already last) followed by `run_completed` advances the watermark.
 
 **3. Per issue, dedup first.** Search all stage folders (and `intents/`) for a matching `jira_key`. This check is mandatory — a `jira_key` that already exists is **never recreated**, only updated:
 

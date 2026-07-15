@@ -8,7 +8,7 @@ A spec's lifecycle stage is its folder, inside a workspace (`projects/<name>/`):
 
 | Folder | Meaning |
 |--------|---------|
-| `triage/` | Ranked spec held for human release — scored by `/tl triage`, but not runnable until moved to `specs/` |
+| `triage/` | Spec held for shaping — blocked on a human action (decision, scope, research, rule flag); not authorized to run |
 | `intents/` | Human objectives |
 | `specs/` | Agent-ready, not started (`status: ready` or `blocked`) |
 | `in-progress/` | Being worked |
@@ -20,7 +20,7 @@ A spec's lifecycle stage is its folder, inside a workspace (`projects/<name>/`):
 
 If `status` and folder disagree, the folder wins; skills fix the field to match.
 
-A spec can be held before release: `triage → ready → in-progress → tests → in-review → done`. `triage/` is a release gate, not the run queue: `/tl triage` may score and rank a held spec there, but `/tl run` only claims from `specs/`. Releasing work means moving `triage/<slug>/ → specs/<slug>/` and setting `status: ready`. An agent (`/tl run`) carries work as far as `in-review`; only a human (or `/tl review`) promotes `in-review → done`. This gate is what makes parallel fan-out safe — many agents land their work in `in-review`, where it's signed off in a batch rather than merged blind.
+A spec can be held for shaping before it runs: `triage → ready → in-progress → tests → in-review → done`. `triage/` is the shaping hold pen, not the run queue: `/tl triage` is the sole writer that routes unauthorized specs there with a `hold_reason`; `/tl run` only claims from `specs/`. Releasing shaped work means moving `triage/<slug>/ → specs/<slug>/`, setting `status: ready`, and clearing `hold_reason`. An agent (`/tl run`) carries work as far as `in-review`; only a human (or `/tl review`) promotes `in-review → done`. The in-review gate is what makes parallel fan-out safe — many agents land their work in `in-review`, where it's signed off in a batch rather than merged blind. `threads/` keeps sole ownership of "idea under evaluation"; `triage/` is for agent-ready specs that still need a human-shaped fix before they may run.
 
 ## Project (`PROJECT.md`)
 
@@ -61,8 +61,14 @@ One per workspace root — the workspace's identity card. The context-map body i
 | `agent` | enum | optional — `any` `claude` `codex` `cursor` `gemini` (default `any`) | author / human |
 | `claimed_by` | enum | optional — `claude` `codex` `cursor` `gemini` — who actually claimed/is working it | claiming agent |
 | `claimed_at` | date | optional — when the spec was claimed | claiming agent |
+| `accepted_by` | enum | optional — `human-cockpit` (cockpit accept) `human-cli` (`/tl review` accept) | review gate |
+| `accepted_at` | datetime | optional — full ISO timestamp of the accept | review gate |
+| `kicked_back_by` | enum | optional — `human-cockpit` `human-cli` — who kicked it back at review | review gate |
+| `kicked_back_at` | datetime | optional — full ISO timestamp of the kick-back | review gate |
+| `gate` | enum | optional — `verified` `unverified` — `canAdvanceToReview` result at the last review decision | review gate |
 | `jira_key` | string | optional — JIRA issue key this spec mirrors, e.g. `PROJ-123` | sync / author |
 | `jira_url` | string | optional — the JIRA issue's browse URL | sync / author |
+| `hold_reason` | string | optional — short literal why this spec sits in `triage/` (e.g. rule flag, undeclared scope, unmet research dependency, failed asset preflight); cleared on release to `specs/` | triage / human |
 
 **Agent routing.** `agent` is a lane hint for heterogeneous fan-out. `tl run --agent <name>` claims only specs whose `agent` is `<name>` or `any` — so Claude, Codex, and Cursor can each drain their own lane concurrently over one throughline, coordinated by the folder-move claim (`specs/ → in-progress/` is the lock — whoever moves it first owns the spec; no central orchestrator). Absent or `any` = runnable by whichever agent picks it up.
 
@@ -71,6 +77,8 @@ One per workspace root — the workspace's identity card. The context-map body i
 Bug specs add: `source` (`sentry` `datadog` `manual`), `source_id`, `source_url`, `affected_users` (int), `first_seen` (date).
 
 **The JIRA bridge (`jira_key` / `jira_url`).** `jira_key` links a spec (or intent, below) to the JIRA issue it mirrors — written by `/tl sync` on import, or by hand to link work born locally. It is the sync dedup key: one JIRA issue maps to at most one spec or intent, and `/tl sync` updates a matched record rather than recreating it. `jira_url` is the human-clickable browse URL. Both optional; absent means the record has no JIRA counterpart and sync leaves it alone. The link lives entirely in frontmatter — TL works fully offline and never depends on JIRA being reachable (algorithm: `skills/sync/SKILL.md`).
+
+**Reviewer provenance (`accepted_by` / `accepted_at` / `kicked_back_by` / `kicked_back_at` / `gate`).** Every review decision — cockpit `/api/review` or the `/tl review` CLI path — stamps who made it and when, and appends one row to `_metrics/review-log.jsonl` (schema under Metrics, below), so a human accept is distinguishable from an agent folder-move after the fact (incident: `threads/2026-07-14-judge-drain-stage-advance-without-verification.md` — a `done/` hop with no stamp and no log line took a human interview to attribute). `gate` records what `lib/verification-gate.js` `canAdvanceToReview` said at the moment of the decision: `verified` = the gate passed; `unverified` = it failed (e.g. no `outcome/ALIGNMENT.md` under `require_independent_verifier`) but the human decided anyway. `gate: unverified` is a **visible flag, never a block** — the human's call outranks the gate, this just makes the gap readable off the artifact. Recording only: accept semantics are unchanged, and historical `done/` specs without these stamps remain valid (pre-stamp accepts are grandfathered — absence means "predates the audit line," never "invalid"; do not retro-stamp).
 
 **The override signal.** `priority_set_by` is how the system learns. When the triage skill sets a priority it writes `priority_set_by: triage`. When you set or change a priority by hand, set `priority_set_by: human` — triage will never re-score that spec (only P0 rules can still fire). If triage finds a priority changed since its last run while `priority_set_by` still says `triage`, it treats that as a human override: it flips the field to `human` and logs the change to `_metrics/override-log.jsonl`. Those override lines are the training data for future auto-triage tuning.
 
@@ -124,6 +132,8 @@ Body: the thought itself. For `decision` threads, include the why — a recorded
 
 `scores` and `priority_was_right` are the learnable fields — keep them honest, they feed the same loop as the override log.
 
+Body sections follow `_templates/FEEDBACK.md`; Resume reads the **What shipped** section for its value line (falls back to Asked vs. delivered when absent).
+
 `agent_tool`, `duration_minutes`, `cost_usd`, and `tokens_used` are optional cost signals — absent on older FEEDBACK files and unset when unknown. Together they enable head-to-head comparison across agents for the same spec type; they feed `benchmark-log.jsonl` (below). The same four fields appear on each `cycle-log.jsonl` line (below) so metrics aggregation reads them without reparsing markdown.
 
 ## Alignment (`*/outcome/ALIGNMENT.md`)
@@ -139,8 +149,19 @@ The record of the cross-model check at the TESTS gate: a verifier agent **differ
 | `rounds` | int | how many advise → remediate → re-check cycles ran (1–2; cap ~2) |
 | `verdict` | enum | `pass` (converged) or `residual-concerns` (cap tripped, unresolved) |
 | `residual_concerns` | list | specifics still open when `verdict: residual-concerns`; `[]` on `pass` |
+| `remediation_files` | list | paths the verifier (or builder-on-kickback) changed during fix-forward, derived from `outcome/REMEDIATION.diff`; `[]` when that diff is empty |
+| `remediation_lines` | int | added + removed line count in `outcome/REMEDIATION.diff`; `0` when the verifier changed nothing |
 
 Body: one short section per round — what the verifier raised, and how the builder addressed it. On `residual-concerns` the open items are the flag the human reads at `/tl review`; the human gate is never removed, only better-informed. Absent = no cross-model check ran (older, pre-gate specs — grandfathered at review, treated like self-check).
+
+**Authorship diffs (`outcome/BUILDER.diff` / `outcome/REMEDIATION.diff`).** Alongside FEEDBACK and ALIGNMENT, the outcome folder may hold two text diffs that keep builder and verifier edits attributable:
+
+| Artifact | Written when | Content |
+|----------|--------------|---------|
+| `outcome/BUILDER.diff` | Builder hand-off — when stamping `awaiting_verifier: true` (`skills/run/SKILL.md`) | `git diff` of the tree at that moment (pre-verification builder state) |
+| `outcome/REMEDIATION.diff` | Verifier Record step (`skills/verify/SKILL.md`) | Delta **since** `BUILDER.diff`; empty when the verifier changed nothing |
+
+A non-empty `REMEDIATION.diff` means a defect escaped the builder into the verifier's hands — the measurable signal behind a future `benchmark-log.jsonl` field `defects_escaped_to_verifier` (cross-ref only here; adding that field belongs to the benchmark-log writer, not this contract). Fix-forward policy itself is unchanged by these artifacts.
 
 **Enforcement (`verification` in `TRIAGE.yml`).** The gate that makes the above policy, not convention (`lib/verification-gate.js` `canAdvanceToReview`; incident: `done/allocation-actionable-prompt` advanced with `builder == verifier == codex`):
 
@@ -148,9 +169,18 @@ Body: one short section per round — what the verifier raised, and how the buil
 verification:
   require_independent_verifier: true   # builder ≠ verifier required to advance tests → in-review
   allow_self_check_for: []             # spec types exempt (e.g. [research]); empty = none
+  verifier_lanes:                      # isolated verifier dispatch (lib/worker.js verifyTick)
+    gemini:
+      agent: gemini                    # stamped as verified_by; must ≠ claimed_by
+      mode: verify                     # verify | review-only
+      isolated: true                   # required — disposable worktree only
+      sandbox: required                # required | true
+      allow_network: false             # Gemini: true is rejected loudly
+      allow_commands: []               # TL-run acceptance commands in the worktree
+      command: [agy]                   # optional invocation prefix
 ```
 
-When required and no independent verifier is available, the builder **stops at `tests/`** (`status: blocked`) instead of self-verifying: it sets spec frontmatter `awaiting_verifier: true` + `requested_at: YYYY-MM-DD` and writes a minimal `VERIFY.md` request (builder, date, anything to flag) in the spec folder. `tl verify [ws] [--agent <name>]` lists these for any agent that is **not** the builder. The verifier writes ALIGNMENT (`verification_type: independent`), stamps the spec frontmatter — `verified_by: <agent>`, `verification_type`, `awaiting_verifier: false` — and advances the spec to `in-review/`. The cockpit's in-review badge reads those frontmatter stamps (`verified by <agent>` vs `self-check`); a section absent from `TRIAGE.yml` means not enforced (pre-gate workspaces unchanged).
+When required and no independent verifier is available, the builder **stops at `tests/`** (`status: blocked`) instead of self-verifying: it writes `outcome/FEEDBACK.md`, snapshots `git diff > outcome/BUILDER.diff`, sets spec frontmatter `awaiting_verifier: true` + `requested_at: YYYY-MM-DD`, and writes a minimal `VERIFY.md` request (builder, date, anything to flag) in the spec folder. `tl verify [ws] [--agent <name>]` lists these for any agent that is **not** the builder; `tl verify --execute` (or the scheduled `tl-worker --mode verify` tick) claims at most one eligible spec through a configured `verifier_lanes` entry, never the builder's own, under a per-spec lock at `_metrics/verify-locks/<slug>.lock`. Cockpit **Dispatch verify** only writes `_metrics/verify-requests/*.json` (target lane ≠ `claimed_by`, or `any-other`) — the UI/server never spawn agent CLIs. A clean isolated pass advances `tests → in-review` with `verified_by` / `verification_type: independent`. Mutation proposals become `human-decision-required` and stay at `tests/` until an explicit human choice (`authorize-fix-forward` or `kick-back`) — never auto-applied. Failures leave the spec in `tests/` with an auditable `blocked_reason`. Unsafe Gemini configs (missing `isolated`/`sandbox`, `allow_network: true`, `--dangerously-skip-permissions`) are rejected loudly at config/read time. A section absent from `TRIAGE.yml` means the gate is not enforced (pre-gate workspaces unchanged).
 
 ## Experiments (`_experiments/*`)
 
@@ -175,15 +205,27 @@ _experiments/<experiment_id>/
 │   ├── PATCH.diff
 │   ├── FEEDBACK.md
 │   ├── METRICS.json
-│   ├── TRACE.jsonl          # optional
+│   ├── TRACE.jsonl          # append-only observable action trace (required for candidate runs)
 │   └── REASONING.md         # optional; deliberate summaries only, never private chain-of-thought
 ├── evaluation/<judge_id>/
 │   ├── EVALUATION.md
-│   └── SCORES.json
+│   ├── SCORES.json
+│   └── JUDGE-BRIEF.md       # headless deterministic judge: dimensions needing model judgment
 ├── WINNER.json              # optional; current winner-application state (explicit human decisions only)
-├── APPLICATION.md           # optional; review artifact written on apply / send-to-review
-└── queue/                   # optional local queue files for later worker specs
+└── APPLICATION.md           # optional; review artifact written on apply / send-to-review
 ```
+
+### Queue layout (workspace-level)
+
+The headless queue is **workspace-scoped**, not per-experiment: files live under `_experiments/queue/` (sibling to `_experiments/<experiment_id>/`). Initiation, claim atomicity, lane draining, and fault posture are documented in `docs/agent-experiments.md` ("Initiation and Headless Workers") — SCHEMA only names the on-disk contract.
+
+| Path | Role |
+|------|------|
+| `_experiments/queue/<experiment_id>.jsonl` | Append-only, event-sourced candidate rows; newest row per candidate is current state |
+| `_experiments/queue/claims/<exp>--<cand>--<attempt>.claim` | Exclusive-create claim markers (`O_EXCL`) — the atomic bit of a local claim |
+| `_experiments/queue/<stamp>-<slug>.json` | Request configs (UI/CLI); rewritten `status: accepted\|invalid` with `experiment_id`, never deleted |
+
+Every queue row carries at least: `experiment_id`, `candidate_id`, `role` (`primary` / `shadow` / `judge`), `agent_tool`, `agent_model_requested`, `status`, `attempt`, `budget_usd`, `timeout_minutes`, `created`. Transition and claim rows also carry `ts`, `claimed_by`, `fault`, `reason`, and a runner `config` object so a drain is self-contained.
 
 ### `EXPERIMENT.md`
 
@@ -216,7 +258,7 @@ Each `candidates/<candidate_id>/` folder records the observable output of one ca
 | `PATCH.diff` | Candidate patch against `base_commit`; absent or empty only for terminal faults such as `unavailable` |
 | `FEEDBACK.md` | Human-readable report from the candidate: what changed, tests, caveats, and handoff notes |
 | `METRICS.json` | Machine-readable runtime, cost, timing, token, and status data |
-| `TRACE.jsonl` | Optional append-only observable action trace: tools, files, commands, tests, retries, status changes |
+| `TRACE.jsonl` | Append-only observable action trace: tools, files, commands, tests, retries, status changes (see below) |
 | `REASONING.md` | Optional deliberate plan/rationale summary when a runtime exposes one; never required and never private chain-of-thought |
 
 `METRICS.json` includes at least:
@@ -228,6 +270,7 @@ Each `candidates/<candidate_id>/` folder records the observable output of one ca
   "status": "succeeded",
   "agent_tool": "codex",
   "agent_model": "gpt-5",
+  "agent_model_requested": "gpt-5",
   "agent_model_auto": false,
   "agent_model_source": "reported",
   "runtime_version": "",
@@ -240,20 +283,69 @@ Each `candidates/<candidate_id>/` folder records the observable output of one ca
 }
 ```
 
-Runtime fingerprint fields are shared by candidate and judge records: `agent_tool`, `agent_model`, `agent_model_auto`, `agent_model_source`, `runtime_version`, `framework`, `adapter_version`, `rules_hash`, and `skills_hash`.
+Runtime fingerprint fields are shared by candidate and judge records: `agent_tool`, `agent_model`, `agent_model_auto`, `agent_model_source`, `runtime_version`, `framework`, `adapter_version`, `rules_hash`, and `skills_hash`. Candidate `METRICS.json` also records `agent_model_requested` (what was asked for — display `auto` under Cursor auto mode) alongside the resolved `agent_model`.
+
+**Cursor auto model visibility.** When the lane is Cursor with no explicit model (or the requested model is `auto`), set `agent_model_auto: true` and `agent_model_requested: "auto"`. Capture the resolved model when an SDK, hook, or session report exposes it; otherwise leave `agent_model` as `unknown`. Record `agent_model_source` as one of `sdk` | `hook` | `reported` | `unknown` (plus `requested` / `fixture` / `none` for non-auto paths). Never invent a resolved model from chain-of-thought.
+
+#### `TRACE.jsonl` (candidate action trace)
+
+Append-only JSONL under each candidate folder. Privacy boundary matches the non-experiment activity-trace contract: **required** = observable actions; **optional** = deliberate plan/reasoning summaries a runtime reports; **never** = private chain-of-thought.
+
+Common event fields (every row):
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `ts` | datetime | ISO timestamp |
+| `type` | string | event type (tables below) |
+| `agent_tool` | string | lane / tool identity |
+| `agent_model` | string | resolved model when known |
+| `agent_model_auto` | bool | true when Cursor (or similar) auto-selected the model |
+| `agent_model_source` | string | `sdk` / `hook` / `reported` / `requested` / `unknown` / … |
+| `source` | string | who emitted the event (`runner`, `adapter`, `sdk`, …) |
+| `duration_ms` | number/null | optional duration for this step |
+| `status` | string | run-relative status at emit time (`running`, terminal status, …) |
+| `summary` | string | short observable action summary (secret-redacted before write) |
+
+Event-specific payload keys (e.g. `command`, `path`, `fault`, `scope_violation`) ride alongside the common fields.
+
+**Required event types** (documented; local runner emits where possible via `lib/experiment-trace.js` + `lib/experiment-runner.js`): `start`, `plan_summary`, `tool`, `file_read`, `file_write`, `test`, `command`, `patch`, `status`, `fault`, `finish`.
+
+**Optional event types** (never required for a valid candidate): `reasoning_summary`, `replan`, `backtrack`, `human_intervention`.
+
+**Redaction before write.** `lib/experiment-trace.js` redacts env-style credential assignments (`API_KEY=…`, `SECRET=…`, …) and known secret patterns (API keys, tokens, JWTs, bearer/password assignments) to `[redacted]` before appending any event. Traces are learning inputs; secrets must not land on disk.
+
+Derived learning rows land in `_metrics/trace-features.jsonl` (see Learning Surfaces below) without rereading full traces.
 
 ### Evaluation Artifacts
 
-Each `evaluation/<judge_id>/` folder records one judge pass. The judge applies `_patterns/experiment-judge.md` (the rubric) via `skills/experiment-judge/SKILL.md` (the procedure) — the same shared-criteria discipline as `_patterns/review-gates.md` at `/tl review`. The judge **must differ from the primary candidate** unless the experiment sets `self_judge: true`.
+Each `evaluation/<judge_id>/` folder records one judge pass. The judge applies `_patterns/experiment-judge.md` (the rubric) via `skills/experiment-judge/SKILL.md` (the procedure) — the same shared-criteria discipline as `_patterns/review-gates.md` at `/tl review`. The judge **must differ from the primary candidate** unless the experiment sets `self_judge: true`. Headless drain also runs a deterministic judge (`lib/experiment-judge.js`) that writes the same folder shape plus `JUDGE-BRIEF.md` (see below).
 
 | File | Meaning |
 |------|---------|
 | `EVALUATION.md` | Human-readable comparison, per-candidate hard-gate notes, the utility weights used, winner rationale, and review burden |
 | `SCORES.json` | Machine-readable per-candidate hard-gate pass, scores, utility, winner, rationale summary, and override metadata |
+| `JUDGE-BRIEF.md` | Lane-agnostic brief (headless deterministic judge): lists rubric dimensions that still need model judgment so any lane or `skills/experiment-judge` can refine without rewriting the deterministic folder |
 
 **Hard gates** are pass/fail and checked first: patch applies, acceptance criteria met, tests pass or declared unavailable, no scope violations, no security/code-standard failures (per `_patterns/review-gates.md`), valid output. A candidate that fails any gate cannot win but is still scored and logged. **Score dimensions** are `correctness`, `completeness`, `scope_discipline`, `maintainability`, `test_quality`, and `explanation_quality`, each an int 1–5 with meanings fixed by the rubric so results are comparable across experiments. **Utility** is a single configurable number — quality score minus cost, latency, feedback (review burden), failure, and scope penalties; the judge records the weights it used in `EVALUATION.md` so a replay is reproducible.
 
 A **faulted** candidate (`over_budget`, `timed_out`, `unavailable`, `invalid_output`, `cancelled`) is scored non-winning with `hard_gates_passed: false` but still recorded — faults are learning data, never dropped. **Tie-breaks** apply in order: hard-gate pass beats fail; then higher utility; then lower review burden; then lower cost; then a human decides (`winner: null`). `winner_set_by` is `judge` normally, or `human` when a person overrides the judge — the override is preserved and logged, exactly like a `priority_set_by: human` triage override.
+
+**Additive parser posture.** Parsers preserve unknown `SCORES.json` / evaluation fields — new keys are additive and never break older readers. The headless deterministic judge may write extra top-level and per-candidate fields beyond the minimum below; consumers treat missing keys as absent, never as hard failures.
+
+**Headless / deterministic extras** (written by `lib/experiment-judge.js` when `tl experiment drain` executes judge rows — CLI default; `--skip-judges` leaves them queued):
+
+| Field | Where | Meaning |
+|-------|-------|---------|
+| `judge_model` | top-level | e.g. `"deterministic"` for the code judge |
+| `scored_by` | top-level | `"deterministic"` when baselines came from code, not a model/human pass |
+| `model_judgment_pending` | top-level | dimensions still needing model judgment (today: `correctness`, `completeness`, `scope_discipline`, `maintainability`) |
+| `brief_path` | top-level | workspace-relative path to this folder's `JUDGE-BRIEF.md` |
+| `gates` | per candidate | `{ valid_output, patch_applies, tests_pass }` each `true` \| `false` \| `null` — `null` = declared unavailable / unchecked and **never fails** the candidate |
+| `cost_usd` / `duration_minutes` | per candidate | carried onto the scores surface for utility / learning readers |
+
+Gate semantics worth stating: `patch_applies: false` stamps the candidate `fault: invalid_output` (per the rubric); `null` gates are recorded honestly and do not fail. Refining a deterministic baseline writes a **new** `evaluation/<judge_id>/` folder and appends a new `judge-log.jsonl` line — never rewrites the deterministic folder in place.
+
+**Judge-row failure / retry (queue).** Drain claims judge rows the same way as candidates (`judgeLaneRows` + claim marker). A mid-run failure marks the queue row `failed`, releases the claim (`releaseClaim`), and leaves the experiment `awaiting_evaluation` — no half-written evaluation (stage-then-rename inside `runJudge`). An explicit retry or the interactive skill path re-claims.
 
 `SCORES.json` includes at least:
 
@@ -300,6 +392,36 @@ A **faulted** candidate (`over_budget`, `timed_out`, `unavailable`, `invalid_out
         "explanation_quality": 3
       },
       "utility": 1.9
+    }
+  }
+}
+```
+
+Deterministic headless example (additive fields only — same minimum plus the extras above):
+
+```json
+{
+  "judge_id": "fixture-judge",
+  "judge_agent": "fixture",
+  "judge_model": "deterministic",
+  "status": "succeeded",
+  "self_judge": false,
+  "winner": "fixture-a",
+  "winner_set_by": "judge",
+  "rationale": "…",
+  "utility_weights": { "quality": 1.0, "cost_penalty": 0.2, "latency_penalty": 0.1, "feedback_penalty": 0.2, "failure_penalty": 0.3, "scope_penalty": 0.2 },
+  "scored_by": "deterministic",
+  "model_judgment_pending": ["correctness", "completeness", "scope_discipline", "maintainability"],
+  "brief_path": "_experiments/exp-t/evaluation/fixture-judge/JUDGE-BRIEF.md",
+  "candidates": {
+    "fixture-a": {
+      "hard_gates_passed": true,
+      "fault": null,
+      "gates": { "valid_output": true, "patch_applies": true, "tests_pass": null },
+      "scores": { "correctness": 4, "completeness": 4, "scope_discipline": 4, "maintainability": 4, "test_quality": 3, "explanation_quality": 4 },
+      "utility": 3.8,
+      "cost_usd": 0,
+      "duration_minutes": 0.1
     }
   }
 }
@@ -391,6 +513,30 @@ auto_review:            # optional — per-type autonomy dial for /tl run's gate
   to_done: false        # hard guard, default false — agents never move to done/
 run:                    # optional — fan-out width for /tl run and worker ticks
   cap: 4                # calm cap: positive integer; anything else falls back to 4
+experiments:            # optional — experiment routing policy (lib/experiment-policy.js)
+  enabled: false            # absent section or anything but literal true = fully off
+  candidates: []            # lanes to route between: [claude, codex] or {agent_tool, agent_model, id} maps
+  default_primary: ""       # the incumbent lane — the baseline a challenger must beat to be promoted
+  explore_rate: 0.1         # 0..1 — chance a selection explores instead of exploiting priors
+  shadow_mode: all_others   # all_others | top_n | [explicit, lane, list]
+  shadow_top_n: 1           # shadow count when shadow_mode: top_n
+  judge: ""                 # judge id/tool — excluded from the candidate pool unless allowed below
+  allow_judge_candidate: false
+  budget_usd: null          # per-candidate budget carried onto queue rows
+  timeout_minutes: null     # per-candidate timeout carried onto queue rows
+  min_samples_to_route: 2   # a prior below this sample count cannot drive primary selection
+  min_samples_to_promote: 3 # a prior below this can never change default_primary
+  promote_utility_delta: 0.1  # challenger must beat the incumbent's score by at least this
+  auto_initiate: false      # spin up shadow experiments automatically on a canonical claim (lib/worker.js)
+  auto_initiate_lanes: []   # lane allowlist for auto-initiation (candidate ids/tools); empty = all candidates
+  auto_initiate_max_concurrent: 1  # max auto experiments with non-terminal candidate rows at once
+  auto_initiate_daily_max: 3       # max auto experiments created per UTC day
+automation:             # optional — tl open's schedule profile (lib/automation.js)
+  enabled: false            # absent section or anything but literal true = no schedules (calm default)
+  interval_minutes: 15      # tick interval in minutes; positive integer, fallback-on-garbage to 15
+  lanes: []                 # lane names to tick — each MUST have lanes.<name>.command (loud error otherwise)
+  verify: false             # true = isolated verify tick via tl-worker --mode verify (needs verification.verifier_lanes)
+  experiment: off           # off | drain — opt-in experiment queue/drain scheduling (see below); never auto-applies winners
 sync:                   # optional — enables /tl sync (the JIRA shadow layer)
   jira:
     url: ""             # the JIRA Cloud site, e.g. https://acme.atlassian.net
@@ -409,6 +555,23 @@ sync:                   # optional — enables /tl sync (the JIRA shadow layer)
 
 **The calm cap (`run`).** An optional section bounding how wide a single `/tl run` may fan out (`lib/batch.js` `calmCap`). `run: cap:` bounds **both** halves of a run: how many fresh ready specs one run may claim (`selectBatch`) and how many pending continuations may resume together (`selectContinuations`). Overflow is held, not dropped — the spec or dispatch waits for the next run with the concrete reason `batch capped at <n>`, and a held dispatch stays `pending`. Headless worker ticks read the same dial for fresh-batch selection (`lib/worker.js`), though one tick spawns at most one session. Fallback-on-garbage: the value must be a positive integer — a missing `run:` section, a missing `cap:` key, zero, a negative, a fractional, or a non-numeric value all fall back to the default `4`. Calm over swarm: the cap exists to bound parallelism, so it is never `0` — no cap value disables work (pause lanes with a `PAUSE` file instead).
 
+**The experiment routing dial (`experiments`).** An optional section configuring how experiments pick a primary candidate, choose shadows, and learn (`lib/experiment-policy.js` — the transparent local policy; a future private/hosted model is a drop-in replacement reading the same logs). Section absent or `enabled` anything but literal `true` = fully off; every other value is fallback-on-garbage to the defaults shown (same posture as the calm cap), and unknown keys are preserved for later dials. The policy only ever *recommends* — it never edits `TRIAGE.yml`, never queues work itself, and winner application stays human. Selection and prior-update rules are documented with `routing-priors.jsonl` (below).
+
+**The auto-initiation dial (`auto_initiate`).** The one exception to "the policy never queues" — and it is a *separate opt-in on top of* `enabled`: shadow experiments spin up without a human typing `tl experiment queue` only when **both** `enabled: true` and `auto_initiate: true` are literal. Absent fields (or the whole section) = fully inert — zero writes, zero behavior change. When on, the headless worker tick (`lib/worker.js` `maybeAutoInitiateExperiment`, called immediately after the tick commits a fresh canonical claim — lock + prompt on disk — and before the agent spawn) consults `decideRouting` and queues the returned cohort through the ordinary `queueExperiment` path; the `tl run` claim path is a follow-up spec. The hook is **best-effort and failure-silent toward canonical work**: a broken experiment path is caught, logged, and skipped — it never stops or delays a claim (and dry-run ticks and continuation resumes never initiate; only fresh ready picks do). `auto_initiate_lanes` allowlists the candidate pool the policy routes over (matched against candidate ids and `agent_tool`s; empty = all configured candidates). The two budget caps — `auto_initiate_max_concurrent` (auto experiments with any non-terminal candidate row) and `auto_initiate_daily_max` (auto experiments created per UTC day) — **hold** new auto-experiments with a visible reason when exhausted; they never cancel running ones. Every decision (initiated / held / skipped / error) lands in `auto-initiation-log.jsonl` with the policy inputs that drove it (below); auto-created experiments are downstream-indistinguishable from manual ones — same artifacts, same judge path — except `initiated_by: "policy"` in `EXPERIMENT.md` frontmatter (absent = `"human"`, the manual CLI/UI paths). Auto-*application* stays banned: this dial only ever creates experiments.
+
+**The automation profile (`automation`).** An optional section that makes `tl open <workspace>` the one-command operating path: it declares the workspace's headless schedule instead of N hand-written crons (`lib/automation.js`; generator details in `docs/headless-lanes.md`). Absent section — or `enabled` anything but literal `true` — means **no behavior change**: `tl open` still starts the UI and prints the next human action, but installs nothing (calm default). When enabled, `tl open` installs or refreshes a **single per-workspace schedule** (one launchd plist on macOS, one printed cron line elsewhere — `tl open --print-schedule` emits both, paste-ready) that every `interval_minutes` ticks each lane in `lanes` sequentially via `bin/tl-worker.js <ws> --agent <lane>`. Every listed lane **must** already have `lanes.<name>.command` — a missing command is a hard error with a fix hint, never a silently-green schedule. `verify: true` appends an **isolated verify tick** (`bin/tl-worker.js <ws> --mode verify`) that claims at most one awaiting-verifier spec through `verification.verifier_lanes` (builder exclusion + per-spec lock); it requires at least one safe verifier lane or the profile is misconfigured.
+
+**The automation experiment dial (`automation.experiment`).** Opt-in scheduling of the existing experiment queue/drain path — experiments stay research/compare, never the canonical happy path, and **never auto-select or auto-apply winners** (`lib/experiment-apply.js` stays human-only). Supported values (case-insensitive; unknown strings fail loudly when `automation.enabled` is true — never silently execute):
+
+| Value | Schedule effect |
+|-------|-----------------|
+| `off` (default; absent field) | Fully inert — no experiment ticks. Status says so. |
+| `drain` | Appends one `bin/tl.js experiment drain --agent <lane> <ws>` tick per `automation.lanes` entry after the lane/verify ticks. Drain folds pending `_experiments/queue/*.json` request configs and drains queued candidate/judge rows for that lane only — the same operations as a manual `tl experiment drain`. Requires a non-empty `lanes` list. |
+
+Invalid values (anything else) and `drain` with an empty `lanes` list are **hard profile errors** with a fix hint — same posture as a missing `lanes.<name>.command`. Status / `tl up` output states exactly which drain commands will run. Queueing a new experiment cohort remains explicit (`tl experiment queue`, UI request drop, or the separate `experiments.auto_initiate` dial) — this dial does not make experiments the default work path.
+
+The workspace `PAUSE` file remains the kill switch: the schedule keeps firing but every lane tick exits `2` without spawning, and `tl open` reports the workspace as paused. `tl open` never claims or moves specs — it schedules ticks; the ticks' spawned sessions (and the isolated verifier runner) do the work, and everything still pools at the human review gate.
+
 **Priority epochs (`focus`).** An optional top-level string naming the current priority epoch — a human-owned label tying related weight shifts and overrides together (e.g. `focus: "partner-launch"`). Set via `/tl goal` when rebalancing; absent means no active epoch label. The epoch is **not** a stored period object — it is a join key on append-only logs. When present, `/tl goal` and human priority overrides should stamp the same label on their log lines (`epoch` field, below). `/tl reflect` groups by that label and narrates the span.
 
 **JIRA sync (`sync`).** An optional section enabling `/tl sync` against a JIRA Cloud site (REST API v3 only — not Server/DC). `url` and `project` identify the site and project; `import_filter` is the JQL that scopes what gets imported (default `assignee = currentUser() AND statusCategory != Done`); `map` states the fixed issue-type → primitive mapping (epic → intent, story/task/bug → spec) for legibility. **Credentials never live here** — the API token comes from the environment (`JIRA_EMAIL` / `JIRA_API_TOKEN`) or a credentials file outside the repo, never from `TRIAGE.yml` or any committed file. Section absent = sync disabled; TL is fully functional without it. Algorithm, status/priority mappings, and the `sync-log.jsonl` schema: `skills/sync/SKILL.md`.
@@ -424,6 +587,8 @@ Append-only, one JSON object per line. Schemas are defined in each skill's SKILL
 `goal-log.jsonl` (written by `/tl goal`) records one line per goal add/rebalance/edit. Fields include: `date`, `action` (`add` `rebalance` `edit`), `goal` (id), `weight` (number — the new weight for the affected goal), `rebalanced` (optional map of goal id → `[old_weight, new_weight]` for every changed goal), `reason` (the human's words), and optional `epoch` (string — join key tying this weight shift to related override lines; defaults to `TRIAGE.yml` `focus` when set). Older lines without `epoch` are valid.
 
 `override-log.jsonl` (written by `/tl triage` on detected human priority changes, and by the cockpit on manual overrides) records one line per override. Fields include: `date`, `spec` (path), `from` (priority), `to` (priority), optional `reason` (the human's why), and optional `epoch` (string — same join key as `goal-log.jsonl`; defaults to `TRIAGE.yml` `focus` when set). Older lines without `epoch` are valid.
+
+`review-log.jsonl` (written by the cockpit `/api/review` handler and the `/tl review` CLI path) records one line per human review decision — the audit line behind the reviewer stamp (see "Reviewer provenance" in the Spec section). Fields: `date` (full ISO timestamp of the decision), `spec` (the reviewed path, `in-review/<slug>/`), `action` (`accepted` `kicked-back`), `via` (`cockpit` `cli`), `gate` (`verified` `unverified` — `canAdvanceToReview` at decision time; `unverified` flags an accept past a failing gate, it never blocks one). Append-only like every `_metrics` log: never edit existing lines, corrections are new lines. Decisions that predate this log simply have no row — absence is not evidence of an agent move.
 
 `sync-log.jsonl` (written by `/tl sync`) records one line per sync action — imports, pushes, conflicts, offline stops. Fields include: `timestamp`, `direction` (`import` `export` `none`), `action`, `jira_key`, `path`, `detail`. The log doubles as sync memory: the import watermark, already-pushed detection, and conflict detection all read it. Full schema in `skills/sync/SKILL.md`.
 
@@ -453,6 +618,8 @@ One line per completed spec — the cross-agent benchmarking record. Where `cycl
 
 Who writes what, in one line: the **system** fills identity and provenance (`date`, `spec_slug`, `spec_hash`, `spec_type`, `project`, `intent`, `goal_ids`, `auto_reviewed`) mechanically from the spec folder; the **agent** fills the cost side (`agent_model`, `agent_tool`, `duration_minutes`, `cost_usd`, `tokens_used`) via FEEDBACK.md when it lands the spec in in-review; the **human** fills the quality side (`scores`, `priority_was_right`) at review — the same honest-signal discipline as the override log. A value unknown at write time is `null`, never omitted-and-guessed; as everywhere, parsers preserve unknown fields and corrections are new lines.
 
+**Future cross-ref — `defects_escaped_to_verifier`.** A later benchmark-log writer may add a field derived from whether `outcome/REMEDIATION.diff` was non-empty (verifier found and fixed a builder gap). That field is **not** part of this schema row yet — see Alignment authorship diffs above; do not invent the column here.
+
 **Worked example — the same spec run by two agents.** A kickback rerun (or an experiment replay) of `jira-sync-skill` produces two lines with the same `spec_hash`:
 
 ```jsonl
@@ -470,13 +637,48 @@ Experiment logs are append-only JSONL under `_metrics/`. Markdown artifacts expl
 
 `experiment-log.jsonl` records one line per experiment lifecycle transition. Fields include: `date`, `experiment_id`, `task_type`, `tl_spec`, `spec_hash`, `base_commit`, `primary_agent`, `shadow_agents`, `judge_agent`, `status`, `previous_status`, `replay_of`, `suite_id`, and `reason`.
 
+`auto-initiation-log.jsonl` records one line per auto-initiation decision (`experiments.auto_initiate` dial — written only when the dial is on; an off dial writes nothing). Fields include: `date` (ISO timestamp), `spec` (workspace-relative path of the claimed spec), `decision` (`initiated` `held` `skipped` `error`), `level` (`info` for initiations, budget holds, and errors; `debug` for policy "no" decisions), `initiated_by` (always `"policy"` — this log only exists for the policy path), `experiment_id` (the created experiment, else `null`), `reason` (human-readable; budget holds carry the visible exhaustion reason), `policy` (the inputs that drove the decision — the training signal for priors: dial settings, candidate ids, `context_key`, `primary` `{id, source, reason}`, `shadows`, `shadow_mode`, `scores`, `explore_rate`, `min_samples_to_route`), and `budget` (`daily_used`/`daily_max`, `concurrent_used`/`max_concurrent`). Initiations also appear in `experiment-log.jsonl` as a normal `queued` transition with reason `experiment queued (policy)`.
+
 `winner-log.jsonl` records one line per winner-application decision (select, apply, reject, send-to-review, apply-failed, superseded) — append-only; `WINNER.json` carries only the current state. Fields include: `date`, `experiment_id`, `tl_spec`, `base_commit`, `candidate_id`, `state`, `previous_state`, `decided_by`, `decision_source`, `decided_at`, `patch_path`, `patch_sha256`, `reason`, `error_summary`, and `review_artifact`.
 
-`routing-priors.jsonl` records local transparent routing evidence. Fields include: `date`, `context_key`, `agent_tool`, `agent_model`, `runtime_fingerprint`, `expected_quality`, `expected_cost`, `expected_latency`, `success_rate`, `samples`, `last_updated`, and `source`.
+`routing-priors.jsonl` records local transparent routing evidence — the experiment routing policy's prior store. Full row schema, context-key generation, selection rules, and the promotion threshold: the subsection below.
 
 `replay-log.jsonl` records benchmark/replay comparisons. Fields include: `date`, `experiment_id`, `replay_of`, `suite_id`, `candidate_id`, `previous_winner`, `new_winner`, `utility_delta`, `quality_delta`, `cost_delta`, `latency_delta`, and `promotion_recommendation`.
 
 `trace-features.jsonl` records derived trace features for learning without rereading full traces. Fields include: `date`, `experiment_id`, `candidate_id`, `event_count`, `tool_calls`, `test_iterations`, `first_test_at_ms`, `replan_count`, `backtrack_count`, `scope_violations`, and `human_intervention_count`.
+
+### `routing-priors.jsonl` (transparent routing evidence)
+
+The local policy store behind experiment primary/shadow selection (`lib/experiment-policy.js` — the **sole** writer/selector for this file). Portable-core code reaches that implementation through `createLocalRoutingPolicy` in `lib/experiment-adapter.js`: a thin `{ name, choose, record }` (plus `formatPriorRow`) adapter seam that **delegates** to `experiment-policy` and does not invent a second prior-row shape. A future private or hosted learned model implements the same seam and swaps in without the core depending on it. Append-only and event-sourced like the experiment queue: the **latest** row per `(context_key, agent_tool, agent_model)` is the current prior; an update merges one new judged observation into the running aggregates and appends a **new** line — historical rows are never mutated. No neural model anywhere: the whole policy is a weighted score over quality, success rate, cost, and latency, plus an exploration rate.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `date` | date | when this aggregate row was appended |
+| `context_key` | string | the work-shape bucket this prior applies to (generation below) |
+| `agent_tool` | string | candidate lane, e.g. `claude` `codex` `cursor` |
+| `agent_model` | string/null | model when known; `null` = tool-level prior. A model-specific row wins over a tool-level one at lookup |
+| `runtime_fingerprint` | string | short hash (12 hex chars) of the 9 shared fingerprint fields from the latest observed run |
+| `expected_quality` | number 0–1 | running mean of the per-run quality observation: won `1.0`, succeeded-not-winner `0.5`, faulted `0.0` |
+| `expected_cost` | number | running mean `cost_usd` (unknown counts as 0) |
+| `expected_latency` | number | running mean `duration_minutes` (unknown counts as 0) |
+| `success_rate` | number 0–1 | fraction of runs with status `succeeded` |
+| `samples` | int | observations folded into this aggregate |
+| `last_updated` | datetime | ISO timestamp of this update |
+| `source` | string | provenance: `judged:<experiment_id>` for rows written by the log fold — also the idempotence key (an experiment is folded exactly once) |
+
+**Context key generation** (`buildContextKey`). A deterministic, fixed-segment key over the spec's shape — same work, same key, which is what makes priors joinable: `type=<spec type>|size=<size>|files=<file families>|tags=<tags>|risk=<risk>|caps=<capabilities>`. File families are coarse buckets from the spec's files-to-touch (top-level directory, or extension family for root files: `lib/experiment-policy.js` → `lib`, `README.md` → `md`); list segments are lowercased, sorted, deduped, capped at 4, joined with `+`, `none` when empty. Risk is a small documented heuristic — `p0` priority or a high-risk tag (`security`, `auth`, `payments`, `billing`, `migration`, `infra`, `release`) → `high`, else `normal` — and required capabilities are caller-supplied (e.g. `headless`). Example: `type=feature|size=medium|files=lib+test|tags=experiments+routing|risk=normal|caps=none`.
+
+**Primary selection** (`selectPrimary` / `decideRouting`), in order of authority:
+
+1. **Explicit override wins** — a CLI/experiment override, else the spec's own `agent:` lane when not `any`. Human intent is never re-decided by priors.
+2. **Priors above threshold** — among candidates whose prior has `samples ≥ min_samples_to_route`, pick the best weighted score: `quality·w_q + success_rate·w_s − cost·w_c − latency·w_l` (cost/latency normalized against the candidate pool; default weights 0.5/0.3/0.1/0.1) — unless the exploration roll fires (probability `explore_rate`), so priors never go stale unchallenged.
+3. **Exploration fallback** — least-sampled candidate first (round-robin by evidence), ties broken uniformly at random; with no priors at all this is a plain random pick.
+
+**Shadow selection** (`selectShadows`): `all_others` (default — every other candidate), `top_n` (best `shadow_top_n` others by prior score), or an explicit lane list. The judge is excluded from the candidate pool — primary and shadow — unless `allow_judge_candidate: true`, and the primary never shadows itself.
+
+**Prior updates** (`updatePriorsFromLogs`): priors update **only after judged outcomes** — an experiment contributes observations only once a succeeded `judge-log.jsonl` row exists for it, joined against the latest `candidate-run-log.jsonl` row per candidate. Each experiment is folded exactly once (the `source` tag is checked before folding), corrections are new lines, and unjudged runs teach nothing.
+
+**Promotion threshold** (`shouldPromote`): a challenger becomes the recommended `default_primary` only with **both** `samples ≥ min_samples_to_promote` **and** a weighted-score edge over the incumbent of at least `promote_utility_delta` — a new runtime never becomes the default from a single win. The check returns a recommendation; changing `default_primary` is a human `TRIAGE.yml` edit.
 
 ## Spec notes (`<stage>/<slug>/NOTES.md`, optional)
 
@@ -506,20 +708,20 @@ The continuation half of dispatch. When work moves *backwards* (`in-review/ → 
 
 ## Headless lanes (`lanes:` in `TRIAGE.yml`, `bin/tl-worker.js`)
 
-The scheduling half of cross-agent dispatch: `node bin/tl-worker.js <workspace> --agent <lane>` performs **one worker tick** — if the lane has eligible run work (a pending continuation it owns first, then at most one conflict-free ready spec in its lane), it launches the lane's configured agent CLI once with the `tl run` brief as the prompt, logs the session, and exits. Cron/launchd owns the interval; the driver never moves a spec, never advances a stage, and the spawned session stops at `in-review/` as always. v1 schedules the **run lane only** — verifier scheduling (`tl verify`) is a separate tick. Recipes and the operational model live in `docs/headless-lanes.md`.
+The scheduling half of cross-agent dispatch: `node bin/tl-worker.js <workspace> --agent <lane>` performs **one run tick** — if the lane has eligible run work (a pending continuation it owns first, then at most one conflict-free ready spec in its lane), it launches the lane's configured agent CLI once with the `tl run` brief as the prompt, logs the session, and exits. `node bin/tl-worker.js <workspace> --mode verify [--agent <verifier-lane>]` performs **one verify tick** — claims at most one awaiting-verifier spec via `verification.verifier_lanes`, never the builder, under `_metrics/verify-locks/<slug>.lock`, invokes the isolated runner (`lib/verifier-worker.js`), and records the outcome (clean → `in-review`; mutations → human-decision-required at `tests/`; failures stay in `tests/` with `blocked_reason`). Cockpit **Dispatch verify** only writes `_metrics/verify-requests/*.json` for the tick to drain. Cron/launchd owns the interval. Recipes and the operational model live in `docs/headless-lanes.md`.
 
 **`lanes:` config.** A lane is any shell command — tl ships no provider integrations. Per-lane keys are path-safe lane names matching spec `agent:` / `claimed_by` values: lowercase letters, numbers, dots, underscores, and hyphens only.
 
 ```yaml
 lanes:
   claude:
-    command: "claude -p {prompt_file}"    # {prompt_file} → path to the brief temp file
+    command: "claude --dangerously-skip-permissions -p"   # no placeholder → brief on stdin
     lock_timeout_minutes: 120             # optional — stale-lock takeover threshold (default 120)
   codex:
     command: "codex exec --sandbox workspace-write -"   # no placeholder → brief arrives on stdin
 ```
 
-Prompt delivery, in order: `{prompt_file}` in the command is substituted with the shell-escaped path of the brief written to `_metrics/worker-prompts/<lane>-<timestamp>.txt`; `{prompt}` is substituted with a shell-escaped **single-line** form of the brief (lossy — prefer `{prompt_file}`); a command with neither placeholder receives the brief bytes on stdin. Workspace artifacts (prompts, locks, logs) live under `projects/<name>/`, which is already gitignored. An unconfigured lane is a hard error: exit `1`, nothing executes.
+Prompt delivery: **stdin is canonical** — a command with neither `{prompt_file}` nor `{prompt}` receives the brief bytes on stdin. `{prompt}` is substituted with a shell-escaped **single-line** form of the brief (lossy — avoid for multiline run briefs). **`{prompt_file}` substitutes the shell-escaped path** of the brief written to `_metrics/worker-prompts/<lane>-<timestamp>.txt` — **wrong for CLIs that treat `-p <arg>` as literal prompt text** (e.g. `claude -p {prompt_file}` passes a filename string, not the brief; use stdin instead). Workspace artifacts (prompts, locks, logs) live under `projects/<name>/`, which is already gitignored. An unconfigured lane is a hard error: exit `1`, nothing executes.
 
 **Continuation ownership (lane filter).** A pending continuation is eligible for lane `<lane>` only when ownership matches: if the linked spec has `claimed_by`, that value must equal `<lane>` — `agent: any` never overrides an existing claim. Only when unclaimed does the routing lane (`agent: <lane>` or `any`) decide. While another lane's continuation is pending, a tick claims **no** fresh ready work (matching `/tl run`, which holds the ready queue behind any pending continuation) and exits `0` with reason `no_continuation`.
 

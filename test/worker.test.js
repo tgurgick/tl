@@ -9,7 +9,11 @@ const {
   laneConfig, continuationEligible, pickWork, repoPreflight,
   buildCommand, promptOneLine, checkLock, lockPathFor,
   readWorkspaceSpecs, readPendingContinuations, tick, validLaneName,
+  readVerifierLanes, validateVerifierLane, verifierLaneIssues, verifierLaneAvailable,
+  pickVerifyWork, writeVerifyRequest, verifyTick, applyVerifyHumanDecision,
+  verifyLockPath,
 } = require('../lib/worker');
+const { RESULT_BEGIN: VB, RESULT_END: VE } = require('../lib/verifier-worker');
 
 // build a spec object shaped like readWorkspaceSpecs produces
 function mk(slug, { stage = 'ready', priority = 'p2', type = 'feature', agent, claimedBy, files, mtime = 0 } = {}) {
@@ -246,13 +250,22 @@ function withWorkspace(opts, fn) {
       const folder = (s.stage && s.stage !== 'ready') ? s.stage : 'specs';
       const specDir = path.join(dir, folder, s.slug);
       fs.mkdirSync(specDir, { recursive: true });
-      const fm = ['---', `title: "${s.slug}"`, 'type: feature', `status: ${s.stage || 'ready'}`]
+      const fm = ['---', `title: "${s.slug}"`, 'type: feature', `status: ${s.status || s.stage || 'ready'}`]
         .concat(s.agent ? [`agent: ${s.agent}`] : [])
         .concat(s.claimedBy ? [`claimed_by: ${s.claimedBy}`] : [])
         .concat(s.repo ? [`repo: "${s.repo}"`] : [])
-        .concat(['---', '', '## Objective', 'x', '', '## Scope', '', '### Files to touch',
+        .concat(s.awaitingVerifier ? ['awaiting_verifier: true'] : [])
+        .concat(s.extraFm || [])
+        .concat(['---', '', '## Objective', 'x', '',
+          '## Acceptance criteria', '', '- works', '',
+          '## Scope', '', '### Files to touch',
           ...(s.files || []).map(f => `- \`${f}\``), '']).join('\n');
       fs.writeFileSync(path.join(specDir, 'SPEC.md'), fm);
+      if (s.verifyMd) fs.writeFileSync(path.join(specDir, 'VERIFY.md'), s.verifyMd);
+      if (s.feedback) {
+        fs.mkdirSync(path.join(specDir, 'outcome'), { recursive: true });
+        fs.writeFileSync(path.join(specDir, 'outcome', 'FEEDBACK.md'), s.feedback);
+      }
     }
     for (const [rel, content] of Object.entries(opts.files || {})) {
       const f = path.join(dir, rel);
@@ -552,3 +565,295 @@ test('readWorkspaceSpecs + readPendingContinuations: stale pending trigger is no
     assert.equal(readLog(ws)[0].picked, 'specs/fresh/');
   });
 });
+
+// ---------- verify lane config + tick ----------
+
+const VERIFY_TRIAGE = [
+  LANES_YML.trimEnd(),
+  'verification:',
+  '  require_independent_verifier: true',
+  '  verifier_lanes:',
+  '    gemini:',
+  '      agent: gemini',
+  '      mode: verify',
+  '      isolated: true',
+  '      sandbox: required',
+  '      allow_network: false',
+  '      allow_commands: []',
+  '      command: [agy]',
+  '',
+].join('\n');
+
+function passStdout() {
+  return `${VB}\n${JSON.stringify({ verdict: 'pass', notes: ['ok'], proposed_mutations: [] })}\n${VE}\n`;
+}
+
+function mutationStdout() {
+  return `${VB}\n${JSON.stringify({
+    verdict: 'human-decision-required', notes: ['needs fix'],
+    proposed_mutations: [{ file: 'a.js', reason: 'fix it' }],
+  })}\n${VE}\n`;
+}
+
+test('validateVerifierLane: rejects unsafe Gemini (network / no sandbox / skip-permissions)', () => {
+  assert.throws(() => validateVerifierLane({
+    id: 'gemini', agent: 'gemini', isolated: true, sandbox: false,
+    allow_network: false, mode: 'verify', command: ['agy'], allow_commands: [],
+  }), /sandbox/);
+  assert.throws(() => validateVerifierLane({
+    id: 'gemini', agent: 'gemini', isolated: true, sandbox: true,
+    allow_network: true, mode: 'verify', command: ['agy'], allow_commands: [],
+  }), /allow_network/);
+  assert.throws(() => validateVerifierLane({
+    id: 'gemini', agent: 'gemini', isolated: true, sandbox: true,
+    allow_network: false, mode: 'verify',
+    command: ['agy', '--dangerously-skip-permissions'], allow_commands: [],
+  }), /dangerously-skip-permissions/);
+  assert.doesNotThrow(() => validateVerifierLane(readVerifierLanes({
+    verification: {
+      verifier_lanes: {
+        gemini: {
+          agent: 'gemini', isolated: true, sandbox: 'required',
+          allow_network: false, command: ['agy'],
+        },
+      },
+    },
+  })[0]));
+});
+
+test('verifierLaneAvailable: Gemini binary missing is unavailable', () => {
+  const lane = readVerifierLanes({
+    verification: {
+      verifier_lanes: {
+        gemini: {
+          agent: 'gemini', isolated: true, sandbox: 'required',
+          allow_network: false, command: ['agy'],
+        },
+      },
+    },
+  })[0];
+  assert.equal(verifierLaneAvailable(lane, { which: () => '' }).ok, false);
+  assert.equal(verifierLaneAvailable(lane, { which: () => '/usr/bin/agy' }).ok, true);
+});
+
+test('pickVerifyWork: never assigns builder; one-per-tick; prefers request', () => {
+  const lanes = readVerifierLanes({
+    verification: {
+      verifier_lanes: {
+        gemini: {
+          agent: 'gemini', isolated: true, sandbox: 'required',
+          allow_network: false, command: ['agy'],
+        },
+        codex: {
+          agent: 'codex', isolated: true, sandbox: 'required',
+          allow_network: false, command: ['codex'],
+        },
+      },
+    },
+  });
+  const cursorBuilt = mk('mine', { stage: 'tests', claimedBy: 'cursor', mtime: 1 });
+  cursorBuilt.meta.awaiting_verifier = true;
+  const other = mk('other', { stage: 'tests', claimedBy: 'claude', mtime: 2 });
+  other.meta.awaiting_verifier = true;
+  // Prefer-lane gemini against cursor-built work is fine (≠ builder).
+  const pick = pickVerifyWork({ specs: [cursorBuilt, other], lanes, preferLane: 'gemini' });
+  assert.equal(pick.kind, 'queue');
+  assert.equal(pick.lane.agent, 'gemini');
+  assert.ok(pick.spec.path.includes('mine') || pick.spec.path.includes('other'));
+
+  // Builder exclusion: preferLane cursor against cursor-built → skip to other or none for that lane.
+  const onlyMine = pickVerifyWork({
+    specs: [cursorBuilt],
+    lanes: lanes.filter(l => l.id === 'gemini'),
+  });
+  assert.equal(onlyMine.kind, 'queue');
+  assert.notEqual(onlyMine.lane.agent, 'cursor');
+
+  const asBuilder = pickVerifyWork({
+    specs: [cursorBuilt],
+    lanes: [{
+      id: 'cursor', agent: 'cursor', isolated: true, sandbox: true,
+      allow_network: false, mode: 'verify', command: ['x'], allow_commands: [],
+      lockTimeoutMinutes: 60,
+    }],
+  });
+  assert.equal(asBuilder.kind, 'none');
+
+  const req = {
+    file: '_metrics/verify-requests/1-other.json',
+    abs: '/tmp/x',
+    request: { spec: 'other', mode: 'verify', status: 'pending', target_lane: 'codex' },
+  };
+  const fromReq = pickVerifyWork({ specs: [cursorBuilt, other], lanes, requests: [req] });
+  assert.equal(fromReq.kind, 'request');
+  assert.equal(fromReq.lane.id, 'codex');
+  assert.equal(specSlug(fromReq.picked), 'other');
+});
+
+test('writeVerifyRequest + verifyTick: locking, one-per-tick, pass advances to in-review', () => {
+  withWorkspace({
+    triage: VERIFY_TRIAGE,
+    specs: [
+      {
+        slug: 'a', stage: 'tests', status: 'blocked', claimedBy: 'cursor',
+        awaitingVerifier: true, files: ['a.js'], verifyMd: 'please check\n',
+        feedback: '---\nagent_tool: cursor\n---\n# Feedback\nok\n',
+      },
+      {
+        slug: 'b', stage: 'tests', status: 'blocked', claimedBy: 'cursor',
+        awaitingVerifier: true, files: ['b.js'],
+      },
+    ],
+  }, ws => {
+    const got = writeVerifyRequest(ws.dir, { spec: 'tests/a/', targetLane: 'gemini', source: 'cockpit' });
+    assert.match(got.path, /_metrics\/verify-requests\//);
+    assert.equal(got.request.target_lane, 'gemini');
+
+    let ticks = 0;
+    const runVerify = () => {
+      ticks++;
+      return { status: 'pass', verdict: 'pass', notes: ['clean'], proposed_mutations: [] };
+    };
+    const r1 = verifyTick({
+      root: ROOT, wsDir: ws.dir, wsName: ws.name,
+      which: () => '/bin/agy',
+      runVerify,
+      createWorktree: () => ws.dir,
+      removeWorktree: () => {},
+    });
+    assert.equal(r1.code, 0);
+    assert.equal(r1.outcome, 'in-review');
+    assert.equal(ticks, 1);
+    assert.ok(fs.existsSync(path.join(ws.dir, 'in-review', 'a', 'SPEC.md')));
+    assert.ok(!fs.existsSync(path.join(ws.dir, 'tests', 'a')));
+    const fm = fs.readFileSync(path.join(ws.dir, 'in-review', 'a', 'SPEC.md'), 'utf8');
+    assert.match(fm, /verified_by: "gemini"/);
+
+    // Second tick takes the remaining awaiting spec (one claim per tick).
+    const r2 = verifyTick({
+      root: ROOT, wsDir: ws.dir, wsName: ws.name,
+      which: () => '/bin/agy',
+      runVerify: () => ({ status: 'pass', verdict: 'pass', notes: [], proposed_mutations: [] }),
+    });
+    assert.equal(r2.picked, 'tests/b/');
+    assert.equal(r2.outcome, 'in-review');
+    assert.equal(ticks, 1); // only the first tick used the counting mock
+  });
+});
+
+test('verifyTick: builder exclusion + unavailable lane leave auditable blocked reason', () => {
+  withWorkspace({
+    triage: VERIFY_TRIAGE,
+    specs: [{
+      slug: 'mine', stage: 'tests', status: 'blocked', claimedBy: 'gemini',
+      awaitingVerifier: true, files: ['a.js'],
+    }],
+  }, ws => {
+    const r = verifyTick({
+      root: ROOT, wsDir: ws.dir, wsName: ws.name,
+      preferLane: 'gemini',
+      which: () => '/bin/agy',
+      runVerify: () => { throw new Error('should not run'); },
+    });
+    assert.ok(r.code !== 0 || r.reason === 'no_eligible_for_lane' || r.reason === 'builder_exclusion' || r.reason === 'no_awaiting');
+    assert.ok(fs.existsSync(path.join(ws.dir, 'tests', 'mine', 'SPEC.md')));
+  });
+
+  withWorkspace({
+    triage: VERIFY_TRIAGE,
+    specs: [{
+      slug: 'need', stage: 'tests', status: 'blocked', claimedBy: 'cursor',
+      awaitingVerifier: true, files: ['a.js'],
+    }],
+  }, ws => {
+    const r = verifyTick({
+      root: ROOT, wsDir: ws.dir, wsName: ws.name,
+      which: () => '', // unavailable
+      runVerify: () => { throw new Error('should not run'); },
+    });
+    assert.equal(r.reason, 'verifier_unavailable');
+    const fm = fs.readFileSync(path.join(ws.dir, 'tests', 'need', 'SPEC.md'), 'utf8');
+    assert.match(fm, /blocked_reason:.*unavailable/i);
+    assert.ok(fs.existsSync(path.join(ws.dir, 'tests', 'need')));
+  });
+});
+
+test('verifyTick: lock held prevents double-check', () => {
+  withWorkspace({
+    triage: VERIFY_TRIAGE,
+    specs: [{
+      slug: 'locked', stage: 'tests', status: 'blocked', claimedBy: 'cursor',
+      awaitingVerifier: true, files: ['a.js'],
+    }],
+  }, ws => {
+    const lock = verifyLockPath(ws.dir, 'locked');
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, JSON.stringify({ status: 'running', verifier: 'other' }) + '\n');
+    const r = verifyTick({
+      root: ROOT, wsDir: ws.dir, wsName: ws.name,
+      which: () => '/bin/agy',
+      runVerify: () => ({ status: 'pass', verdict: 'pass', notes: [], proposed_mutations: [] }),
+    });
+    assert.equal(r.code, 2);
+    assert.equal(r.reason, 'locked');
+    assert.ok(fs.existsSync(path.join(ws.dir, 'tests', 'locked')));
+  });
+});
+
+test('verifyTick: mutation escalates to human-decision-required; never auto-applies', () => {
+  withWorkspace({
+    triage: VERIFY_TRIAGE,
+    specs: [{
+      slug: 'mut', stage: 'tests', status: 'blocked', claimedBy: 'cursor',
+      awaitingVerifier: true, files: ['a.js'],
+    }],
+  }, ws => {
+    const r = verifyTick({
+      root: ROOT, wsDir: ws.dir, wsName: ws.name,
+      which: () => '/bin/agy',
+      runVerify: () => ({
+        status: 'human-decision-required',
+        verdict: 'human-decision-required',
+        notes: ['concern'],
+        proposed_mutations: [{ file: 'a.js', reason: 'fix' }],
+      }),
+    });
+    assert.equal(r.outcome, 'human-decision-required');
+    assert.ok(fs.existsSync(path.join(ws.dir, 'tests', 'mut')));
+    assert.ok(!fs.existsSync(path.join(ws.dir, 'in-review', 'mut')));
+    const notes = fs.readFileSync(path.join(ws.dir, 'tests', 'mut', 'NOTES.md'), 'utf8');
+    assert.match(notes, /human decision required/i);
+    const decided = applyVerifyHumanDecision(ws.dir, {
+      slug: 'mut', action: 'authorize-fix-forward', note: 'please fix a.js',
+    });
+    assert.equal(decided.path, 'in-progress/mut/');
+    assert.ok(fs.existsSync(path.join(ws.dir, '_dispatch', 'mut.json')));
+    assert.ok(!fs.existsSync(path.join(ws.dir, 'tests', 'mut')));
+  });
+});
+
+test('verifyTick: process failure stays in tests/ with blocked reason', () => {
+  withWorkspace({
+    triage: VERIFY_TRIAGE,
+    specs: [{
+      slug: 'fail', stage: 'tests', status: 'blocked', claimedBy: 'cursor',
+      awaitingVerifier: true, files: ['a.js'],
+    }],
+  }, ws => {
+    const r = verifyTick({
+      root: ROOT, wsDir: ws.dir, wsName: ws.name,
+      which: () => '/bin/agy',
+      runVerify: () => ({ status: 'blocked', reason: 'verifier process failed', notes: [] }),
+    });
+    assert.equal(r.outcome, 'blocked');
+    const fm = fs.readFileSync(path.join(ws.dir, 'tests', 'fail', 'SPEC.md'), 'utf8');
+    assert.match(fm, /blocked_reason:.*verifier process failed/);
+  });
+});
+
+// silence unused import warning path for VB/VE when helpers above are enough
+void VB; void VE; void verifierLaneIssues;
+
+function specSlug(p) {
+  return String(p || '').replace(/\/$/, '').split('/').pop();
+}

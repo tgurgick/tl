@@ -1,6 +1,6 @@
 ---
 name: groom
-description: Batch-groom a tl workspace's parked threads — propose a disposition for each (promote, spec, research, merge, close, keep), auto-execute the high-confidence ones, ask only on the ambiguous, and move the rest into the backlog. Use when parked threads have piled up and the user wants to review, clear, or work through loose ends in bulk. The batch counterpart to /tl promote.
+description: Batch-groom a tl workspace's parked threads — propose a disposition for each (promote, spec, research, merge, close, keep), auto-execute the high-confidence ones, ask only on the ambiguous, and move the rest into the backlog. Use when parked threads have piled up and the user wants to clear or work through loose ends in bulk (steer). The batch counterpart to /tl promote.
 ---
 
 # /tl groom
@@ -65,4 +65,5 @@ One block: a table of every thread and what happened to it (auto-done vs your-ca
 - Don't dispatch or run work — `groom` fills the backlog and flags the parallel set; dispatching is the human's deliberate step.
 - Never delete a thread — `close` / `merge` via status + a pointer, so lineage survives.
 - Respect `/tl triage`'s ownership: create specs with `priority` blank; triage ranks them.
+- Same write discipline as `/tl triage` (see its "Write discipline" section): every frontmatter change is a targeted single-field edit (`lib/frontmatter.js` `setFrontmatterField` / `stampSpecFields` semantics) — never parse-and-re-dump a whole frontmatter block or rewrite a file wholesale. Re-stat before each write: a thread or spec that moved since you read it is skipped and reported, not restored. Never touch an existing spec's `status`, `claimed_by`, `claimed_at`, `awaiting_verifier`, or verifier fields, and never move or edit a claimed spec — grooming creates and closes; it does not sweep the board.
 - One workspace per run.

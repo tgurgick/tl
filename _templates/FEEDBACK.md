@@ -15,6 +15,10 @@ priority_was_right: true        # was this worth doing when we did it?
 
 # Feedback: {spec title}
 
+## What shipped
+
+{One to three sentences of outcome language: the value delivered, in human terms — not a file inventory. Resume reads this for its value line.}
+
 ## Asked vs. delivered
 
 {One or two sentences: what the spec asked for, what the agent produced, and the gap between them if any.}

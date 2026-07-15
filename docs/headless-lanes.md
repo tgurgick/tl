@@ -23,6 +23,53 @@ worker's alarm clock, not its brain. The prompt is exactly the stdout of
 `node bin/tl.js run <ws> --agent <lane>`, so the driver can never drift from
 what an interactive run would say.
 
+## The happy path: `tl open`
+
+You normally don't write the cron/launchd units below by hand anymore. Declare
+one `automation:` profile in the workspace's TRIAGE.yml and let
+`tl open <workspace>` install or refresh the schedule (plus start the cockpit
+and print the next human action):
+
+```yaml
+automation:
+  enabled: true          # literal true; anything else (or an absent section) = no schedules
+  interval_minutes: 15   # tick interval; fallback-on-garbage to 15
+  lanes: [claude, codex] # each MUST have a lanes.<name>.command below — loud error otherwise
+  verify: false          # true = isolated verify tick (tl-worker --mode verify; needs verifier_lanes)
+  experiment: off        # off | drain — opt-in experiment queue/drain ticks; never auto-applies winners
+
+verification:
+  require_independent_verifier: true
+  verifier_lanes:
+    gemini:
+      agent: gemini
+      mode: verify
+      isolated: true           # required
+      sandbox: required        # required
+      allow_network: false     # Gemini: true is rejected loudly
+      allow_commands: ["npm test"]
+      command: [agy]
+```
+
+`tl open` generates a **single per-workspace schedule** — one launchd plist
+(`~/Library/LaunchAgents/com.tl.open.<ws>.plist`) on macOS, one cron line
+elsewhere — whose body ticks each listed lane sequentially with
+`bin/tl-worker.js <ws> --agent <lane>` (sequential is deliberate: calm over
+swarm, and the per-lane locks prevent overlap anyway). **v1 platform gap:**
+macOS gets write+`launchctl load`; Linux/other get a paste-able cron line only
+— `tl open` never runs `crontab` for you (use `--print-schedule` or paste from
+the open output). Try `tl open <ws> --dry-run` first; `tl open <ws>
+--print-schedule` emits the complete paste-able cron line **and** plist — the
+right path when an agent is driving, because `launchctl load` can hang a
+headless session on a macOS permission prompt. A listed lane with no
+`lanes.<name>.command` fails loudly before anything is generated. `PAUSE`
+still stops every tick; full contract in `_templates/SCHEMA.md`.
+
+Everything below — per-lane commands, quirks, and the hand-rolled cron/launchd
+recipes — still applies and remains the **advanced escape hatch** (offset
+schedules, per-lane intervals, non-standard layouts). `tl open` just writes
+the common case for you.
+
 ## Configure the lanes (`TRIAGE.yml`)
 
 A lane is any shell command; tl ships no provider integrations. See
@@ -33,16 +80,21 @@ hyphens only.
 ```yaml
 lanes:
   claude:
-    command: "claude -p {prompt_file}"
+    command: "claude --dangerously-skip-permissions -p"   # brief on stdin — no placeholder
   codex:
     command: "codex exec --sandbox workspace-write -"
     lock_timeout_minutes: 90    # optional; default 120
 ```
 
-Prompt delivery: `{prompt_file}` → shell-escaped path to the brief (written to
-`_metrics/worker-prompts/<lane>-<timestamp>.txt`); `{prompt}` → shell-escaped
-single-line brief (lossy — prefer `{prompt_file}`); neither placeholder → the
-brief arrives on stdin. Try it without side effects first:
+Prompt delivery: **stdin is canonical** — a command with no `{prompt_file}` or
+`{prompt}` placeholder receives the brief bytes on stdin (the shape every
+working lane uses). `{prompt}` substitutes a shell-escaped single-line brief
+(lossy — avoid for multiline run briefs). **`{prompt_file}` is wrong for
+CLIs that treat `-p <arg>` as literal prompt text** (notably `claude -p`): the
+worker substitutes the *path* to `_metrics/worker-prompts/<lane>-<timestamp>.txt`,
+so the session receives a filename string, not the brief — only works if the
+agent happens to open the path itself. Do not use `{prompt_file}` in claude
+lanes; pipe on stdin instead. Try it without side effects first:
 
 ```
 node bin/tl-worker.js throughline --agent claude --dry-run
@@ -102,18 +154,56 @@ other lanes: in `codex exec`, `-p <profile>` selects a config profile and
 the brief arrives on stdin via the trailing `-`. See the writable-roots
 section below for why you'll want a profile at all.
 
+**claude — prompt on stdin; token setup has gotchas.** The lane command is
+`claude [extra…] -p` with **no** `-p` argument — the brief arrives on stdin
+(the `cat brief | claude -p` shape). Never `claude -p {prompt_file}`: `-p`
+takes literal prompt text, so `{prompt_file}` passes a path string, not the
+brief (see prompt delivery above).
+
+Headless auth uses `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` (run
+in a plain terminal outside any Claude Code session):
+
+```bash
+claude setup-token
+export CLAUDE_CODE_OAUTH_TOKEN="⟨paste token here⟩"
+export CLAUDE_CODE_OAUTH_TOKEN="$(printf %s "$CLAUDE_CODE_OAUTH_TOKEN" | tr -d '[:space:]')"
+```
+
+Setup gotchas (full walkthrough:
+`done/research-claude-headless-auth/outcome/SMOKE.md` in the throughline
+workspace):
+
+1. **Line-wrap newline.** Terminal line-wrap embeds a hard newline in a
+   copied token → malformed Authorization header (`Header 'N' has invalid
+   value`). The `tr -d '[:space:]'` line above is part of the procedure, not
+   optional cleanup.
+2. **Redaction rule.** When sharing errors or logs, redact everything after
+   `sk-ant-oat01-` — tokens have been exposed in error output during setup
+   and must be revoked.
+3. **Cron/launchd env.** Scheduled ticks do not inherit your shell's exports.
+   Put `CLAUDE_CODE_OAUTH_TOKEN` in the schedule's environment (launchd
+   `EnvironmentVariables` dict, cron `VAR=value` prefix, or a wrapper that
+   sources it) — the same token, still whitespace-stripped. Without it every
+   claude tick fails auth silently or loudly depending on the CLI.
+
+Smoke-test before wiring the lane:
+
+```bash
+claude -p "Reply with exactly: OK" --output-format text </dev/null
+```
+
 Worked `lanes:` examples, one per lane:
 
 ```yaml
 lanes:
   claude:
-    command: "claude -p {prompt_file}"
+    command: "claude --dangerously-skip-permissions -p"           # brief on stdin
   codex:
     command: "codex exec --sandbox workspace-write -p todoapp -"  # -p = profile; brief on stdin
   gemini:
-    command: "agy --dangerously-skip-permissions -p {prompt}"     # flag order is load-bearing
+    command: "agy --dangerously-skip-permissions -p"              # -p last; brief on stdin
   cursor:
-    command: "cursor-agent -f -p {prompt}"                        # -f = trust the directory
+    command: "cursor-agent -f -p {prompt}"                        # -f = trust; {prompt} inline (no stdin)
 ```
 
 ## No nested quoting in `lanes:` commands
@@ -163,7 +253,7 @@ When you add a workspace whose `repo` lives outside the tl checkout, create
 the profile before the lane's first tick — otherwise the first tick burns on
 the permission block.
 
-## cron recipes
+## cron recipes (advanced escape hatch — `tl open` writes the common case)
 
 One line per lane. Ticks are cheap when there's no work (exit 0, one log
 line), so a short interval is fine — the per-lane lock prevents overlap even
@@ -181,7 +271,7 @@ if a session runs longer than the interval.
 same auth as your shell, or wrap the command in a login shell:
 `bash -lc '... tl-worker ...'`.)
 
-## launchd recipe (macOS)
+## launchd recipe (macOS — advanced escape hatch; `tl open` generates `com.tl.open.<ws>.plist`)
 
 `~/Library/LaunchAgents/com.tl.worker.claude.plist`, one plist per lane:
 
@@ -242,17 +332,54 @@ kickback note itself is what wakes the right agent.
 `_metrics/worker-log.jsonl` (schema in `_templates/SCHEMA.md`). `--dry-run`
 writes nothing anywhere — it only prints what would happen.
 
-## The v1 verifier gap
+## Isolated verify ticks
 
-This worker schedules the **run lane only**. With
-`verification.require_independent_verifier: true`, a builder session stops at
-`tests/` with `awaiting_verifier: true` — and no cron here will pick that up:
-verification is `tl verify`, deliberately not this worker's job (the driver
-must not invent verifier scheduling). Until a verifier worker ships (follow-up
-after `enforce-independent-verifier-gate`; e.g. `tl-worker --mode verify` or a
-sibling `tl-verify-worker`), run `tl verify` sessions by hand or on their own
-schedule. Expect headless work to accumulate at `tests/` in the meantime —
-that's the gate working, not a bug.
+When `automation.verify: true`, the per-workspace schedule appends:
+
+```
+node bin/tl-worker.js <workspace> --mode verify
+```
+
+One tick claims **at most one** eligible `awaiting_verifier` spec through a
+configured `verification.verifier_lanes` entry. The builder (`claimed_by`) is
+never assigned their own work. A per-spec lock at
+`_metrics/verify-locks/<slug>.lock` prevents concurrent lanes from double-
+checking. The tick invokes the isolated runner (`lib/verifier-worker.js`) in a
+disposable worktree: TL runs only allowlisted acceptance commands, scrubs
+credential env vars, and accepts a structured verdict. Clean pass →
+`in-review/` with `verified_by` provenance. Failures stay in `tests/` with an
+auditable `blocked_reason`. Mutation proposals become
+`human-decision-required` — the UI/CLI present authorize fix-forward vs kick
+back; **nothing is auto-applied**.
+
+**Trust model.** The model is an untrusted reviewer. Canonical TL code owns
+lifecycle transitions and metadata. `--dangerously-skip-permissions`, missing
+`isolated`/`sandbox`, or Gemini `allow_network: true` fail loudly at config
+time. Cockpit **Dispatch verify** (and `tl verify --dispatch`) only write
+`_metrics/verify-requests/*.json` targeting a lane ≠ builder (or
+`any-other`); the UI/server never spawn agent CLIs. Drain with the scheduled
+tick or `tl verify --execute`.
+
+```cron
+# optional hand-rolled verify tick (tl open already chains this when verify: true)
+*/15 * * * * cd $HOME/Documents/GitHub/throughline && /usr/local/bin/node bin/tl-worker.js throughline --mode verify >> /tmp/tl-worker-verify.log 2>&1
+```
+
+## Opt-in experiment drain ticks
+
+`automation.experiment` is **off by default** (absent field = `off`). Experiments stay research/compare — not the canonical happy path — and winner application stays an explicit human action (`tl experiment select|apply|reject|send-to-review`). The dial only schedules existing queue/drain operations:
+
+| Value | Effect |
+|-------|--------|
+| `off` | Inert — no experiment ticks in the schedule. |
+| `drain` | After lane (+ optional verify) ticks, run `node bin/tl.js experiment drain --agent <lane> <ws>` once per `automation.lanes` entry. |
+
+`drain` folds pending `_experiments/queue/*.json` request configs and drains queued candidate/judge rows for that agent lane — the same path as a manual drain. It does **not** queue new cohorts by itself (use `tl experiment queue`, the UI request form, or `experiments.auto_initiate`), and it never calls select/apply. Unsupported values fail loudly at `tl open` time (same as a missing lane command); `drain` with an empty `lanes` list is also a hard error. `tl open` status prints exactly which drain commands will run.
+
+```cron
+# optional hand-rolled experiment drain (tl open chains these when experiment: drain)
+*/15 * * * * cd $HOME/Documents/GitHub/throughline && /usr/local/bin/node bin/tl.js experiment drain --agent claude throughline >> /tmp/tl-experiment-drain.log 2>&1
+```
 
 ## Stranded-continuation recovery
 

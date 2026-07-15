@@ -1,23 +1,25 @@
 #!/usr/bin/env node
 // tl-worker — one headless lane tick per invocation; cron/launchd owns the interval.
 //
-//   tl-worker <workspace> --agent <lane> [--dry-run]
+//   tl-worker <workspace> --agent <lane> [--mode run|verify] [--dry-run]
+//   tl-worker <workspace> --mode verify [--agent <verifier-lane>] [--dry-run]
 //
-// Decide whether lane <lane> has eligible RUN work (pending continuation
-// dispatch first, then one conflict-free ready spec), and if so launch the
-// lane's configured agent CLI (TRIAGE.yml `lanes.<lane>.command`) exactly once
-// with the assembled `tl run` brief as its prompt. The spawned session does
-// everything else under the run SKILL, stopping at in-review/ — this driver
-// never moves a spec, never advances a stage. v1 covers the run lane only;
-// verifier scheduling (`tl verify`) is a separate tick (see docs/headless-lanes.md).
+// Run mode: decide whether lane <lane> has eligible RUN work (pending
+// continuation dispatch first, then one conflict-free ready spec), and if so
+// launch the lane's configured agent CLI (TRIAGE.yml `lanes.<lane>.command`)
+// exactly once with the assembled `tl run` brief as its prompt.
+//
+// Verify mode: claim at most one awaiting-verifier spec through a configured
+// isolated verifier lane (TRIAGE.yml `verification.verifier_lanes`), lock it,
+// invoke lib/verifier-worker.js, and record the outcome. Never assigns work to
+// the builder. UI/server never reach this path — they only write request files.
 //
 // Exit codes (cron-friendly):
-//   0  no work (quiet) or the child session exited 0
-//   1  lane misconfigured, spawn failure, or child exited non-zero
-//   2  workspace PAUSE file present, or the lane lock is held
+//   0  no work (quiet) or the child / verify session exited 0
+//   1  lane misconfigured, spawn failure, or child / verify exited non-zero
+//   2  workspace PAUSE file present, or a lock is held
 //
-// The decision logic lives in lib/worker.js; this file is only the wiring —
-// arg parsing, workspace resolution, and the real subprocess/spawn seams.
+// Decision logic lives in lib/worker.js; this file is the wiring.
 
 'use strict';
 
@@ -27,12 +29,10 @@ const { execFileSync, spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const { isDir } = require('../lib/workspace');
-const { tick } = require('../lib/worker');
+const { tick, verifyTick } = require('../lib/worker');
 
 function fail(msg) { process.stderr.write('tl-worker: ' + msg + '\n'); process.exit(1); }
 
-// Workspace resolution — same convention as bin/tl.js: an arg names a
-// workspace under projects/, or if exactly one exists use it, else list + error.
 function resolveWorkspace(arg) {
   const projects = path.join(ROOT, 'projects');
   const all = isDir(projects)
@@ -50,41 +50,58 @@ function resolveWorkspace(arg) {
 
 function usage() {
   process.stderr.write([
-    'usage: tl-worker <workspace> --agent <lane> [--dry-run]',
+    'usage: tl-worker <workspace> --agent <lane> [--mode run|verify] [--dry-run]',
+    '       tl-worker <workspace> --mode verify [--agent <verifier-lane>] [--dry-run]',
     '',
-    'One headless lane tick: spawn the lane\'s configured agent (TRIAGE.yml',
-    '`lanes.<lane>.command`) once if it has eligible run work, then exit.',
-    'Exit codes: 0 no work / child ok · 1 misconfig / spawn fail / child non-zero · 2 paused / locked',
+    'Run mode: spawn the lane\'s configured agent once if it has eligible run work.',
+    'Verify mode: claim ≤1 awaiting-verifier spec via an isolated verifier lane.',
+    'Exit codes: 0 no work / ok · 1 misconfig / fail · 2 paused / locked',
   ].join('\n') + '\n');
   process.exit(1);
 }
 
+function whichSync(bin) {
+  try {
+    const r = spawnSync('which', [bin], { encoding: 'utf8' });
+    return r.status === 0 ? String(r.stdout || '').trim() : '';
+  } catch { return ''; }
+}
+
 function main() {
   const args = process.argv.slice(2);
-  let lane = null, dryRun = false;
+  let lane = null, dryRun = false, mode = 'run';
   const pos = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--agent') lane = String(args[++i] || '').toLowerCase();
     else if (args[i].startsWith('--agent=')) lane = args[i].slice(8).toLowerCase();
     else if (args[i] === '--dry-run') dryRun = true;
+    else if (args[i] === '--mode') mode = String(args[++i] || '');
+    else if (args[i].startsWith('--mode=')) mode = args[i].slice(7);
     else if (args[i] === '-h' || args[i] === '--help') usage();
     else pos.push(args[i]);
   }
-  if (!lane) usage();  // the lane is the whole point — no default
+  if (!['run', 'verify'].includes(mode)) fail('--mode must be run or verify');
+  if (mode === 'run' && !lane) usage();
 
   const ws = resolveWorkspace(pos[0]);
+
+  if (mode === 'verify') {
+    const result = verifyTick({
+      root: ROOT, wsDir: ws.dir, wsName: ws.name,
+      preferLane: lane || null,
+      dryRun,
+      which: whichSync,
+    });
+    process.exit(result.code);
+  }
 
   const result = tick({
     root: ROOT, wsDir: ws.dir, wsName: ws.name, lane, dryRun,
 
-    // The authoritative prompt: exactly the stdout of `tl run <ws> --agent <lane>`.
     getRunBrief: () => execFileSync(process.execPath,
       [path.join(ROOT, 'bin', 'tl.js'), 'run', ws.name, '--agent', lane],
       { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }),
 
-    // The one spawn: a shell command from config, blocking until the session
-    // exits (the tick ends when the child does). stdin carries the prompt only
-    // when the template has no {prompt_file}/{prompt} placeholder.
     spawnLane: ({ command, stdin }) => {
       const r = spawnSync(command, {
         cwd: ROOT, shell: true,
@@ -92,7 +109,7 @@ function main() {
         stdio: [stdin != null ? 'pipe' : 'inherit', 'inherit', 'inherit'],
       });
       if (r.error) throw r.error;
-      return r.status === null ? 1 : r.status;  // killed by signal → failure
+      return r.status === null ? 1 : r.status;
     },
   });
 
