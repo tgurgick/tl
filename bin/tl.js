@@ -59,6 +59,7 @@ const SKILLS = path.join(INSTALL_ROOT, 'skills');
 const { parseFrontmatter, parseYaml } = require('../lib/parse');
 const { safeRead, readFirst, isDir, mtime } = require('../lib/workspace');
 const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch, calmCap, selectContinuations, repoHoldReason } = require('../lib/batch');
+const { stallThresholdMs, detectStalledClaims, reclaimStalled } = require('../lib/stall');
 const { runFixtureExperiment } = require('../lib/experiment-fixture');
 const { selectWinner, applyWinner, rejectWinner, sendWinnerToReview } = require('../lib/experiment-apply');
 const { queueExperiment, drainQueue, readQueueRows } = require('../lib/experiment-queue');
@@ -66,7 +67,7 @@ const { replayExperiment, replayReport, parseCandidate, createSuite, listSuites,
 const { canAdvanceToReview, verificationPolicy } = require('../lib/verification-gate');
 const {
   readAutomation, laneIssues, scheduleArtifacts, installLaunchd, automationStatus,
-  experimentScheduleSummary,
+  experimentScheduleSummary, laneAvailability, formatLaneAvailability,
 } = require('../lib/automation');
 const {
   verifyTick, applyVerifyHumanDecision, verifierStatusOf, readVerifierLanes,
@@ -298,11 +299,28 @@ function cmdResume(args) {
     out(`${done.length} in done/ — latest: ${done[0].title} (${done[0].path})`);
   }
 
-  // in-progress
+  // in-progress — with stalled-claim flags (lib/stall.js: idle past the
+  // TRIAGE.yml `stall.idle_hours` threshold, no healthy hand-off). A stalled
+  // claim is visible here instead of silently parking queue capacity.
   const inProgress = specs.filter(s => s.stage === 'in-progress');
   if (inProgress.length) {
+    let triageCfg = null;
+    try { triageCfg = triage ? parseYaml(triage) : null; } catch { /* best-effort */ }
+    const thresholdMs = stallThresholdMs(triageCfg);
+    const stalled = detectStalledClaims(ws.dir, specs, {
+      thresholdMs, continuations: readContinuations(ws.dir, specs),
+    });
+    const stalledBySlug = new Map(stalled.map(x => [x.slug, x]));
     out('\n## In progress');
-    for (const s of inProgress) out(`- ${s.title} (${s.path})`);
+    for (const s of inProgress) {
+      const st = stalledBySlug.get(specSlug(s.path));
+      out(`- ${s.title} (${s.path})` + (st
+        ? ` — STALLED: claimed_by ${s.meta.claimed_by || '(unstamped)'}, idle ~${st.idleHours}h (> ${Math.round(thresholdMs / 3600000)}h)`
+        : ''));
+    }
+    if (stalled.length) {
+      out(`${stalled.length} stalled claim${stalled.length === 1 ? '' : 's'} — reclaim explicitly (never a sweep): tl reclaim ${ws.name} <spec> --by <you> --reason "<why>"`);
+    }
   }
 
   // goal in focus — top-weighted goal from TRIAGE.yml (best-effort text scan)
@@ -557,9 +575,37 @@ async function cmdUp(args) {
     ? ` · stuck at tests: ${status.stuckAtTests} (awaiting verification — tl verify ${ws.name})`
     : ''));
 
+  out('\n## Lane availability');
+  const availability = laneAvailability({
+    wsDir: ws.dir,
+    cfg,
+    which: bin => {
+      try {
+        const r = spawnSync('which', [bin], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        return r.status === 0 ? String(r.stdout || '').trim() : '';
+      } catch { return ''; }
+    },
+  });
+  for (const line of formatLaneAvailability(availability)) out(line);
+
   // ---- (d) one next human action ----
   const specs = readAllSpecs(ws.dir);
   const conts = readContinuations(ws.dir, specs);
+
+  // Stalled claims surface here too — additive, so the next-action ladder
+  // (review gate first) is unchanged; a stalled claim is queue capacity
+  // silently parked, and `tl up` is the operating path that must show it.
+  const stalledClaims = detectStalledClaims(ws.dir, specs, {
+    thresholdMs: stallThresholdMs(cfg), continuations: conts,
+  });
+  if (stalledClaims.length) {
+    out('\n## Stalled claims (idle past threshold — reclaim explicitly)');
+    for (const x of stalledClaims) {
+      out(`- ${x.spec.title} (${x.spec.path}) — claimed_by ${x.spec.meta.claimed_by || '(unstamped)'}, idle ~${x.idleHours}h`);
+    }
+    out(`reclaim: tl reclaim ${ws.name} <spec> --by <you> --reason "<why>"  (one spec at a time; fresh claims refuse)`);
+  }
+
   out('\n## Next human action');
   const next = nextHumanAction(ws.name, specs, conts, automation.enabled && !status.paused && !issues.length);
   out(next.action);
@@ -786,6 +832,78 @@ function cmdRun(args) {
 
   hr();
   out('The batch above is conflict-free and claimed-ready. Now follow the run SKILL: claim the WHOLE batch first (every folder move above, before any work begins), then do each spec\'s work in scope and carry it to in-review (never done). Workspace "' + ws.name + '".');
+}
+
+// ---------- tl reclaim ----------
+
+// Explicit reclaim of ONE stalled in-progress claim — never a sweep.
+//
+//   tl reclaim [ws]                          list stalled candidates, act on nothing
+//   tl reclaim [ws] <spec> --by <who> --reason "<why>"   reclaim that one claim
+//
+// The rule and guards live in lib/stall.js: a claim with activity inside the
+// threshold refuses (never force-steal), as do awaiting-verifier hand-offs,
+// recorded blockers, and specs with a pending continuation dispatch. The
+// reclaim itself is logged in the spec's NOTES.md — prior claim, reclaimer,
+// reason — before any frontmatter changes or the folder move, so attribution
+// is never stripped silently (the routing-priors mis-credit lesson).
+function cmdReclaim(args) {
+  let by = null, reason = null;
+  const pos = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--by') by = args[++i];
+    else if (args[i].startsWith('--by=')) by = args[i].slice(5);
+    else if (args[i] === '--reason') reason = args[++i];
+    else if (args[i].startsWith('--reason=')) reason = args[i].slice(9);
+    else pos.push(args[i]);
+  }
+  const ws = resolveWorkspace(pos[0]);
+  const slug = pos[1] || null;
+  const specs = readAllSpecs(ws.dir);
+  const conts = readContinuations(ws.dir, specs);
+  const cfg = parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '') || {};
+  const thresholdMs = stallThresholdMs(cfg);
+  const thresholdHours = Math.round(thresholdMs / 3600000);
+
+  if (!slug) {
+    const stalled = detectStalledClaims(ws.dir, specs, { thresholdMs, continuations: conts });
+    out(`===== RECLAIM CANDIDATES: ${ws.name} (idle > ${thresholdHours}h) =====\n`);
+    if (!stalled.length) {
+      out('none — every in-progress claim shows recent activity or a healthy hand-off (awaiting_verifier / blocked / pending continuation).');
+      return;
+    }
+    for (const x of stalled) {
+      const hasFeedback = !!(x.spec.feedback && x.spec.feedback.trim());
+      out(`- ${x.spec.title} (${x.spec.path}) — claimed_by ${x.spec.meta.claimed_by || '(unstamped)'}, idle ~${x.idleHours}h`);
+      out(`    would ${hasFeedback
+        ? 'ADVANCE to tests/ — builder artifacts (outcome/FEEDBACK.md) present; claimed_by preserved as builder attribution'
+        : 'RELEASE to specs/ — status: ready, claim cleared after the prior claim is recorded in NOTES.md'}`);
+      out(`    run: tl reclaim ${ws.name} ${x.slug} --by <you> --reason "<why>"`);
+    }
+    out('\nreclaim acts on ONE named spec; nothing was changed by this listing.');
+    return;
+  }
+
+  const res = reclaimStalled(ws.dir, slug, { by, reason, thresholdMs, continuations: conts });
+  if (!res.ok) {
+    const why = {
+      'reason-required': 'a recorded --reason "<why>" is mandatory — stamps change only with a reason.',
+      'by-required': 'say who reclaims: --by <agent-or-human>.',
+      'not-found': `no in-progress/${slug}/SPEC.md in "${ws.name}".`,
+      'active-claim': 'the claim shows activity inside the threshold — never force-steal live work.',
+      'awaiting-verifier': `that spec is a verifier hand-off, not a stall — tl verify ${ws.name}.`,
+      'continuation-pending': `a pending continuation dispatch owns the resume — tl run ${ws.name}.`,
+      'blocked': 'the spec records a blocker; unblock or kick it back instead of reclaiming.',
+      'destination-exists': 'the destination folder already exists — resolve the collision by hand.',
+      'no-evidence': 'no dateable activity for the claim — inspect the folder by hand before touching it.',
+    }[res.reason] || res.reason;
+    fail('reclaim refused: ' + why);
+  }
+  out(`reclaimed ${res.slug}: ${res.from} → ${res.to} (${res.mode})`);
+  out(res.mode === 'advance'
+    ? `builder attribution preserved (claimed_by: ${res.priorClaimedBy || 'unknown'}) — awaiting independent verification: tl verify ${ws.name}`
+    : `prior claim (${res.priorClaimedBy || 'unstamped'}) recorded in NOTES.md; spec re-queued as ready.`);
+  out(`idle ~${res.idleHours}h > threshold ${res.thresholdHours}h — the why is logged in ${res.to}NOTES.md`);
 }
 
 // ---------- tl review ----------
@@ -1733,6 +1851,10 @@ function usage(stream) {
   w('              (alias: open)');
   w('  tl run    [workspace] [spec]    Work the ready queue — pick the conflict-free batch (or a named spec)');
   w('              [--agent <name>]    Only claim specs in this agent\'s lane (agent: <name> or any) — heterogeneous fan-out');
+  w('  tl reclaim [workspace] [spec]   List stalled in-progress claims (idle past TRIAGE.yml stall.idle_hours, default 24h);');
+  w('                                  with a spec: return it to specs/ (or advance to tests/ when builder artifacts exist)');
+  w('              --by <who>          Who reclaims — recorded in the spec\'s NOTES.md log');
+  w('              --reason "<why>"    Mandatory — a reclaim always logs why; fresh claims always refuse');
   w('  tl experiment queue [workspace] <spec>');
   w('                                  (advanced) Initiate an experiment: hash the spec, record base_commit, write candidate queue rows');
   w('              [--config <file>]   Explicit candidates/judge JSON (default: deterministic fixture pair)');
@@ -1803,6 +1925,7 @@ function main() {
     case 'up':
     case 'open': return void cmdUp(rest).catch(e => fail(e && e.message ? e.message : String(e)));
     case 'run': return cmdRun(rest);
+    case 'reclaim': return cmdReclaim(rest);
     case 'review': return cmdReview(rest);
     case 'verify': return cmdVerify(rest);
     case 'recall': return cmdRecall(rest);

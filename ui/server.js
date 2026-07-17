@@ -25,7 +25,9 @@ const ROOT = path.resolve(arg('root', process.cwd()));
 // modules the CLI (bin/tl.js) uses, so parsing and mutation rules can't drift.
 const { parseYaml, parseFrontmatter } = require('../lib/parse');
 const { safeRead, readFirst, isDir, mtime, safePath: libSafePath } = require('../lib/workspace');
-const { fmValue, setFrontmatterField } = require('../lib/frontmatter');
+const {
+  fmValue, setFrontmatterField, appendToFrontmatterList, setFrontmatterList,
+} = require('../lib/frontmatter');
 const { buildProjectInsights, taskTitleFromBody, firstParagraph } = require('../lib/project-insights');
 const { automationStatus } = require('../lib/automation');
 const {
@@ -712,8 +714,8 @@ const server = http.createServer((req, res) => {
       const ws = listWorkspaces().find(w => w.name === u.searchParams.get('ws'));
       const rel = u.searchParams.get('path') || '';
       if (!ws) return json(res, 404, { error: 'unknown workspace' });
-      const full = path.resolve(ws.dir, rel);
-      if (!full.startsWith(path.resolve(ws.dir) + path.sep)) return json(res, 400, { error: 'bad path' });
+      const full = safePath(ws, rel);
+      if (!full) return json(res, 400, { error: 'bad path' });
       const content = safeRead(full);
       if (content === null) return json(res, 404, { error: 'not found' });
       json(res, 200, { path: rel, content });
@@ -860,7 +862,14 @@ function hThreadMove(ws, body, res) {
   if (text == null) return json(res, 500, { error: 'read failed' });
   fs.mkdirSync(path.dirname(destFull), { recursive: true });
   fs.writeFileSync(destFull, text);
-  fs.unlinkSync(srcFull);
+  try {
+    fs.unlinkSync(srcFull);
+  } catch (e) {
+    // Roll back the destination copy so a failed unlink never leaves a
+    // duplicate — the tree returns to its pre-move state (source intact).
+    try { fs.unlinkSync(destFull); } catch {}
+    return json(res, 500, { error: 'move failed — source not removed: ' + String(e && e.message || e) });
+  }
   return json(res, 200, { ok: true, path: rel, from_ws: ws.name, to_ws: destName });
 }
 
@@ -1112,57 +1121,6 @@ function hVerifyDecision(ws, body, res) {
 // edits small YAML lists (an intent's `specs:` / `goals:`). Same rules apply:
 // scoped to the leading frontmatter block, values sanitized to one safe line,
 // and the body is never touched. `key` is always a literal from this file.
-
-// append one value to a frontmatter list field — handles a missing key,
-// `key: []`, an inline `key: [a, b]`, or a block list; no-ops if already present.
-function appendToFrontmatterList(text, key, value) {
-  const src = String(text);
-  const m = src.match(/^(---\n)([\s\S]*?)(\n---\n?)/);
-  if (!m) return src;
-  const val = fmValue(value);
-  const unq = s => s.trim().replace(/^["']|["']$/g, '');
-  const lines = m[2].split('\n');
-  const keyRe = new RegExp(`^${key}:(.*)$`);
-  const ki = lines.findIndex(l => keyRe.test(l));
-  const item = `  - "${val}"`;
-  if (ki < 0) lines.unshift(`${key}:`, item);
-  else {
-    const rest = lines[ki].match(keyRe)[1].replace(/\s#.*$/, '').trim();
-    const inline = rest.match(/^\[(.*)\]$/);
-    if (inline && inline[1].trim()) {              // inline list with entries — keep it inline
-      const entries = inline[1].split(',').map(unq);
-      if (entries.includes(val)) return src;
-      lines[ki] = `${key}: [${entries.map(e => `"${e}"`).concat(`"${val}"`).join(', ')}]`;
-    } else if (inline || !rest) {                  // `key: []` or bare `key:` — block form
-      let j = ki + 1;
-      while (j < lines.length && /^\s+-\s/.test(lines[j])) {
-        if (unq(lines[j].replace(/^\s+-\s*/, '')) === val) return src;
-        j++;
-      }
-      lines[ki] = `${key}:`;
-      lines.splice(j, 0, item);
-    } else return src;                             // a scalar where a list should be — refuse
-  }
-  return m[1] + lines.join('\n') + m[3] + src.slice(m[0].length);
-}
-
-// replace-or-insert a frontmatter list field as a one-line inline list,
-// dropping any block items the old value had.
-function setFrontmatterList(text, key, values) {
-  const src = String(text);
-  const m = src.match(/^(---\n)([\s\S]*?)(\n---\n?)/);
-  if (!m) return src;
-  const line = `${key}: [${values.map(fmValue).join(', ')}]`;
-  const lines = m[2].split('\n');
-  const ki = lines.findIndex(l => new RegExp(`^${key}:`).test(l));
-  if (ki < 0) lines.unshift(line);
-  else {
-    let j = ki + 1;
-    while (j < lines.length && /^\s+-\s/.test(lines[j])) j++;   // absorb old block items
-    lines.splice(ki, j - ki, line);
-  }
-  return m[1] + lines.join('\n') + m[3] + src.slice(m[0].length);
-}
 
 function hMapRepair(ws, body, res) {
   // heal a throughline break from the Map: attach an orphan spec to an existing

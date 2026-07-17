@@ -423,12 +423,21 @@ test('failure-silent: a broken experiment path never stops the claim — tick st
 });
 
 test('failure-silent: maybeAutoInitiateExperiment never throws, even on a bogus workspace', () => {
-  const out = maybeAutoInitiateExperiment({
-    wsDir: path.join(ROOT, 'projects', 'does-not-exist-' + Date.now()),
-    specPath: 'specs/none/', spec: specObj('none'),
-    triageCfg: cfg(),
-  });
-  assert.ok(['error', 'skipped', 'held', 'initiated'].includes(out.decision));
+  // The bogus workspace lives under a scratch tmpdir, never the real
+  // projects/ — the error-log append mkdirs wsDir into existence, and a
+  // real-projects path here leaked one does-not-exist-<epoch> junk
+  // workspace per npm test run (see test/projects-hygiene.test.js).
+  const scratch = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'tl-autoinit-bogus-'));
+  try {
+    const out = maybeAutoInitiateExperiment({
+      wsDir: path.join(scratch, 'does-not-exist-' + Date.now()),
+      specPath: 'specs/none/', spec: specObj('none'),
+      triageCfg: cfg(),
+    });
+    assert.ok(['error', 'skipped', 'held', 'initiated'].includes(out.decision));
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
 });
 
 // ---------- only fresh ready claims initiate ----------

@@ -242,6 +242,18 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .bp-value .vsrc { font-family: var(--mono); font-style: normal; font-size: .62rem; color: var(--faint); white-space: nowrap; }
 .bp-value:hover .vt { color: var(--ink); }
 
+/* reflect proposals — calm one-liner; silent when none are pending */
+.bp-reflect { font-family: var(--mono); font-size: .68rem; color: var(--dim); margin: 0 0 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bp-reflect:hover .rt { color: var(--ink); }
+.bp-reflect .rl { letter-spacing: .08em; text-transform: uppercase; font-size: .58rem; color: var(--accent); }
+.bp-reflect .rt { color: var(--mid); }
+.bp-reflect .ar { color: var(--faint); transition: transform .12s; display: inline-block; }
+.bp-reflect.open .ar { transform: rotate(90deg); }
+.reflect-ex { margin-bottom: 16px; }
+.reflect-ex .refl-md { display: none; padding: 12px 15px; margin: 4px 0 8px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; max-height: 340px; overflow-y: auto; }
+.reflect-ex .refl-md.open { display: block; }
+.refl-note { font-family: var(--mono); font-size: .58rem; color: var(--faint); padding: 7px 0 2px; }
+
 .bp-goal { font-family: var(--serif); font-size: .98rem; color: var(--ink); line-height: 1.4; margin: 0 0 26px; }
 .bp-goal .gtext { border-bottom: 1px dashed transparent; cursor: text; }
 .bp-goal .gtext:hover { border-bottom-color: var(--line2); }
@@ -1863,11 +1875,90 @@ return {
 
 /* === resume-recommended END === */
 
+/* === reflect-desk BEGIN (keep in lockstep with lib/reflect-desk.js) === */
+// lib/reflect-desk.js — pending reflect proposals for the Human/Resume desk.
+// Pure functions over the parsed workspace payload (reflect-log.jsonl lines +
+// specs). Discovery rules and full docs live in the lib copy.
+
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root) root.ReflectDesk = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+'use strict';
+
+const DAY = 86400000;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Parse a reflect-log date (YYYY-MM-DD) to a UTC timestamp, or null. */
+function dateTs(d) {
+  const s = String(d || '').trim();
+  if (!DATE_RE.test(s)) return null;
+  const ts = Date.parse(s + 'T00:00:00Z');
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function pendingReflectProposals({ metrics = {}, specs = [], now = Date.now(), windowDays = 14 } = {}) {
+  const log = Array.isArray(metrics['reflect-log']) ? metrics['reflect-log'] : [];
+  const byDate = new Map(); // date -> entry (last line for a date wins, even a zero-proposal rerun)
+  for (const line of log) {
+    if (!line || typeof line !== 'object') continue;
+    const ts = dateTs(line.date);
+    if (ts == null) continue;
+    byDate.set(String(line.date).trim(), { line, ts });
+  }
+
+  const windowMs = windowDays * DAY;
+  const proposals = [];
+  for (const [date, { line, ts }] of byDate) {
+    if (!(Number(line.proposals) > 0)) continue; // ran, proposed nothing → silent
+    if (now - ts > windowMs) continue; // stale — the moment has passed
+    proposals.push({
+      date,
+      ts,
+      path: '_metrics/reflect-' + date + '.md',
+      proposals: Number(line.proposals) || 0,
+      parallelTracks: Number(line.parallel_tracks) || 0,
+      overridesRead: Number(line.overrides_read) || 0,
+      outcomesRead: Number(line.outcomes_read) || 0,
+    });
+  }
+  proposals.sort((a, b) => b.ts - a.ts);
+
+  return {
+    proposals,
+    acceptsSinceLatest: proposals.length
+      ? countAcceptsAfter({ metrics, specs, cutoff: proposals[0].ts + DAY })
+      : 0,
+  };
+}
+
+function countAcceptsAfter({ metrics = {}, specs = [], cutoff = 0 } = {}) {
+  let fromLog = 0;
+  const reviewLog = Array.isArray(metrics['review-log']) ? metrics['review-log'] : [];
+  for (const line of reviewLog) {
+    if (!line || line.action !== 'accepted') continue;
+    const ts = Date.parse(String(line.date || ''));
+    if (Number.isFinite(ts) && ts >= cutoff) fromLog++;
+  }
+  let fromSpecs = 0;
+  for (const s of specs || []) {
+    if (!s || s.stage !== 'done') continue;
+    const ts = Date.parse(String((s.meta && s.meta.accepted_at) || ''));
+    if (Number.isFinite(ts) && ts >= cutoff) fromSpecs++;
+  }
+  return Math.max(fromLog, fromSpecs);
+}
+
+return { pendingReflectProposals, countAcceptsAfter, DAY };
+});
+/* === reflect-desk END === */
+
 // Resume open-state that must survive re-renders — SSE refreshes rebuild the paper
 // every few seconds while agents work; without this, clicked-open sections snap shut
 // before they can be read. keys: counts/status/scope by workspace name; rows by path.
 // mapView: per-ws {x,y,w,h} so SSE/refresh rebuilds don't snap zoom/pan back to default
-const resumeOpen = { counts: {}, rows: new Set(), status: {}, scope: {}, mapView: {} };
+const resumeOpen = { counts: {}, rows: new Set(), status: {}, scope: {}, mapView: {}, reflect: {} };
 function renderResume(wss) {
   $('dsProj').textContent = wss.map(w => w.name).join(' · ');
   $('dsDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -1951,6 +2042,60 @@ function renderResume(wss) {
       autoEl.innerHTML = parts.join(' · ');
       autoEl.title = 'run — read-only; tl up installs the schedule; the UI never spawns agents';
       block.appendChild(autoEl);
+    }
+
+    // ── reflect proposals (calm — accepts feed reflect; the desk closes the loop) ──
+    // Silent when none are pending (no empty chrome). Review-only surface:
+    // proposals never auto-write TRIAGE.yml — applying stays with /tl reflect.
+    const refl = globalThis.ReflectDesk.pendingReflectProposals({ metrics: ws.metrics || {}, specs, now: Date.now() });
+    if (refl.proposals.length) {
+      const latest = refl.proposals[0];
+      const nP = refl.proposals.length;
+      const rp = document.createElement('p');
+      rp.className = 'bp-reflect';
+      rp.title = 'TRIAGE.yml changes /tl reflect proposed from your accepts and overrides — review here; nothing auto-applies';
+      rp.innerHTML = `<span class="rl">reflect proposals</span>`
+        + `<span class="rt">${nP === 1 ? '1 pending' : nP + ' pending'}`
+        + ` · ${esc(latest.date)} proposes ${latest.proposals} TRIAGE.yml change${latest.proposals === 1 ? '' : 's'}`
+        + (refl.acceptsSinceLatest ? ` · ${refl.acceptsSinceLatest} accept${refl.acceptsSinceLatest === 1 ? '' : 's'} since` : '')
+        + `</span> <span class="ar">›</span>`;
+      const rpEx = document.createElement('div'); rpEx.className = 'expand reflect-ex';
+      const buildReflect = () => {
+        rpEx.innerHTML = '';
+        refl.proposals.forEach((p, i) => {
+          const row = document.createElement('div');
+          const tracks = p.parallelTracks ? ` · ${p.parallelTracks} parallel track${p.parallelTracks === 1 ? '' : 's'}` : '';
+          row.innerHTML = `<div class="loop-row"><span class="gly mono" style="font-size:.62rem;color:#6b57c7">◆</span>`
+            + `<div class="txt"><div class="t">${esc(p.date)} — ${p.proposals} proposed change${p.proposals === 1 ? '' : 's'}${tracks}</div>`
+            + `<div class="sub">${p.overridesRead} overrides · ${p.outcomesRead} outcomes read · ${esc(p.path)}</div></div></div>`
+            + `<div class="refl-md"></div>`;
+          const mdEl = row.querySelector('.refl-md');
+          let loaded = false;
+          const toggleMd = async () => {
+            const open = mdEl.classList.toggle('open');
+            if (open && !loaded) {
+              loaded = true;
+              mdEl.innerHTML = '<div class="md">loading…</div>';
+              try {
+                const f = await (await fetch(`/api/file?ws=${encodeURIComponent(ws.name)}&path=${encodeURIComponent(p.path)}`)).json();
+                mdEl.querySelector('.md').innerHTML = f.content ? md(f.content) : 'proposal file missing — see _metrics/reflect-log.jsonl';
+              } catch { mdEl.querySelector('.md').textContent = 'could not load proposal'; }
+            }
+          };
+          row.querySelector('.loop-row').onclick = toggleMd;
+          rpEx.appendChild(row);
+          if (i === 0) toggleMd(); // one click on the line lands on the latest proposal, open
+        });
+        rpEx.insertAdjacentHTML('beforeend', '<div class="refl-note">review-only — nothing auto-applies to TRIAGE.yml · approve via /tl reflect (or edit the goal below)</div>');
+      };
+      rp.onclick = () => {
+        if (!rpEx.children.length) buildReflect();
+        const open = rp.classList.toggle('open');
+        rpEx.classList.toggle('open', open);
+        resumeOpen.reflect[ws.name] = open;
+      };
+      if (resumeOpen.reflect[ws.name]) { buildReflect(); rp.classList.add('open'); rpEx.classList.add('open'); }
+      block.appendChild(rp); block.appendChild(rpEx);
     }
 
     // ── value delivered (one calm sentence, client-side from outcome/FEEDBACK.md) ──

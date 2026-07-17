@@ -591,6 +591,8 @@ test('up --dry-run: enabled profile prints schedule plan without launching agent
     // agent CLI from the lane command must not appear as something that ran
     assert.doesNotMatch(r.stdout, /CLAUDE_SHOULD_NOT_RUN/);
     assert.doesNotMatch(r.stdout, /loaded via launchctl/);
+    assert.match(r.stdout, /## Lane availability/);
+    assert.match(r.stdout, /claude\s+(idle|unreachable)/);
   });
 });
 

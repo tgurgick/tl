@@ -9,7 +9,7 @@ const ROOT = path.join(__dirname, '..');
 const {
   readAutomation, laneIssues, tickCommands, scheduleArtifacts,
   installLaunchd, automationStatus, DEFAULT_INTERVAL_MINUTES,
-  EXPERIMENT_MODES, experimentScheduleSummary,
+  EXPERIMENT_MODES, experimentScheduleSummary, laneAvailability, formatLaneAvailability,
 } = require('../lib/automation');
 
 test('readAutomation: absent section is inert (configured false, enabled false)', () => {
@@ -140,6 +140,47 @@ test('automationStatus: absent = off; PAUSE → paused; stuck-at-tests counted',
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('laneAvailability: reports reachable busy/idle/unreachable and queue pointers', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-lanes-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'in-progress', 'busy'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'in-progress', 'busy', 'SPEC.md'),
+      '---\nstatus: in-progress\nclaimed_by: codex\n---\n');
+    fs.mkdirSync(path.join(dir, 'tests', 'verify-me'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'tests', 'verify-me', 'SPEC.md'),
+      '---\nstatus: tests\nawaiting_verifier: true\n---\n');
+    const cfg = { lanes: {
+      claude: { command: 'claude -p' }, codex: { command: 'codex exec -' }, gemini: { command: 'agy -p' },
+    } };
+    const rows = laneAvailability({
+      wsDir: dir, cfg,
+      which: bin => ({ claude: '/bin/claude', codex: '/bin/codex' }[bin] || ''), env: {},
+    });
+    assert.deepEqual(rows.map(r => [r.name, r.state]), [
+      ['claude', 'idle'], ['codex', 'busy'], ['gemini', 'unreachable'],
+    ]);
+    assert.match(rows[0].next, /1 awaiting verify.*tl verify --execute --agent claude/);
+    assert.match(rows[0].authHint, /CLAUDE_CODE_OAUTH_TOKEN/);
+    assert.match(rows[1].next, /1 claim/);
+    assert.match(rows[2].next, /fix PATH.*agy/);
+    assert.ok(formatLaneAvailability(rows).some(line => /codex\s+busy/.test(line)));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('laneAvailability: idle lane points to its queued experiment drain', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-lanes-exp-'));
+  try {
+    const q = path.join(dir, '_experiments', 'queue');
+    fs.mkdirSync(q, { recursive: true });
+    fs.writeFileSync(path.join(q, 'e.jsonl'), JSON.stringify({
+      experiment_id: 'e', candidate_id: 'c', role: 'primary', agent_tool: 'codex', status: 'queued',
+    }) + '\n');
+    const rows = laneAvailability({ wsDir: dir, cfg: { lanes: { codex: { command: 'codex exec -' } } }, which: () => '/bin/codex' });
+    assert.equal(rows[0].state, 'idle');
+    assert.match(rows[0].next, /1 experiment row.*tl experiment drain --agent codex/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('tickCommands: verify off omits the isolated verify tick', () => {
