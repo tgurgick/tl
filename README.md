@@ -273,6 +273,10 @@ Spec completed  →  JIRA status update via API
 
 JIRA tells you WHAT to work on. Throughline tells you HOW to work on it with an agent. The `jira_key` in spec frontmatter bridges the two systems. The team sees JIRA. The developer gets the AI-native workflow.
 
+## Contributing & security
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the ground rules — Node 22, `npm test`, and the zero-dependency constraint. [SECURITY.md](SECURITY.md) has the vulnerability reporting path and the threat model, including the distinction that matters most: experiment candidates run in disposable git worktrees, which isolates your canonical checkout from mutation but is **not** a security sandbox — actual sandboxing of what an agent process may do comes from the agent CLI's own flags (see `docs/headless-lanes.md`).
+
 ## Principles
 
 **Tool and workspace are separate.** The tool is public and project-agnostic; your work stays private under `projects/`.

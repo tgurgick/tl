@@ -63,6 +63,7 @@ Each verb is one `skills/<name>/SKILL.md` — the algorithm. Don't re-derive the
 4. **Honor scope and NOTES.** Do the work only within the spec's Files to touch; treat Do not touch as a hard boundary. If a spec has NOTES.md, it is as binding as the acceptance criteria.
 5. **Capture threads.** Anything worth not losing but out of scope — a decision, follow-up, risk, or discovery — becomes a file in threads/ (see the capture verb). An undocumented discovery is a leak; it does not justify widening the current spec.
 6. **Files only.** Every change is a markdown/JSONL edit plus a folder move. No hidden state; specs/ is the only queue for *new* work, but a pending `_dispatch/` continuation outranks fresh claims — the folders are the status.
+7. **Ranking passes coordinate and write narrowly.** Before ranking, acquire `_metrics/locks/triage.lock`; a fresh lock means triage is already running, so exit instead of racing. Triage writes only its allowed priority/hold/status fields with targeted edits, re-stats before every write, and skips a spec that moved since inventory.
 
 ## Quickstart: work one spec
 

@@ -794,6 +794,132 @@ test('generated rules state the universal done/ ceiling — builder and verifier
   });
 });
 
+// ---------- tl sync check (offline sync.jira.map validation) ----------
+
+test('sync check: valid map prints OK summary with provenance and exits 0', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'sync:',
+      '  jira:',
+      '    url: "https://acme.atlassian.net"',
+      '    project: "PROJ"',
+      '    map:',
+      '      bug: spec',
+      '      spike:',
+      '        to: spec',
+      '        type: research',
+      '        tags: [spike]',
+      '      sub-task: ignore',
+      '',
+    ].join('\n'));
+    const r = run('sync', 'check', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /SYNC CHECK: /);
+    assert.match(r.stdout, /jira: url https:\/\/acme\.atlassian\.net · project PROJ/);
+    assert.match(r.stdout, /map: OK — 6 effective entries/);
+    // defaults still in effect, workspace override keeps the default TL type
+    assert.match(r.stdout, /epic → intent\s+\[default\]/);
+    assert.match(r.stdout, /bug → spec \(type: bug\)\s+\[override\]/);
+    // extensions carry their hints and provenance
+    assert.match(r.stdout, /spike → spec \(type: research, tags: \[spike\]\)\s+\[workspace\]/);
+    assert.match(r.stdout, /sub-task → ignore\s+\[workspace\]/);
+    assert.match(r.stdout, /defaults in effect: 3 untouched · 1 overridden · 2 workspace-added/);
+    assert.match(r.stdout, /no JIRA call was made/);
+  });
+});
+
+test('sync check: absent workspace map is valid — exactly the shipped defaults', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'sync:',
+      '  jira:',
+      '    url: ""',
+      '    project: ""',
+      '',
+    ].join('\n'));
+    const r = run('sync', 'check', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /map: OK — 4 effective entries/);
+    assert.match(r.stdout, /defaults in effect: 4 untouched · 0 overridden · 0 workspace-added/);
+    assert.match(r.stdout, /shipped defaults are the whole contract/);
+    // unset url/project is informational, never an error for the offline check
+    assert.match(r.stdout, /url \(unset\) · project \(unset\)/);
+  });
+});
+
+test('sync check: invalid map lists every offending key with its fix hint, exits non-zero', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'sync:',
+      '  jira:',
+      '    map:',
+      '      spike:',
+      '        to: spec',
+      '        type: done',
+      '      sub-task: sideways',
+      '      incident:',
+      '        to: ignore',
+      '        tags: [oops]',
+      '',
+    ].join('\n'));
+    const r = run('sync', 'check', name);
+    assert.notEqual(r.status, 0);
+    // every offending key appears, in the bridge's paste-ready hint style
+    assert.match(r.stdout, /map: INVALID — 3 entries rejected/);
+    assert.match(r.stdout, /sync\.jira\.map\.spike: type "done" is not a TL spec type — use one of: feature, bug, tech_debt, research/);
+    assert.match(r.stdout, /sync\.jira\.map\.sub-task: "sideways" is not a valid target — use one of: intent, spec, ignore/);
+    assert.match(r.stdout, /sync\.jira\.map\.incident: "type"\/"tags" hints only apply to "to: spec"/);
+    assert.match(r.stdout, /Fix the entries above/);
+    assert.match(r.stderr, /sync\.jira\.map is invalid \(3 errors\)/);
+  });
+});
+
+test('sync check: missing sync section is a calm not-configured, exit 0', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', 'goals: []\n');
+    const r = run('sync', 'check', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /sync is not configured — no sync\.jira section/);
+    assert.match(r.stdout, /skills\/sync\/SKILL\.md/);
+  });
+});
+
+test('sync check: no TRIAGE.yml at all is also calm not-configured, exit 0', () => {
+  withWorkspace([], name => {
+    const r = run('sync', 'check', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /sync is not configured/);
+  });
+});
+
+test('sync check: unknown workspace fails with the standard error, non-zero', () => {
+  withWorkspace([], () => {
+    const r = run('sync', 'check', 'no-such-workspace');
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /Unknown workspace "no-such-workspace"/);
+  });
+});
+
+test('sync: missing or unknown subcommand prints usage, non-zero', () => {
+  withWorkspace([], () => {
+    for (const args of [['sync'], ['sync', 'frobnicate']]) {
+      const r = run(...args);
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /Usage: tl sync check \[workspace\]/);
+    }
+  });
+});
+
+test('usage: sync check is listed under steer, four-verb grouping intact', () => {
+  const r = run('help');
+  assert.equal(r.status, 0, r.stderr);
+  const steer = r.stdout.indexOf('steer — shape what to build');
+  const runIdx = r.stdout.indexOf('run — start it');
+  const syncIdx = r.stdout.indexOf('tl sync check [workspace]');
+  assert.ok(steer >= 0 && runIdx > steer && syncIdx > steer && syncIdx < runIdx,
+    'tl sync check must sit inside the steer group');
+});
+
 test('tl verify --dispatch writes verify-request artifact (never spawns)', () => {
   withWorkspace([{
     slug: 'await-me',

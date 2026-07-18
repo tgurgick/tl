@@ -6,8 +6,10 @@ const fs = require('node:fs');
 
 const ROOT = path.join(__dirname, '..');
 const {
-  laneConfig, continuationEligible, pickWork, repoPreflight,
-  buildCommand, promptOneLine, checkLock, lockPathFor,
+  laneConfig, laneModel, continuationEligible, pickWork, repoPreflight,
+  buildCommand, buildArgv, buildInvocation, laneSpawnIssue,
+  claimModelTrailer, briefWithClaimModel,
+  promptOneLine, checkLock, lockPathFor,
   readWorkspaceSpecs, readPendingContinuations, tick, validLaneName,
   readVerifierLanes, validateVerifierLane, verifierLaneIssues, verifierLaneAvailable,
   pickVerifyWork, writeVerifyRequest, verifyTick, applyVerifyHumanDecision,
@@ -31,10 +33,37 @@ function cont(spec) { return { file: '_dispatch/' + spec.path.split('/')[1] + '.
 
 // ---------- lane config ----------
 
-test('laneConfig: reads command + lock timeout, defaults timeout to 120m', () => {
+test('laneConfig: reads command + lock timeout, defaults timeout to 120m; argv-first by default', () => {
   const cfg = { lanes: { claude: { command: 'claude -p {prompt_file}' }, codex: { command: 'codex exec -', lock_timeout_minutes: 30 } } };
-  assert.deepEqual(laneConfig(cfg, 'claude'), { command: 'claude -p {prompt_file}', lockTimeoutMinutes: 120 });
+  assert.deepEqual(laneConfig(cfg, 'claude'), {
+    command: 'claude -p {prompt_file}',
+    argv: ['claude', '-p', '{prompt_file}'],
+    shell: false, listForm: false, model: null, lockTimeoutMinutes: 120,
+  });
   assert.equal(laneConfig(cfg, 'codex').lockTimeoutMinutes, 30);
+  assert.deepEqual(laneConfig(cfg, 'codex').argv, ['codex', 'exec', '-']);
+});
+
+test('laneConfig: YAML list form is verbatim argv (PROVIDERS shape); string form whitespace-splits', () => {
+  const cfg = { lanes: { claude: { command: ['claude', '--dangerously-skip-permissions', '-p'] } } };
+  const lane = laneConfig(cfg, 'claude');
+  assert.deepEqual(lane.argv, ['claude', '--dangerously-skip-permissions', '-p']);
+  assert.equal(lane.shell, false);
+  assert.equal(lane.listForm, true);
+  assert.equal(lane.command, 'claude --dangerously-skip-permissions -p');   // display string
+});
+
+test('laneConfig: shell is an explicit literal-true opt-in; argv is null on the shell path', () => {
+  const shellLane = laneConfig({ lanes: { c: { command: 'foo | bar', shell: true } } }, 'c');
+  assert.equal(shellLane.shell, true);
+  assert.equal(shellLane.argv, null);
+  assert.equal(shellLane.command, 'foo | bar');
+  // anything but literal true is not an opt-in
+  for (const v of ['true', 1, 'yes']) {
+    assert.equal(laneConfig({ lanes: { c: { command: 'foo', shell: v } } }, 'c').shell, false, String(v));
+  }
+  // shell: true with list-form command is contradictory — sh needs one string
+  assert.equal(laneConfig({ lanes: { c: { command: ['foo', 'bar'], shell: true } } }, 'c'), null);
 });
 
 test('laneConfig: unconfigured / malformed lanes are null', () => {
@@ -42,6 +71,69 @@ test('laneConfig: unconfigured / malformed lanes are null', () => {
   assert.equal(laneConfig({ lanes: {} }, 'claude'), null);
   assert.equal(laneConfig({ lanes: { claude: {} } }, 'claude'), null);
   assert.equal(laneConfig({ lanes: { claude: { command: '  ' } } }, 'claude'), null);
+  assert.equal(laneConfig({ lanes: { claude: { command: [] } } }, 'claude'), null);
+  assert.equal(laneConfig({ lanes: { claude: { command: ['  '] } } }, 'claude'), null);
+});
+
+test('laneConfig: lanes.<name>.model is an optional scalar carried on every lane shape', () => {
+  // string command
+  assert.equal(laneConfig({ lanes: { c: { command: 'claude -p', model: 'claude-fable-5' } } }, 'c').model, 'claude-fable-5');
+  // list form
+  assert.equal(laneConfig({ lanes: { c: { command: ['codex', 'exec', '-'], model: 'gpt-5' } } }, 'c').model, 'gpt-5');
+  // shell opt-in
+  assert.equal(laneConfig({ lanes: { c: { command: 'foo | bar', shell: true, model: 'composer-1' } } }, 'c').model, 'composer-1');
+  // whitespace trimmed; numbers are YAML scalars too
+  assert.equal(laneConfig({ lanes: { c: { command: 'claude -p', model: '  gpt-5  ' } } }, 'c').model, 'gpt-5');
+  assert.equal(laneConfig({ lanes: { c: { command: 'claude -p', model: 5 } } }, 'c').model, '5');
+});
+
+test('laneModel: absent, empty, or non-scalar model is null — absent = unknown, never guessed', () => {
+  assert.equal(laneModel({}), null);
+  assert.equal(laneModel({ model: '' }), null);
+  assert.equal(laneModel({ model: '   ' }), null);
+  assert.equal(laneModel({ model: ['gpt-5'] }), null);
+  assert.equal(laneModel({ model: { id: 'gpt-5' } }), null);
+  assert.equal(laneModel({ model: true }), null);
+  assert.equal(laneModel(null), null);
+  // and laneConfig passes the same rule through
+  assert.equal(laneConfig({ lanes: { c: { command: 'claude -p' } } }, 'c').model, null);
+  assert.equal(laneConfig({ lanes: { c: { command: 'claude -p', model: [] } } }, 'c').model, null);
+});
+
+test('briefWithClaimModel: no model → brief unchanged; model → claim-scoped trailer with the exact stamp', () => {
+  assert.equal(briefWithClaimModel('BRIEF\n', 'claude', null), 'BRIEF\n');
+  const out = briefWithClaimModel('BRIEF\n', 'claude', 'claude-fable-5');
+  assert.ok(out.startsWith('BRIEF\n'));
+  assert.match(out, /lanes\.claude\.model/);
+  assert.match(out, /claimed_model: "claude-fable-5"/);
+  assert.match(out, /never guess/);
+  // newline-safe when the brief lacks a trailing newline
+  const noNl = briefWithClaimModel('BRIEF', 'codex', 'gpt-5');
+  assert.match(noNl, /^BRIEF\n/);
+  assert.match(noNl, /claimed_model: "gpt-5"/);
+  assert.equal(claimModelTrailer('codex', 'gpt-5').includes('gpt-5'), true);
+});
+
+test('laneSpawnIssue: shell syntax in a string command is a loud misconfig, not a silent split', () => {
+  const bad = s => laneSpawnIssue(laneConfig({ lanes: { l: { command: s } } }, 'l'), 'l');
+  assert.match(bad("codex -c 'a=[\"x\"]' -"), /argv-first/);
+  assert.match(bad('foo | tee log'), /argv-first/);
+  assert.match(bad('foo $HOME'), /argv-first/);
+  assert.match(bad('foo `date`'), /argv-first/);
+  assert.match(bad('foo a\\ b'), /argv-first/);
+  assert.match(bad('foo *.js'), /argv-first/);
+  assert.match(bad('~/bin/foo -p'), /no shell to expand/);
+});
+
+test('laneSpawnIssue: clean argv strings, list-form tokens, and shell opt-ins all pass', () => {
+  const ok = cfg => laneSpawnIssue(laneConfig({ lanes: { l: cfg } }, 'l'), 'l');
+  assert.equal(ok({ command: 'claude --dangerously-skip-permissions -p' }), null);
+  assert.equal(ok({ command: 'cursor-agent -f -p {prompt}' }), null);          // {} placeholders are fine
+  // list form: tokens reach execve verbatim — any byte is data, never shell input
+  assert.equal(ok({ command: ['codex', '-c', 'sandbox_workspace_write.writable_roots=["/x y"]', '-'] }), null);
+  // explicit shell opt-in: sh owns the parsing, no syntax restriction
+  assert.equal(ok({ command: 'foo | bar > log', shell: true }), null);
+  assert.match(laneSpawnIssue(null, 'ghost'), /not configured/);
 });
 
 test('validLaneName: accepts path-safe lane keys only', () => {
@@ -184,7 +276,49 @@ test('repoPreflight: reads PROJECT.md repo, checks .git existence via fs', () =>
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// ---------- shell-safe prompt delivery ----------
+// ---------- prompt delivery: argv default ----------
+
+test('buildArgv: {prompt_file} substitutes the raw path per token — no escaping needed', () => {
+  const { argv, stdin } = buildArgv(['claude', '-p', '{prompt_file}'], '/tmp/x y.txt', 'brief');
+  assert.deepEqual(argv, ['claude', '-p', '/tmp/x y.txt']);   // spaces survive as one argument
+  assert.equal(stdin, false);
+});
+
+test('buildArgv: {prompt} becomes one argument holding the whole one-line brief', () => {
+  const { argv, stdin } = buildArgv(['agent', '--prompt', '{prompt}'], '/tmp/p.txt', "line one\nit's line two\n");
+  assert.equal(stdin, false);
+  assert.deepEqual(argv, ['agent', '--prompt', "line one it's line two"]);
+});
+
+test('buildArgv: hostile brief content stays literal data — the injection surface is gone', () => {
+  const evil = "'; rm -rf ~ #\n$(curl evil) `id` && echo pwned";
+  const { argv } = buildArgv(['agent', '-p', '{prompt}'], '/tmp/p.txt', evil);
+  assert.equal(argv.length, 3);
+  assert.equal(argv[2], promptOneLine(evil));   // verbatim single argument, quotes and all
+});
+
+test('buildArgv: no placeholder → prompt on stdin, tokens untouched (copy, not alias)', () => {
+  const tokens = ['codex', 'exec', '-'];
+  const { argv, stdin } = buildArgv(tokens, '/tmp/p.txt', 'brief');
+  assert.deepEqual(argv, tokens);
+  assert.notEqual(argv, tokens);
+  assert.equal(stdin, true);
+});
+
+test('buildInvocation: argv default vs shell opt-in — the spawn contract as shipped', () => {
+  const argvLane = laneConfig({ lanes: { c: { command: 'claude -p' } } }, 'c');
+  const inv = buildInvocation(argvLane, '/tmp/p.txt', 'brief\n');
+  assert.deepEqual(inv, { shell: false, argv: ['claude', '-p'], command: 'claude -p', stdin: true });
+
+  const shellLane = laneConfig({ lanes: { c: { command: 'claude -p {prompt}', shell: true } } }, 'c');
+  const sh = buildInvocation(shellLane, '/tmp/p.txt', "it's\n");
+  assert.equal(sh.shell, true);
+  assert.equal(sh.argv, null);
+  assert.equal(sh.command, "claude -p 'it'\\''s'");   // escape helpers still guard the opt-in path
+  assert.equal(sh.stdin, false);
+});
+
+// ---------- shell-escaped prompt delivery (the shell: true opt-in path) ----------
 
 test('buildCommand: {prompt_file} substitutes the escaped temp-file path', () => {
   const { command, stdin } = buildCommand('claude -p {prompt_file}', '/tmp/x y.txt', 'brief');
@@ -394,7 +528,8 @@ test('tick: dry run prints the exact command + prompt path, writes nothing, exit
     assert.equal(spawns.length, 0);
     const outText = lines.join('\n');
     assert.match(outText, /dry run — lane "claude" would spawn for specs\/r\//);
-    assert.match(outText, /echo run -p '.*_metrics\/worker-prompts\/claude-.*\.txt'/);
+    assert.match(outText, /echo run -p .*_metrics\/worker-prompts\/claude-.*\.txt/);
+    assert.match(outText, /argv: \["echo","run","-p",".*worker-prompts.*\.txt"\]/);
     assert.match(outText, /prompt file: /);
     // no artifacts: no lock, no prompt file, no log line
     assert.equal(fs.existsSync(lockPathFor(ws.dir, 'claude')), false);
@@ -411,13 +546,15 @@ test('tick: eligible ready spec spawns once — prompt file written, lock held d
       brief: 'THE BRIEF\nsecond line\n',
       onSpawn: args => {
         lockDuringSpawn = fs.existsSync(lock);
-        const m = args.command.match(/'([^']*worker-prompts[^']*)'/);
-        promptDuringSpawn = m && fs.readFileSync(m[1], 'utf8');
+        promptDuringSpawn = fs.readFileSync(args.argv[3], 'utf8');   // ['echo','run','-p',<path>]
       },
     });
     assert.equal(result.code, 0);
     assert.equal(result.spawned, true);
     assert.equal(spawns.length, 1);
+    assert.equal(spawns[0].shell, false);             // argv default — no shell anywhere
+    assert.deepEqual(spawns[0].argv.slice(0, 3), ['echo', 'run', '-p']);
+    assert.match(spawns[0].argv[3], /worker-prompts.*\.txt$/);
     assert.equal(spawns[0].stdin, null);              // {prompt_file} template → no stdin
     assert.equal(lockDuringSpawn, true);              // created just before spawn
     assert.equal(promptDuringSpawn, 'THE BRIEF\nsecond line\n');
@@ -434,9 +571,185 @@ test('tick: template with no placeholder delivers the brief on stdin', () => {
   withWorkspace({ specs: [{ slug: 'r', files: ['a.js'] }] }, ws => {
     const { result, spawns } = runTick(ws, { lane: 'codex', brief: 'STDIN BRIEF\n' });
     assert.equal(result.code, 0);
+    assert.equal(spawns[0].shell, false);
+    assert.deepEqual(spawns[0].argv, ['echo', 'codex-stdin']);
     assert.equal(spawns[0].command, 'echo codex-stdin');
     assert.equal(spawns[0].stdin, 'STDIN BRIEF\n');
   });
+});
+
+test('tick: lanes.<lane>.model rides the delivered brief as a claimed_model trailer (stdin path) and the lock carries model', () => {
+  withWorkspace({
+    triage: [
+      'lanes:',
+      '  codex:',
+      '    command: "echo codex-stdin"',
+      '    model: gpt-5',
+      '',
+    ].join('\n'),
+    specs: [{ slug: 'r', files: ['a.js'] }],
+  }, ws => {
+    const lock = lockPathFor(ws.dir, 'codex');
+    let lockBody = null;
+    const { result, spawns } = runTick(ws, {
+      lane: 'codex', brief: 'STDIN BRIEF\n',
+      onSpawn: () => { lockBody = JSON.parse(fs.readFileSync(lock, 'utf8')); },
+    });
+    assert.equal(result.code, 0);
+    assert.ok(spawns[0].stdin.startsWith('STDIN BRIEF\n'));
+    assert.match(spawns[0].stdin, /lanes\.codex\.model/);
+    assert.match(spawns[0].stdin, /claimed_model: "gpt-5"/);
+    assert.match(spawns[0].stdin, /never guess/);
+    assert.equal(lockBody.model, 'gpt-5');
+  });
+});
+
+test('tick: lanes.<lane>.model trailer lands in the {prompt_file} prompt too; no model → no trailer, no lock field', () => {
+  withWorkspace({
+    triage: [
+      'lanes:',
+      '  claude:',
+      '    command: "echo run -p {prompt_file}"',
+      '    model: claude-fable-5',
+      '  codex:',
+      '    command: "echo codex-stdin"',
+      '',
+    ].join('\n'),
+    specs: [{ slug: 'r', files: ['a.js'] }],
+  }, ws => {
+    let prompt = null;
+    const withModel = runTick(ws, {
+      brief: 'THE BRIEF\n',
+      onSpawn: args => { prompt = fs.readFileSync(args.argv[3], 'utf8'); },
+    });
+    assert.equal(withModel.result.code, 0);
+    assert.ok(prompt.startsWith('THE BRIEF\n'));
+    assert.match(prompt, /claimed_model: "claude-fable-5"/);
+  });
+  withWorkspace({ specs: [{ slug: 'r', files: ['a.js'] }] }, ws => {
+    const lock = lockPathFor(ws.dir, 'codex');
+    let lockBody = null;
+    const { spawns } = runTick(ws, {
+      lane: 'codex', brief: 'PLAIN BRIEF\n',
+      onSpawn: () => { lockBody = JSON.parse(fs.readFileSync(lock, 'utf8')); },
+    });
+    assert.equal(spawns[0].stdin, 'PLAIN BRIEF\n');   // byte-identical — no trailer
+    assert.equal('model' in lockBody, false);
+  });
+});
+
+test('tick: shell syntax without shell opt-in exits 1 loudly — nothing executes', () => {
+  withWorkspace({
+    triage: [
+      'lanes:',
+      '  claude:',
+      '    command: "claude -p | tee /tmp/log"',
+      '',
+    ].join('\n'),
+    specs: [{ slug: 'r', files: ['a.js'] }],
+  }, ws => {
+    const { result, lines, spawns } = runTick(ws);
+    assert.equal(result.code, 1);
+    assert.equal(result.spawned, false);
+    assert.equal(spawns.length, 0);
+    assert.match(lines.join('\n'), /argv-first/);
+    assert.match(lines.join('\n'), /lanes\.claude\.shell: true/);
+    assert.equal(readLog(ws)[0].reason, 'shell_required');
+    // misconfig screams before any artifact: no prompt file, no lock
+    assert.equal(fs.existsSync(path.join(ws.dir, '_metrics', 'worker-prompts')), false);
+    assert.equal(fs.existsSync(lockPathFor(ws.dir, 'claude')), false);
+  });
+});
+
+test('tick: lanes.<lane>.shell: true opts in — spawn receives shell:true and the escaped command string', () => {
+  withWorkspace({
+    triage: [
+      'lanes:',
+      '  claude:',
+      '    command: "echo go -p {prompt_file} | tee /dev/null"',
+      '    shell: true',
+      '',
+    ].join('\n'),
+    specs: [{ slug: 'r', files: ['a.js'] }],
+  }, ws => {
+    const { result, spawns } = runTick(ws, { brief: 'B\n' });
+    assert.equal(result.code, 0);
+    assert.equal(result.spawned, true);
+    assert.equal(spawns[0].shell, true);
+    assert.equal(spawns[0].argv, null);
+    assert.match(spawns[0].command, /echo go -p '.*worker-prompts.*\.txt' \| tee \/dev\/null/);   // escape helpers still applied
+    assert.equal(spawns[0].stdin, null);
+  });
+});
+
+test('tick: YAML list-form lane command spawns verbatim argv', () => {
+  withWorkspace({
+    triage: [
+      'lanes:',
+      '  claude:',
+      '    command: [echo, run, --flag, -p]',
+      '',
+    ].join('\n'),
+    specs: [{ slug: 'r', files: ['a.js'] }],
+  }, ws => {
+    const { result, spawns } = runTick(ws, { brief: 'B\n' });
+    assert.equal(result.code, 0);
+    assert.equal(spawns[0].shell, false);
+    assert.deepEqual(spawns[0].argv, ['echo', 'run', '--flag', '-p']);
+    assert.equal(spawns[0].stdin, 'B\n');   // no placeholder → stdin
+  });
+});
+
+// ---------- back-compat: the real dogfood lane commands keep working ----------
+
+// Copies of every lane command shipped in real TRIAGE.ymls at migration time
+// (projects/throughline, projects/todo-app, plus the docs' cursor example).
+// Each must parse to the same binary + args it always meant, pass the argv
+// guard with no shell opt-in, and keep stdin prompt delivery.
+const DOGFOOD_LANES = [
+  { lane: 'claude', command: 'claude --dangerously-skip-permissions -p', argv: ['claude', '--dangerously-skip-permissions', '-p'] },
+  { lane: 'codex', command: 'codex exec --sandbox workspace-write -', argv: ['codex', 'exec', '--sandbox', 'workspace-write', '-'] },
+  { lane: 'codex', command: 'codex exec --sandbox workspace-write -p todoapp -', argv: ['codex', 'exec', '--sandbox', 'workspace-write', '-p', 'todoapp', '-'] },
+  { lane: 'gemini', command: 'agy --dangerously-skip-permissions -p', argv: ['agy', '--dangerously-skip-permissions', '-p'] },
+  { lane: 'cursor', command: 'cursor-agent -f -p', argv: ['cursor-agent', '-f', '-p'] },
+];
+
+test('back-compat: every real dogfood lane command argv-splits cleanly, no shell opt-in needed', () => {
+  for (const { lane, command, argv } of DOGFOOD_LANES) {
+    const cfgLane = laneConfig({ lanes: { [lane]: { command } } }, lane);
+    assert.ok(cfgLane, command);
+    assert.equal(cfgLane.shell, false, command);
+    assert.equal(laneSpawnIssue(cfgLane, lane), null, command);
+    const inv = buildInvocation(cfgLane, '/tmp/p.txt', 'brief\n');
+    assert.deepEqual(inv.argv, argv, command);
+    assert.equal(inv.stdin, true, command + ' delivers the brief on stdin, as before');
+  }
+});
+
+test('back-compat: lane commands configured in this checkout\'s live workspaces spawn under the argv default', () => {
+  // Prove the migration against the actual files when present (workspaces are
+  // gitignored, so tolerate their absence on a fresh checkout).
+  let checked = 0;
+  const projectsDir = path.join(ROOT, 'projects');
+  for (const name of fs.existsSync(projectsDir) ? fs.readdirSync(projectsDir) : []) {
+    const triageFile = path.join(projectsDir, name, 'TRIAGE.yml');
+    if (!fs.existsSync(triageFile)) continue;
+    const cfg = require('../lib/parse').parseYaml(fs.readFileSync(triageFile, 'utf8')) || {};
+    if (!cfg.lanes || typeof cfg.lanes !== 'object') continue;
+    for (const lane of Object.keys(cfg.lanes)) {
+      const cfgLane = laneConfig(cfg, lane);
+      if (!cfgLane) continue;   // malformed lane entries are a different failure, not this test's
+      assert.equal(laneSpawnIssue(cfgLane, lane), null,
+        `${name} lane "${lane}" (${cfgLane.command}) must spawn under the argv default or opt in with shell: true`);
+      if (!cfgLane.shell) {
+        const inv = buildInvocation(cfgLane, '/tmp/p.txt', 'brief\n');
+        assert.ok(inv.argv.length >= 1, `${name} lane "${lane}" produces a runnable argv`);
+      }
+      checked++;
+    }
+  }
+  // On the dogfood checkout this exercises the real claude/codex/gemini lanes.
+  assert.ok(checked >= 0);
 });
 
 test('tick: child non-zero → exit 1; spawn failure → exit 1; lock removed either way', () => {

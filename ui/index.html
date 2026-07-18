@@ -330,6 +330,18 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .bp-counts .ci.open, .bp-counts .ci:hover { color: var(--ink); }
 .bp-counts .ci b { color: var(--mid); font-weight: 400; }
 .bp-counts input { font-family: var(--sans); font-size: .8rem; background: var(--card); border: 1px solid var(--accent-line); border-radius: 3px; padding: 4px 9px; width: 260px; }
+.recall { margin-top: 40px; }
+.recall-input { width: 100%; box-sizing: border-box; font-family: var(--sans); font-size: .92rem; color: var(--ink); background: var(--card); border: 1px solid var(--line2); border-radius: 5px; padding: 12px 14px; }
+.recall-input:focus { border-color: var(--accent); outline: none; }
+.recall-results { display: none; padding: 4px 0 2px; }
+.recall-results.open { display: block; }
+.recall-head { display: flex; align-items: baseline; gap: 10px; font-family: var(--mono); font-size: .62rem; color: var(--dim); padding: 8px 0 2px; }
+.recall-head .clear { margin-left: auto; cursor: pointer; color: var(--faint); }
+.recall-head .clear:hover { color: var(--ink); }
+.recall-kind { font-family: var(--mono); font-size: .58rem; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin-top: 10px; padding-bottom: 2px; border-bottom: 1px solid var(--line); }
+.recall-row { cursor: default; }
+.recall-row:hover { background: none; }
+.recall-row .snip { font-size: .74rem; color: var(--dim); margin-top: 2px; line-height: 1.4; }
 .park { margin-top: 40px; }
 .park-label { display: block; font-family: var(--mono); font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
 .park-input { width: 100%; box-sizing: border-box; font-family: var(--sans); font-size: .92rem; color: var(--ink); background: var(--card); border: 1px solid var(--line2); border-radius: 5px; padding: 12px 14px; }
@@ -457,6 +469,15 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lane-head .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 .lane-head .nm { font-family: var(--mono); font-size: .62rem; letter-spacing: .1em; color: var(--dim); }
 .lane-head .ct { margin-left: auto; font-family: var(--mono); font-size: .62rem; color: var(--faint); }
+/* TESTS lane head: bulk "verify all" — the drawer's old Drain queue, moved to
+   lane level where a whole-lane action belongs (a per-spec drawer keeps one) */
+.lane-head .lh-drain {
+  font-family: var(--mono); font-size: .56rem; letter-spacing: .02em;
+  color: var(--dim); background: transparent; border: 1px solid var(--line2);
+  border-radius: 3px; padding: 2px 7px; cursor: pointer; flex: none;
+}
+.lane-head .lh-drain:hover { color: #6b8fc7; border-color: #6b8fc7; }
+.lane-head .lh-drain:disabled { opacity: .5; cursor: default; }
 .lane-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: none; }
 .lcard { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; cursor: pointer; }
 .lcard:hover { border-color: var(--line2); }
@@ -577,10 +598,13 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
   transform: translate(-50%, -46%) scale(.97);
   transition: transform .22s cubic-bezier(.3,.8,.3,1), opacity .18s;
   opacity: 0;
+  /* closed: invisible AND click-through — without this the empty drawer box
+     floats over the viewport center and swallows clicks meant for the paper */
+  pointer-events: none;
   overflow-y: auto; padding: 34px 38px 52px;
 }
 .open .scrim { opacity: 1; pointer-events: auto; }
-.open .drawer { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+.open .drawer { transform: translate(-50%, -50%) scale(1); opacity: 1; pointer-events: auto; }
 .dr-close {
   position: absolute; top: 12px; right: 14px; z-index: 2;
   font-family: var(--mono); font-size: 1.1rem; line-height: 1;
@@ -598,6 +622,16 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .dr-reject:hover { color: #c0622a; border-color: #c0622a; }
 .dr-release { color: var(--ok) !important; border-color: var(--ok) !important; }
 .dr-release:hover { background: rgba(58,125,85,.1); }
+/* tests-gate drawer: one verify action + requested → picked up → verified strip.
+   Colors track the card badges: tests blue while in flight, verified green. */
+.dr-verify { align-items: center; flex-wrap: wrap; }
+.dr-request-verify:hover { color: #6b8fc7; border-color: #6b8fc7; }
+.dr-request-verify:disabled { opacity: .5; cursor: wait; }
+.dr-vsteps { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: .58rem; letter-spacing: .04em; color: var(--faint); }
+.dr-vsteps .vstep { border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; color: var(--faint); }
+.dr-vsteps .vstep.on { color: #6b8fc7; border-color: rgba(107,143,199,.5); background: rgba(107,143,199,.08); }
+.dr-vsteps .vstep.v.on { color: #7fa06a; border-color: rgba(127,160,106,.5); background: rgba(58,125,85,.08); }
+.dr-vsteps i { font-style: normal; color: var(--faint); }
 .dr-decide { display: flex; gap: 8px; margin-bottom: 20px; }
 .dr-decide button { font-family: var(--mono); font-size: .68rem; border-radius: 4px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
 .dr-decide button:hover { color: var(--ink); border-color: var(--ink); }
@@ -862,7 +896,8 @@ function agentMark(s, c) {
 function ownerBadge(s) {
   const a = (s.meta.claimed_by || '').toLowerCase();
   if (!a || !AGENT_IC[a]) return '';
-  return `<span class="lc-owner" title="claimed by ${AGENT_LABEL[a]}">${AGENT_IC[a]('currentColor')}</span>`;
+  const model = String(s.meta.claimed_model || '').trim();
+  return `<span class="lc-owner" title="claimed by ${AGENT_LABEL[a]}${model ? ' — ' + esc(model) : ''}">${AGENT_IC[a]('currentColor')}</span>`;
 }
 // Shaping hold reason on triage-lane cards — hold_reason frontmatter or a generic legacy chip.
 function holdReasonChip(meta) {
@@ -989,7 +1024,8 @@ function openDrawer(item) {
   if (p) pills += `<span class="pill ${p}">${esc(p.toUpperCase())}</span>`;
   for (const k of ['type', 'size', 'status']) if (meta[k]) pills += `<span class="pill">${esc(String(meta[k]).replace('_',' '))}</span>`;
   const claimant = (meta.claimed_by || '').toLowerCase();
-  if (claimant && AGENT_IC[claimant]) pills += `<span class="pill pill-owner">${AGENT_IC[claimant]('currentColor')}claimed by ${esc(AGENT_LABEL[claimant])}</span>`;
+  const claimedModel = String(meta.claimed_model || '').trim();
+  if (claimant && AGENT_IC[claimant]) pills += `<span class="pill pill-owner">${AGENT_IC[claimant]('currentColor')}claimed by ${esc(AGENT_LABEL[claimant])}${claimedModel ? ' · ' + esc(claimedModel) : ''}</span>`;
   if (meta.origin) pills += `<span class="pill">from ${esc(meta.origin)}</span>`;
   if (item._ws) pills += `<span class="pill">${esc(item._ws)}</span>`;
   const body = (item.body || '').replace(/^\s*# .*\n+/, '');
@@ -1018,24 +1054,31 @@ function openDrawer(item) {
   // only for real specs (folders), and not decay-inbox decision pop-outs.
   const expHtml = (isSpec && !item._decide) ? `
     <div class="dr-exp"><button class="dr-experiment">⚗ experiment →</button></div>` : '';
-  // Dispatch verify — file write only; workers / tl verify --execute drain it.
+  // Request verify — file write only; workers / tl verify --execute drain it.
+  // One action, no routing input: the backend already targets any lane but the
+  // builder (the only correct choice), so the old target-lane dropdown is gone
+  // and the old bulk "Drain queue" now lives on the TESTS lane head as "verify all".
   const awaitingV = item.stage === 'tests' && item.meta && item.meta.awaiting_verifier === true;
   const humanV = item.stage === 'tests' && (
     (item.verifier && item.verifier.status === 'human-decision-required')
     || String(item.meta.verifier_status || '').toLowerCase() === 'human-decision-required'
   );
   const builder = String((item.meta && (item.meta.claimed_by || item.meta.agent)) || '').toLowerCase();
-  const vLanes = (item._verifierLanes || [])
-    .map(l => l.id || l.agent)
-    .filter(id => id && id !== builder);
-  const dispatchHtml = awaitingV ? `
-    <div class="dr-review">
-      <button class="dr-dispatch-verify" title="writes a verify-request artifact — never spawns an agent">Dispatch verify</button>
-      <button class="dr-drain-verify" title="queue verify-requests for every awaiting-verifier spec">Drain queue</button>
-    </div>
-    <div class="dr-notes" style="padding-top:0">
-      <div class="dr-notes-h">Target lane <span class="dim">≠ builder ${esc(builder || '?')} — UI never spawns</span></div>
-      <select class="dr-verify-lane">${['any-other'].concat(vLanes).map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select>
+  // requested → picked up → verified, all from fields the payload already has:
+  // a pending verify-request artifact, the live verifier status, verified_by.
+  const vSlug = (item.path || '').replace(/\/$/, '').split('/').pop();
+  const vReqPending = (item._verifyRequests || []).some(r => String(r.spec || '') === vSlug);
+  const vStatus = (item.verifier && item.verifier.status) || String(item.meta.verifier_status || '').toLowerCase();
+  const vBy = String((item.verifier && item.verifier.verified_by) || item.meta.verified_by || '').toLowerCase();
+  const vStep = vBy ? 3 : vStatus === 'running' ? 2 : vReqPending ? 1 : 0;
+  const dispatchHtml = (item.stage === 'tests' && (awaitingV || vBy)) ? `
+    <div class="dr-review dr-verify">
+      ${awaitingV && vStep === 0 ? `<button class="dr-request-verify" title="writes a verify request routed to any lane but the builder (${esc(builder || '?')}) — workers pick it up; the UI never spawns agents">Request verify</button>` : ''}
+      <span class="dr-vsteps" title="requested (artifact written) → picked up (a non-builder lane is running it) → verified">
+        <span class="vstep${vStep >= 1 ? ' on' : ''}">requested</span><i>→</i>
+        <span class="vstep${vStep >= 2 ? ' on' : ''}">picked up</span><i>→</i>
+        <span class="vstep v${vStep >= 3 ? ' on' : ''}">verified${vBy ? ' · ' + esc(vBy) : ''}</span>
+      </span>
     </div>` : '';
   const mutationHtml = humanV ? `
     <div class="dr-review" style="flex-direction:column;align-items:stretch;gap:8px">
@@ -1091,22 +1134,18 @@ function openDrawer(item) {
     if (expBtn) expBtn.onclick = () => openExperimentQueueForm(item._ws, item.path);
   }
   if (awaitingV) {
-    const laneSel = () => ($('drawer').querySelector('.dr-verify-lane') || {}).value || 'any-other';
-    const dv = $('drawer').querySelector('.dr-dispatch-verify');
-    if (dv) dv.onclick = async () => {
+    // one verify action — no target_lane in the payload, so the server applies
+    // its own default: any lane other than the builder (the enforced policy).
+    const rv = $('drawer').querySelector('.dr-request-verify');
+    if (rv) rv.onclick = async () => {
+      rv.disabled = true;
       try {
-        await postJSON('/api/verify-dispatch', { ws: item._ws, spec: item.path, target_lane: laneSel() });
-        alert('Verify request written. Workers / tl verify --execute will drain it — the UI never spawns agents.');
+        await postJSON('/api/verify-dispatch', { ws: item._ws, spec: item.path });
+        const first = $('drawer').querySelector('.dr-vsteps .vstep');
+        if (first) first.classList.add('on');   // requested — visible immediately
+        rv.remove();
         loadSelected();
-      } catch (err) { alert(err.message); }
-    };
-    const drain = $('drawer').querySelector('.dr-drain-verify');
-    if (drain) drain.onclick = async () => {
-      try {
-        const r = await postJSON('/api/verify-dispatch', { ws: item._ws, drain: true, target_lane: laneSel() });
-        alert(`Queued ${r.count || 0} verify request(s).`);
-        loadSelected();
-      } catch (err) { alert(err.message); }
+      } catch (err) { rv.disabled = false; alert(err.message); }
     };
   }
   if (humanV) {
@@ -1287,8 +1326,18 @@ const LOOP = {
   decision: { c: '#6b57c7', sev: 4, ic: IC.chat },
 };
 async function postJSON(p, body) {
-  const r = await fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!r.ok) { let e = {}; try { e = await r.json(); } catch {} const err = new Error(e.error || ('HTTP ' + r.status)); err.status = r.status; throw err; }
+  // every cockpit write goes through here — the server injects the per-process
+  // write token into this page at GET /, and refuses POSTs without it (403)
+  const r = await fetch(p, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-tl-token': window.TL_WRITE_TOKEN || '' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    let e = {}; try { e = await r.json(); } catch {}
+    const msg = (e.error || ('HTTP ' + r.status)) + (r.status === 403 && e.hint ? ' — ' + e.hint : '');
+    const err = new Error(msg); err.status = r.status; throw err;
+  }
   return r.json();
 }
 const specFileOf = item => { const p = item.path || ''; return p.endsWith('/') ? p + 'SPEC.md' : p; };
@@ -1324,6 +1373,23 @@ function fmtInsightN(n) {
   if (v >= 10000) return (v / 1000).toFixed(0) + 'k';
   if (v >= 1000) return (v / 1000).toFixed(1) + 'k';
   return String(v);
+}
+
+// Lines-added stat: git-derived when the workspace repo is a checkout
+// (total = all-time insertions, week = rolling last-7-days), legacy
+// experiment-patch count otherwise, and an honest em dash — never a
+// misleading 0 — when neither source has data.
+function fmtLinesAddedStat(la) {
+  const l = la || {};
+  const hasData = !!l.git_available || (l.experiments || 0) > 0;
+  return hasData ? fmtInsightN(l.total || 0) : '&mdash;';
+}
+
+function fmtLinesAddedSub(la) {
+  const l = la || {};
+  if (l.git_available) return '+' + fmtInsightN(l.week || 0) + ' this week';
+  if ((l.experiments || 0) > 0) return 'from experiment patches';
+  return 'no repo data yet';
 }
 
 const TOOL_LABEL = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini', windsurf: 'Windsurf', other: 'Other' };
@@ -1392,7 +1458,7 @@ function mergeInsights(list) {
     active_agent_count: 0,
     active_agents: [],
     stage_counts: { ready: 0, 'in-progress': 0, tests: 0, 'in-review': 0, done: 0, triage: 0 },
-    lines_added: { total: 0, experiments: 0 },
+    lines_added: { total: 0, experiments: 0, week: 0, git_available: false, source: 'none' },
     tools: [],
     models: [],
     experiments: { total: 0, by_status: {}, candidate_runs: 0, recent_winner: '', recent_winner_tool: '' },
@@ -1407,6 +1473,14 @@ function mergeInsights(list) {
     }
     out.lines_added.total += ins.lines_added?.total || 0;
     out.lines_added.experiments += ins.lines_added?.experiments || 0;
+    if (ins.lines_added?.git_available) {
+      out.lines_added.git_available = true;
+      out.lines_added.week += ins.lines_added.week || 0;
+    }
+    if (ins.lines_added?.source && ins.lines_added.source !== 'none' && out.lines_added.source === 'none') {
+      out.lines_added.source = ins.lines_added.source;
+    }
+    if (out.lines_added.git_available) out.lines_added.source = 'git';
     for (const t of ins.tools || []) {
       if (!toolMap[t.tool]) toolMap[t.tool] = { tool: t.tool, count: 0, duration_minutes: 0, cost_usd: 0, tokens_used: 0, runs_with_duration: 0, runs_with_cost: 0, runs_with_tokens: 0 };
       mergePerfBucket(toolMap[t.tool], t);
@@ -1525,8 +1599,8 @@ function renderInsightsRail(wss) {
     </div>
     <div class="ins-block">
       <span class="il">Lines added</span>
-      <p class="ins-stat">${fmtInsightN(ins.lines_added?.total || 0)}</p>
-      <p class="ins-sub">from experiment patches</p>
+      <p class="ins-stat">${fmtLinesAddedStat(ins.lines_added)}</p>
+      <p class="ins-sub">${esc(fmtLinesAddedSub(ins.lines_added))}</p>
     </div>
     <div class="ins-block">
       <span class="il">Top tools</span>
@@ -1958,7 +2032,11 @@ return { pendingReflectProposals, countAcceptsAfter, DAY };
 // every few seconds while agents work; without this, clicked-open sections snap shut
 // before they can be read. keys: counts/status/scope by workspace name; rows by path.
 // mapView: per-ws {x,y,w,h} so SSE/refresh rebuilds don't snap zoom/pan back to default
-const resumeOpen = { counts: {}, rows: new Set(), status: {}, scope: {}, mapView: {}, reflect: {} };
+const resumeOpen = { counts: {}, rows: new Set(), status: {}, scope: {}, mapView: {}, reflect: {}, recall: {} };
+// In-flight recall typing must also survive the SSE rebuild: while agents work
+// the paper re-renders every few seconds, which would otherwise wipe the query
+// mid-keystroke and drop focus. ws -> { text, focused }.
+const recallDraft = {};
 function renderResume(wss) {
   $('dsProj').textContent = wss.map(w => w.name).join(' · ');
   $('dsDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -2786,6 +2864,68 @@ function renderResume(wss) {
     }
     block.appendChild(counts); block.appendChild(countsEx);
 
+    // ── recall (read-only — "did we already discuss this?" via /api/recall) ──
+    // Same corpus/scorer/buckets as `tl recall` (lib/recall.js on the server);
+    // results are inert rows — acting on a match is a separate, explicit verb.
+    const recallBox = document.createElement('div'); recallBox.className = 'recall';
+    recallBox.innerHTML = `<span class="park-label">Learn · recall</span><input class="recall-input" placeholder="did we already discuss this? — ⏎ searches intents · specs · threads · outcomes">`;
+    const rres = document.createElement('div'); rres.className = 'recall-results';
+    const rinp = recallBox.querySelector('.recall-input');
+    const clearRecall = () => {
+      recallDraft[ws.name] = { text: '', focused: document.activeElement === rinp };
+      rinp.value = ''; resumeOpen.recall[ws.name] = null;
+      rres.classList.remove('open'); rres.innerHTML = '';
+    };
+    const renderRecall = data => {
+      rres.innerHTML = ''; rres.classList.add('open');
+      const head = document.createElement('div'); head.className = 'recall-head';
+      head.innerHTML = (data.total
+        ? `<span>${data.total} match${data.total === 1 ? '' : 'es'} for “${esc(data.query)}”${data.capped ? ' · showing first ' + data.hits.length : ''}</span>`
+        : `<span>no prior discussion found for “${esc(data.query)}” across intents, specs, threads, or done outcomes — this looks new</span>`)
+        + `<span class="clear">clear ×</span>`;
+      head.querySelector('.clear').onclick = clearRecall;
+      rres.appendChild(head);
+      for (const g of data.groups) {
+        const kindEl = document.createElement('div'); kindEl.className = 'recall-kind'; kindEl.textContent = g.kind;
+        rres.appendChild(kindEl);
+        for (const h of g.hits) {
+          const row = document.createElement('div'); row.className = 'loop-row recall-row';
+          row.innerHTML = `<div class="txt"><div class="t">${esc(h.title)}</div><div class="sub">${esc(h.path)}</div>${h.snippet ? `<div class="snip">${esc(h.snippet)}</div>` : ''}</div>`;
+          rres.appendChild(row);
+        }
+      }
+    };
+    rinp.onkeydown = async e => {
+      if (e.key === 'Escape') { clearRecall(); return; }
+      if (e.key !== 'Enter') return; e.preventDefault();
+      const q = rinp.value.trim();
+      if (!q) { clearRecall(); return; }
+      try {
+        const r = await fetch(`/api/recall?ws=${encodeURIComponent(ws.name)}&q=${encodeURIComponent(q)}`);
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'recall failed');
+        resumeOpen.recall[ws.name] = { q, data };
+        renderRecall(data);
+      } catch (err) {
+        rres.classList.add('open');
+        rres.innerHTML = `<div class="empty">${esc(err.message || 'recall failed')}</div>`;
+      }
+    };
+    rinp.oninput = () => { recallDraft[ws.name] = { text: rinp.value, focused: true }; };
+    rinp.onfocus = () => { (recallDraft[ws.name] = recallDraft[ws.name] || { text: rinp.value }).focused = true; };
+    rinp.onblur = () => { if (recallDraft[ws.name]) recallDraft[ws.name].focused = false; };
+    // survive the SSE re-render: restore the last committed query + results,
+    // then any in-flight draft on top (and put the caret back where it was)
+    const prevRecall = resumeOpen.recall[ws.name];
+    if (prevRecall) { rinp.value = prevRecall.q; renderRecall(prevRecall.data); }
+    const draft = recallDraft[ws.name];
+    if (draft && draft.text != null) rinp.value = draft.text;
+    if (draft && draft.focused) setTimeout(() => {
+      rinp.focus();
+      try { rinp.setSelectionRange(rinp.value.length, rinp.value.length); } catch (_) {}
+    }, 0);
+    block.appendChild(recallBox); block.appendChild(rres);
+
     // ── park a thought (prominent, at the bottom) ──
     const park = document.createElement('div'); park.className = 'park';
     park.innerHTML = `<span class="park-label">Steer · park a thought</span><input class="park-input" placeholder="something to explore later — ⏎ saves">`;
@@ -2806,7 +2946,7 @@ function renderResume(wss) {
 
     paper.appendChild(block);
   }
-  paper.insertAdjacentHTML('beforeend', '<div class="footnote">every change is a file edit — including the ones you make here · git is the database<div class="fn-cmds">/tl&nbsp; resume · capture · run · review · map · triage · groom · promote · goal · new</div></div>');
+  paper.insertAdjacentHTML('beforeend', '<div class="footnote">every change is a file edit — including the ones you make here · git is the database<div class="fn-cmds">/tl&nbsp; resume · capture · recall · run · review · map · triage · groom · promote · goal · new</div></div>');
 }
 
 /* ════ LIVE LOOK ════ */
@@ -2826,7 +2966,7 @@ function renderLanes(wss) {
   const all = [];
   for (const ws of wss) for (const s of ws.specs) {
     s._ws = ws.name;
-    s._verifierLanes = ws.verifierLanes || [];
+    s._verifyRequests = ws.verifyRequests || [];   // pending verify artifacts → drawer "requested" step
     all.push(s);
   }
 
@@ -2837,6 +2977,26 @@ function renderLanes(wss) {
     const lane = document.createElement('div');
     lane.className = 'lane';
     lane.innerHTML = `<div class="lane-head"><span class="dot" style="background:${color}"></span><span class="nm">${name}</span><span class="ct">${items.length}</span></div>`;
+    if (stage === 'tests') {
+      // bulk verify — the drawer's old "Drain queue", moved to the lane head
+      // where a whole-lane action belongs: one verify request per awaiting spec
+      const wsAwaiting = [...new Set(items.filter(s => s.meta && s.meta.awaiting_verifier === true).map(s => s._ws))];
+      if (wsAwaiting.length) {
+        const btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'lh-drain'; btn.textContent = 'verify all';
+        btn.title = 'queue a verify request for every awaiting spec — workers / tl verify --execute drain them; the UI never spawns agents';
+        btn.onclick = async e => {
+          e.stopPropagation(); btn.disabled = true;
+          try {
+            let n = 0;
+            for (const w of wsAwaiting) { const r = await postJSON('/api/verify-dispatch', { ws: w, drain: true }); n += r.count || 0; }
+            btn.textContent = `queued ${n} ✓`;
+            loadSelected();
+          } catch (err) { btn.disabled = false; alert(err.message); }
+        };
+        lane.querySelector('.lane-head').appendChild(btn);
+      }
+    }
     const body = document.createElement('div');
     body.className = 'lane-body';
     items.forEach(s => {

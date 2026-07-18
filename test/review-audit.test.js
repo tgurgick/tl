@@ -96,9 +96,18 @@ function startServer(root, port) {
   return { child, ready };
 }
 
+// same-session write token — POSTs need the token the server injects at GET /
+async function fetchToken(port) {
+  const html = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+  return (html.match(/window\.TL_WRITE_TOKEN="([0-9a-f]+)"/) || [])[1] || '';
+}
+
+let TOKEN = '';
 async function post(port, body) {
   const r = await fetch(`http://127.0.0.1:${port}/api/review`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ws: WS, ...body }),
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-tl-token': TOKEN },
+    body: JSON.stringify({ ws: WS, ...body }),
   });
   return { status: r.status, body: await r.json() };
 }
@@ -114,6 +123,7 @@ test('review audit line and reviewer stamp', async t => {
   let firstRow = null;
   try {
     await ready;
+    TOKEN = await fetchToken(port);
 
     await t.test('accept with a passing gate: stamps the spec and logs gate: verified', async () => {
       const r = await post(port, { action: 'accept', spec: 'in-review/verified-spec/' });

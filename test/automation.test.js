@@ -169,6 +169,28 @@ test('laneAvailability: reports reachable busy/idle/unreachable and queue pointe
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('laneAvailability: probes argv[0], with first-token parsing only for shell lanes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-lanes-probe-'));
+  try {
+    const probed = [];
+    const cfg = { lanes: {
+      codex: { command: ['/opt/Agent Tools/codex', 'exec', '-'] },
+      claude: { command: '"/opt/Claude Tools/claude" -p | tee run.log', shell: true },
+    } };
+    const rows = laneAvailability({
+      wsDir: dir,
+      cfg,
+      which: binary => {
+        probed.push(binary);
+        return binary.startsWith('/opt/') ? binary : '';
+      },
+    });
+
+    assert.deepEqual(probed.sort(), ['/opt/Agent Tools/codex', '/opt/Claude Tools/claude']);
+    assert.ok(rows.every(row => row.state === 'idle'));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('laneAvailability: idle lane points to its queued experiment drain', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-lanes-exp-'));
   try {

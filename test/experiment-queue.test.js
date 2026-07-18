@@ -262,7 +262,7 @@ test('drain claims only its own lane; other lanes stay queued and the judge wait
   const ws = mkWorkspace();
   queueDemo(ws, repo, [
     { id: 'fix-p', role: 'primary', agent_tool: 'fixture' },
-    { id: 'sh-s', role: 'shadow', agent_tool: 'shell', command: 'echo hi > new.txt', repo },
+    { id: 'sh-s', role: 'shadow', agent_tool: 'shell', command: 'echo hi > new.txt', repo, unsafe_host_exec: true },
   ]);
 
   const result = drainQueue(ws, { agent: 'fixture', now: NOW });
@@ -289,10 +289,12 @@ test('fault handling: unavailable tool, budget stop, timeout, non-zero exit, emp
   const ws = mkWorkspace();
   queueDemo(ws, repo, [
     { id: 'cur-p', role: 'primary', agent_tool: 'cursor' },                                        // no local runner
+    // `costly` carries no trust opt-in on purpose: over_budget stops BEFORE
+    // the runner, so the budget stop must precede even the trust gate.
     { id: 'costly', role: 'shadow', agent_tool: 'shell', command: 'true', repo, estimated_cost_usd: 5 }, // over budget
-    { id: 'slow', role: 'shadow', agent_tool: 'shell', command: 'sleep 5', repo },                 // times out
-    { id: 'broken', role: 'shadow', agent_tool: 'shell', command: 'exit 3', repo },                // fails
-    { id: 'empty', role: 'shadow', agent_tool: 'shell', command: 'true', repo },                   // no diff
+    { id: 'slow', role: 'shadow', agent_tool: 'shell', command: 'sleep 5', repo, unsafe_host_exec: true },   // times out
+    { id: 'broken', role: 'shadow', agent_tool: 'shell', command: 'exit 3', repo, unsafe_host_exec: true },  // fails
+    { id: 'empty', role: 'shadow', agent_tool: 'shell', command: 'true', repo, unsafe_host_exec: true },     // no diff
   ], { budgetUsd: 1, timeoutMinutes: 0.02 }); // 1.2s timeout
 
   // A cursor worker lane exists but has no local runner → unavailable, not a crash.
@@ -341,7 +343,7 @@ test('primary failure does not cancel shadows — a shadow still runs, succeeds,
   const repo = mkRepo();
   const ws = mkWorkspace();
   queueDemo(ws, repo, [
-    { id: 'p-fails', role: 'primary', agent_tool: 'shell', command: 'exit 1', repo },
+    { id: 'p-fails', role: 'primary', agent_tool: 'shell', command: 'exit 1', repo, unsafe_host_exec: true },
     { id: 's-wins', role: 'shadow', agent_tool: 'fixture', complete: true },
   ]);
 
@@ -390,6 +392,7 @@ test('shell candidates run in an isolated worktree: patch captured, canonical re
   queueDemo(ws, repo, [{
     id: 'iso', role: 'primary', agent_tool: 'shell', repo,
     command: 'echo changed >> existing.txt && echo brand-new > added.txt',
+    unsafe_host_exec: true, // row-level trust opt-in survives queueExperiment onto the row config
   }]);
 
   const result = drainQueue(ws, { agent: 'shell', now: NOW });

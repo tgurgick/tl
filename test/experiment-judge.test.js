@@ -190,7 +190,8 @@ test('judging leaves candidates, the canonical repo, and canonical stage folders
   ], { judge: { id: 'sh-judge', agent_tool: 'shell' } });
 
   // Run the candidate first, then snapshot everything the judge must not touch.
-  drainCandidatesOnly(ws, 'shell');
+  // (Unsandboxed shell rows need the explicit drain-level trust opt-in.)
+  drainCandidatesOnly(ws, 'shell', { allowUnsafeHostExec: true });
   const candidatesBefore = treeHash(path.join(ws, '_experiments', 'exp-t', 'candidates'));
   const repoBefore = treeHash(repo);
   const stagesBefore = wsStageSnapshot(ws);
@@ -220,7 +221,7 @@ test('a failing test command fails the tests_pass gate and the candidate cannot 
   queueDemo(ws, repo, [
     { id: 'sh-p', role: 'primary', agent_tool: 'shell', repo, command: 'echo brand-new > added.txt' },
   ], { judge: { id: 'sh-judge', agent_tool: 'shell' } });
-  drainCandidatesOnly(ws, 'shell');
+  drainCandidatesOnly(ws, 'shell', { allowUnsafeHostExec: true });
 
   const result = drainQueue(ws, { agent: 'shell', now: NOW, judges: true, testCommand: 'test -f does-not-exist.txt' });
   assert.equal(result.judged[0].status, 'succeeded'); // the judge RUN succeeded; the verdict is "no winner"

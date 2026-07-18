@@ -61,6 +61,7 @@ One per workspace root — the workspace's identity card. The context-map body i
 | `agent` | enum | optional — `any` `claude` `codex` `cursor` `gemini` (default `any`) | author / human |
 | `claimed_by` | enum | optional — `claude` `codex` `cursor` `gemini` — who actually claimed/is working it | claiming agent |
 | `claimed_at` | date | optional — when the spec was claimed | claiming agent |
+| `claimed_model` | string | optional — model identity at claim time, e.g. `claude-fable-5` `gpt-5` `composer-1`; absent = unknown, never guessed | claiming agent |
 | `accepted_by` | enum | optional — `human-cockpit` (cockpit accept) `human-cli` (`/tl review` accept) | review gate |
 | `accepted_at` | datetime | optional — full ISO timestamp of the accept | review gate |
 | `kicked_back_by` | enum | optional — `human-cockpit` `human-cli` — who kicked it back at review | review gate |
@@ -73,6 +74,8 @@ One per workspace root — the workspace's identity card. The context-map body i
 **Agent routing.** `agent` is a lane hint for heterogeneous fan-out. `tl run --agent <name>` claims only specs whose `agent` is `<name>` or `any` — so Claude, Codex, and Cursor can each drain their own lane concurrently over one throughline, coordinated by the folder-move claim (`specs/ → in-progress/` is the lock — whoever moves it first owns the spec; no central orchestrator). Absent or `any` = runnable by whichever agent picks it up.
 
 **Claim ownership.** `agent` is the *lane* (who a spec is routed to, author-set, often `any`); `claimed_by` is *who actually grabbed it* — stamped by the claiming agent when it moves the spec `specs/ → in-progress/` (with `claimed_at`). Because the folder move alone is anonymous, `claimed_by` is what makes concurrent multi-agent work legible: the cockpit shows it as the live owner on in-progress/tests/in-review cards, so a human can see *which* agent has picked up *which* task. It **identifies the builder** at the TESTS gate — the cross-model verifier must pick a checker that is *not* `claimed_by` (the verifier must differ; see `alt-model-alignment-check` and the alignment record below). Falls back to `agent` when a spec predates claim-stamping.
+
+**Model at claim (`claimed_model`).** `claimed_by` names the *tool*; `claimed_model` names the *model* that tool is running (cursor may be composer or a GPT; claude may be any Claude model) — stamped in the same frontmatter pass as `claimed_by`/`claimed_at` when the claiming agent knows its model, so identity is tool+model from the *start* of a build, matching how the experiment engine and `benchmark-log.jsonl` already key on model as primary identity. Sources, in order of honesty: what the agent knows it is; else the lane-configured identity a headless brief carries (`lanes.<name>.model`, below). **Absent = unknown, never guessed** — Cursor auto mode (and any agent that can't confirm its model) leaves it unset rather than inventing one; same discipline as the experiment fingerprint's `agent_model: unknown`. It is the early signal, not the verdict: FEEDBACK.md `agent_model` at the tests gate stays ground truth, and a mismatch between the two is legible data (the lane was mislabeled, or the tool switched models mid-build), never something to retro-edit. Reclaim's advance-to-tests path leaves it untouched with `claimed_by`/`claimed_at` (builder attribution); a fresh claim after kick-back or return-to-ready re-stamps it like `claimed_by`.
 
 Bug specs add: `source` (`sentry` `datadog` `manual`), `source_id`, `source_url`, `affected_users` (int), `first_seen` (date).
 
@@ -227,6 +230,12 @@ The headless queue is **workspace-scoped**, not per-experiment: files live under
 
 Every queue row carries at least: `experiment_id`, `candidate_id`, `role` (`primary` / `shadow` / `judge`), `agent_tool`, `agent_model_requested`, `status`, `attempt`, `budget_usd`, `timeout_minutes`, `created`. Transition and claim rows also carry `ts`, `claimed_by`, `fault`, `reason`, and a runner `config` object so a drain is self-contained.
 
+**Execution trust boundary (`lib/env-policy.js`).** Candidate and judge commands run in an **isolated checkout** (detached worktree/clone) — isolation protects the canonical repo from edits; it is **not a security sandbox**, and the spawned process keeps full filesystem read, network, and host authority. The boundaries tl enforces:
+
+- **Environment scrub by default.** Every spawn gets a scrubbed environment: credential-shaped variables (vendor prefixes `ANTHROPIC_`/`CLAUDE_`/`OPENAI_`/`JIRA_`/`AWS_`/…, secret name segments `TOKEN`/`SECRET`/`KEY`/`AUTH`/`PASSWORD`/…, plus `SSH_AUTH_SOCK`) never reach candidate or judge commands ambiently. The judge's `--test-command` (which executes the candidate's **patched code**) runs scrubbed too.
+- **Per-lane allowlist.** Each provider lane receives back exactly its own auth variables (`LANE_ENV_ALLOWLIST`: claude → `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_*`, codex → `OPENAI_API_KEY`/`CODEX_HOME`, gemini → `GEMINI_API_KEY`/`GOOGLE_*`, cursor → `CURSOR_API_KEY`); `shell` receives none. Rows widen the boundary only via explicit scoped config: `config.pass_env` (ambient names to pass through) and `config.env` (explicit values over the scrubbed base). Passed-through **names** are logged; **values** are redacted by exact match from `FEEDBACK.md` and `PATCH.diff` before write, complementing the trace redaction below.
+- **Unsandboxed shell fails closed.** A `shell` row runs an arbitrary `config.command` on the host — trusted-code execution, so it requires the explicit opt-in `config.unsafe_host_exec: true` on the row (auditable in the append-only queue) or `tl experiment drain --unsafe-host-exec`; absent, the row terminates `failed` with a concrete message **before** the command runs. Configuring a judge `--test-command` is the equivalent explicit trust decision for judge-side execution; no test command = nothing executes (`tests_pass: null`).
+
 ### `EXPERIMENT.md`
 
 Frontmatter:
@@ -285,7 +294,9 @@ Each `candidates/<candidate_id>/` folder records the observable output of one ca
 
 Runtime fingerprint fields are shared by candidate and judge records: `agent_tool`, `agent_model`, `agent_model_auto`, `agent_model_source`, `runtime_version`, `framework`, `adapter_version`, `rules_hash`, and `skills_hash`. Candidate `METRICS.json` also records `agent_model_requested` (what was asked for — display `auto` under Cursor auto mode) alongside the resolved `agent_model`.
 
-**Cursor auto model visibility.** When the lane is Cursor with no explicit model (or the requested model is `auto`), set `agent_model_auto: true` and `agent_model_requested: "auto"`. Capture the resolved model when an SDK, hook, or session report exposes it; otherwise leave `agent_model` as `unknown`. Record `agent_model_source` as one of `sdk` | `hook` | `reported` | `unknown` (plus `requested` / `fixture` / `none` for non-auto paths). Never invent a resolved model from chain-of-thought.
+**Cursor auto model visibility.** When the lane is Cursor with no explicit model (or the requested model is `auto`), set `agent_model_auto: true` and `agent_model_requested: "auto"`. Capture the resolved model when an SDK, hook, or session report exposes it; otherwise leave `agent_model` as `unknown`. Record `agent_model_source` as one of `sdk` | `hook` | `reported` | `unknown` (plus `requested` / `fixture` / `none` for non-auto paths, and `unfulfilled-request` — see below). Never invent a resolved model from chain-of-thought.
+
+**Unfulfilled model requests.** `requested` may only be recorded when the requested model was actually transmitted to the provider CLI. Until a per-provider model flag exists in the adapter, a cohort's requested model is NOT passed — the CLI runs on its own default — and the record must say so: `agent_model_requested` keeps what was asked for, the resolved `agent_model` stays `unknown` with `agent_model_auto: true`, and `agent_model_source` is `unfulfilled-request` (`lib/experiment-runner.js`). A fingerprint never claims a model identity the run did not use — benchmark comparisons and routing priors train on these fields.
 
 #### `TRACE.jsonl` (candidate action trace)
 
@@ -300,7 +311,7 @@ Common event fields (every row):
 | `agent_tool` | string | lane / tool identity |
 | `agent_model` | string | resolved model when known |
 | `agent_model_auto` | bool | true when Cursor (or similar) auto-selected the model |
-| `agent_model_source` | string | `sdk` / `hook` / `reported` / `requested` / `unknown` / … |
+| `agent_model_source` | string | `sdk` / `hook` / `reported` / `requested` / `unfulfilled-request` / `unknown` / … |
 | `source` | string | who emitted the event (`runner`, `adapter`, `sdk`, …) |
 | `duration_ms` | number/null | optional duration for this step |
 | `status` | string | run-relative status at emit time (`running`, terminal status, …) |
@@ -542,11 +553,17 @@ sync:                   # optional — enables /tl sync (the JIRA shadow layer)
     url: ""             # the JIRA Cloud site, e.g. https://acme.atlassian.net
     project: ""         # JIRA project key, e.g. PROJ
     import_filter: ""   # JQL; default "assignee = currentUser() AND statusCategory != Done"
-    map:                # issue type → tl primitive
-      epic: intent
+    map:                # issue type → tl primitive; open-ended (lib/sync-map.js)
+      epic: intent      # defaults — always in effect, listed for legibility
       story: spec
       task: spec
       bug: spec
+      spike:            # any site-specific type may be added: intent | spec | ignore
+        to: spec        # block form (to: spec) may hint the TL spec type + tags
+        type: research  # must be feature | bug | tech_debt | research
+        tags: [spike]
+      sub-task: ignore  # explicit ignore = dropped by config; UNMAPPED types are
+                        # held + reported with a config hint, never silently dropped
 ```
 
 **The autonomy dial (`auto_review`).** An optional per-`type` map that lets `/tl run` *fast-track* low-risk spec types at the gate. Each key is a spec `type` (`research` `bug` `feature` `tech_debt`); the value is a bool, **all default `false`** (absent map or absent key = `false` = unchanged behavior). When a completing spec's `type` maps to `true`, `/tl run` still carries it `in-progress → tests → in-review` and **still writes `outcome/FEEDBACK.md` and `outcome/ALIGNMENT.md` first** — but stamps the spec `auto_reviewed: true` so `/tl review` and the cockpit can surface it as a low-risk fast-track candidate (and `cycle-log.jsonl` records `auto_reviewed: true/false` for measuring impact).
@@ -561,6 +578,8 @@ sync:                   # optional — enables /tl sync (the JIRA shadow layer)
 
 **The automation profile (`automation`).** An optional section that makes `tl open <workspace>` the one-command operating path: it declares the workspace's headless schedule instead of N hand-written crons (`lib/automation.js`; generator details in `docs/headless-lanes.md`). Absent section — or `enabled` anything but literal `true` — means **no behavior change**: `tl open` still starts the UI and prints the next human action, but installs nothing (calm default). When enabled, `tl open` installs or refreshes a **single per-workspace schedule** (one launchd plist on macOS, one printed cron line elsewhere — `tl open --print-schedule` emits both, paste-ready) that every `interval_minutes` ticks each lane in `lanes` sequentially via `bin/tl-worker.js <ws> --agent <lane>`. Every listed lane **must** already have `lanes.<name>.command` — a missing command is a hard error with a fix hint, never a silently-green schedule. `verify: true` appends an **isolated verify tick** (`bin/tl-worker.js <ws> --mode verify`) that claims at most one awaiting-verifier spec through `verification.verifier_lanes` (builder exclusion + per-spec lock); it requires at least one safe verifier lane or the profile is misconfigured.
 
+**The stall threshold (`stall`).** An optional section tuning when an `in-progress/` claim reads as **stalled**: `stall: { idle_hours: N }`. A claim is stalled when the newest activity across its spec folder (SPEC.md, NOTES.md, `outcome/*`, `context/*`) — floored by `claimed_at` — is idle past the threshold (`lib/stall.js`). Default **24** hours; values must be numbers **≥ 1** — anything else (absent, non-numeric, or below 1) falls back to 24, so config junk can never weaponize detection into claim-stealing. Never stalled regardless of age: `awaiting_verifier` hand-offs, `status: blocked` specs, and claims with a pending `_dispatch/` continuation. Detection is **advisory** — `tl resume`/`tl up` flag stalled claims but nothing acts on them; reclaim stays an explicit human-attributed command (`tl reclaim <ws> <spec> --by <who> --reason "<why>"`, one spec at a time, never a sweep), and a fresh claim is refused even with a reason.
+
 **The automation experiment dial (`automation.experiment`).** Opt-in scheduling of the existing experiment queue/drain path — experiments stay research/compare, never the canonical happy path, and **never auto-select or auto-apply winners** (`lib/experiment-apply.js` stays human-only). Supported values (case-insensitive; unknown strings fail loudly when `automation.enabled` is true — never silently execute):
 
 | Value | Schedule effect |
@@ -574,7 +593,7 @@ The workspace `PAUSE` file remains the kill switch: the schedule keeps firing bu
 
 **Priority epochs (`focus`).** An optional top-level string naming the current priority epoch — a human-owned label tying related weight shifts and overrides together (e.g. `focus: "partner-launch"`). Set via `/tl goal` when rebalancing; absent means no active epoch label. The epoch is **not** a stored period object — it is a join key on append-only logs. When present, `/tl goal` and human priority overrides should stamp the same label on their log lines (`epoch` field, below). `/tl reflect` groups by that label and narrates the span.
 
-**JIRA sync (`sync`).** An optional section enabling `/tl sync` against a JIRA Cloud site (REST API v3 only — not Server/DC). `url` and `project` identify the site and project; `import_filter` is the JQL that scopes what gets imported (default `assignee = currentUser() AND statusCategory != Done`); `map` states the fixed issue-type → primitive mapping (epic → intent, story/task/bug → spec) for legibility. **Credentials never live here** — the API token comes from the environment (`JIRA_EMAIL` / `JIRA_API_TOKEN`) or a credentials file outside the repo, never from `TRIAGE.yml` or any committed file. Section absent = sync disabled; TL is fully functional without it. Algorithm, status/priority mappings, and the `sync-log.jsonl` schema: `skills/sync/SKILL.md`.
+**JIRA sync (`sync`).** An optional section enabling `/tl sync` against a JIRA Cloud site (REST API v3 only — not Server/DC). `url` and `project` identify the site and project; `import_filter` is the JQL that scopes what gets imported (default `assignee = currentUser() AND statusCategory != Done`). `map` is the **open-ended** issue-type → primitive contract (`lib/sync-map.js` `normalizeTypeMap` / `classifyIssueType` are canonical): any issue-type key maps to `intent`, `spec`, or `ignore` — as a scalar, or a block (`to:` required) that for `to: spec` may hint the TL spec `type` (`feature` `bug` `tech_debt` `research` only — lifecycle/stage words are rejected) and a `tags` list merged into the created spec. The four defaults (epic → intent, story/task/bug → spec) are always in effect; same-key entries override them, other keys extend, and matching is case-insensitive with whitespace collapsed to `-` (write multi-word JIRA names hyphenated: `sub-task:`). An issue type **not in the map is held, not imported** — logged `skipped_unmapped` with a concrete config hint and enumerated in the report; only an explicit `ignore` drops issues, and any invalid entry stops the run before import. **Credentials never live here** — the API token comes from the environment (`JIRA_EMAIL` / `JIRA_API_TOKEN`) or a credentials file outside the repo, never from `TRIAGE.yml` or any committed file. Section absent = sync disabled; TL is fully functional without it. Algorithm, status/priority mappings, and the `sync-log.jsonl` schema: `skills/sync/SKILL.md`.
 
 ## Metrics (`_metrics/*.jsonl`, per workspace)
 
@@ -710,18 +729,28 @@ The continuation half of dispatch. When work moves *backwards* (`in-review/ → 
 
 The scheduling half of cross-agent dispatch: `node bin/tl-worker.js <workspace> --agent <lane>` performs **one run tick** — if the lane has eligible run work (a pending continuation it owns first, then at most one conflict-free ready spec in its lane), it launches the lane's configured agent CLI once with the `tl run` brief as the prompt, logs the session, and exits. `node bin/tl-worker.js <workspace> --mode verify [--agent <verifier-lane>]` performs **one verify tick** — claims at most one awaiting-verifier spec via `verification.verifier_lanes`, never the builder, under `_metrics/verify-locks/<slug>.lock`, invokes the isolated runner (`lib/verifier-worker.js`), and records the outcome (clean → `in-review`; mutations → human-decision-required at `tests/`; failures stay in `tests/` with `blocked_reason`). Cockpit **Dispatch verify** only writes `_metrics/verify-requests/*.json` for the tick to drain. Cron/launchd owns the interval. Recipes and the operational model live in `docs/headless-lanes.md`.
 
-**`lanes:` config.** A lane is any shell command — tl ships no provider integrations. Per-lane keys are path-safe lane names matching spec `agent:` / `claimed_by` values: lowercase letters, numbers, dots, underscores, and hyphens only.
+**`lanes:` config.** A lane is an agent CLI invocation — tl ships no provider integrations. Per-lane keys are path-safe lane names matching spec `agent:` / `claimed_by` values: lowercase letters, numbers, dots, underscores, and hyphens only.
 
 ```yaml
 lanes:
   claude:
     command: "claude --dangerously-skip-permissions -p"   # no placeholder → brief on stdin
+    model: claude-fable-5                 # optional — model identity → claimed_model at claim time
     lock_timeout_minutes: 120             # optional — stale-lock takeover threshold (default 120)
   codex:
     command: "codex exec --sandbox workspace-write -"   # no placeholder → brief arrives on stdin
+  structured:
+    command: [codex, exec, -c, key=["value with spaces"], -]   # list form: verbatim argv elements
+  piped:
+    command: "foo -p | tee /tmp/lane.log"   # needs a real shell → must opt in:
+    shell: true                             # literal true only; anything else = argv default
 ```
 
-Prompt delivery: **stdin is canonical** — a command with neither `{prompt_file}` nor `{prompt}` receives the brief bytes on stdin. `{prompt}` is substituted with a shell-escaped **single-line** form of the brief (lossy — avoid for multiline run briefs). **`{prompt_file}` substitutes the shell-escaped path** of the brief written to `_metrics/worker-prompts/<lane>-<timestamp>.txt` — **wrong for CLIs that treat `-p <arg>` as literal prompt text** (e.g. `claude -p {prompt_file}` passes a filename string, not the brief; use stdin instead). Workspace artifacts (prompts, locks, logs) live under `projects/<name>/`, which is already gitignored. An unconfigured lane is a hard error: exit `1`, nothing executes.
+**Spawn contract: argv-first.** By default the worker never spawns through a shell. A string `command` is **whitespace-split into an argv array** and executed directly (`argv[0]` + the rest as arguments — the same argv-array shape as the experiment PROVIDERS table and `verifier_lanes.command`); the YAML **list form** passes each element verbatim (note: the hand-rolled parser splits inline lists on commas, so comma-bearing tokens belong in the agent's profile file). Prompt content and paths are substituted as raw argument values — no escaping exists or is needed, so brief bytes can never be interpreted as shell input. `lanes.<name>.shell: true` (literal `true`) is the **explicit opt-in** for commands that genuinely need shell features: only then is the command string run through the shell, with placeholder values shell-escaped (`shell: true` requires the string form — a list `command` with `shell: true` is unconfigured). A string command containing shell syntax (quotes, `|`, `&`, `;`, `<`, `>`, `(`, `)`, `$`, backticks, `\`, globs, or a leading `~`) **without** the opt-in is a hard error: exit `1`, reason `shell_required`, nothing executes — never a silent wrong split.
+
+Prompt delivery: **stdin is canonical** — a command with neither `{prompt_file}` nor `{prompt}` receives the brief bytes on stdin. `{prompt}` is substituted with a **single-line** form of the brief (lossy — avoid for multiline run briefs): one verbatim argument on the argv path, shell-escaped on a `shell: true` lane. **`{prompt_file}` substitutes the path** of the brief written to `_metrics/worker-prompts/<lane>-<timestamp>.txt` — **wrong for CLIs that treat `-p <arg>` as literal prompt text** (e.g. `claude -p {prompt_file}` passes a filename string, not the brief; use stdin instead). Workspace artifacts (prompts, locks, logs) live under `projects/<name>/`, which is already gitignored. An unconfigured lane is a hard error: exit `1`, nothing executes.
+
+**Model identity (`lanes.<name>.model`).** Optional; declares the model the lane's `command` pins (e.g. a `--model` flag in the command, or the provider's default). The worker never verifies or injects it into the command — it is the pass-through into the **claim stamp**: when set, the tick appends a claim-identity trailer to the brief naming the configured model, and the spawned session stamps `claimed_model: "<model>"` alongside `claimed_by`/`claimed_at` when it signs a claim (spec frontmatter, above; sign-the-claim step in `skills/run/SKILL.md`). The trailer carries the honesty rule with it: an agent that knows it is a *different* model stamps what it actually is, and one that can't confirm any model leaves the field unset. Scalars only, fallback-on-garbage: a missing, empty, or non-scalar `model` means no trailer and claims land with `claimed_model` absent (= unknown, never guessed). Continuation resumes sign no claim, so the trailer is inert there. When set, the lane's `_metrics/locks/<lane>.lock` also carries `model` for observability.
 
 **Continuation ownership (lane filter).** A pending continuation is eligible for lane `<lane>` only when ownership matches: if the linked spec has `claimed_by`, that value must equal `<lane>` — `agent: any` never overrides an existing claim. Only when unclaimed does the routing lane (`agent: <lane>` or `any`) decide. While another lane's continuation is pending, a tick claims **no** fresh ready work (matching `/tl run`, which holds the ready queue behind any pending continuation) and exits `0` with reason `no_continuation`.
 
@@ -729,4 +758,4 @@ Prompt delivery: **stdin is canonical** — a command with neither `{prompt_file
 
 **Exit codes.** `0` — no work (quiet cron) or child exited 0; `1` — lane misconfigured, `tl run` subprocess failure, spawn failure, or child exited non-zero; `2` — `PAUSE` present or lock held.
 
-**`worker-log.jsonl`** (`_metrics/worker-log.jsonl`, append-only): one line per non-dry tick — `date`, `workspace`, `lane`, `picked` (spec path, `_dispatch/<slug>.json`, or `none`), `spawned` (bool), `exit_code` (the tick's exit code), `duration_seconds`, and `reason` when not spawned (`no_continuation` `no_ready` `paused` `locked` `lane_unconfigured` `tl_run_failed` `spawn_failed`). Extra fields appear when relevant (`child_exit_code`, `stale_lock_takeover`); a lock-cleanup failure appends its own `event: lock_cleanup_failed` line. As everywhere: never edit existing lines.
+**`worker-log.jsonl`** (`_metrics/worker-log.jsonl`, append-only): one line per non-dry tick — `date`, `workspace`, `lane`, `picked` (spec path, `_dispatch/<slug>.json`, or `none`), `spawned` (bool), `exit_code` (the tick's exit code), `duration_seconds`, and `reason` when not spawned (`no_continuation` `no_ready` `paused` `locked` `lane_unconfigured` `shell_required` `tl_run_failed` `spawn_failed`). Extra fields appear when relevant (`child_exit_code`, `stale_lock_takeover`); a lock-cleanup failure appends its own `event: lock_cleanup_failed` line. As everywhere: never edit existing lines.

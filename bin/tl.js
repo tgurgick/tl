@@ -65,6 +65,9 @@ const { selectWinner, applyWinner, rejectWinner, sendWinnerToReview } = require(
 const { queueExperiment, drainQueue, readQueueRows } = require('../lib/experiment-queue');
 const { replayExperiment, replayReport, parseCandidate, createSuite, listSuites, selectSuiteExperiments, replaySuite } = require('../lib/experiment-replay');
 const { canAdvanceToReview, verificationPolicy } = require('../lib/verification-gate');
+const { recallSearch, readThreads } = require('../lib/recall');
+const { normalizeTypeMap, normalizeTypeKey, DEFAULT_TYPE_MAP } = require('../lib/sync-map');
+const { checkTriageLock, acquireTriageLock, touchTriageLock, releaseTriageLock } = require('../lib/triage-lock');
 const {
   readAutomation, laneIssues, scheduleArtifacts, installLaunchd, automationStatus,
   experimentScheduleSummary, laneAvailability, formatLaneAvailability,
@@ -245,17 +248,11 @@ function notesExcerpt(notes, maxLines = 8) {
   return excerpt.join('\n');
 }
 
-function readThreads(dir) {
-  const out = [];
-  const threadsDir = path.join(dir, 'threads');
-  if (!isDir(threadsDir)) return out;
-  for (const f of fs.readdirSync(threadsDir).sort()) {
-    if (!f.endsWith('.md') || f.startsWith('.')) continue;
-    const { meta, body } = parseFrontmatter(safeRead(path.join(threadsDir, f)) || '');
-    out.push({ path: 'threads/' + f, title: meta.title || f, meta, body });
-  }
-  return out;
-}
+// Thread records come from the shared reader in lib/recall.js (readThreads),
+// which stamps `mtime` — the recency signal lib/resume-recommended.js ranks
+// open loops by. The CLI used to keep a private copy here that omitted mtime,
+// so /tl resume saw every thread as infinitely old while the cockpit did not
+// (threads/2026-07-14-cli-readthreads-mtime-drift.md). One reader, no drift.
 
 // ---------- SKILL printing ----------
 
@@ -1096,94 +1093,10 @@ function cmdVerify(args) {
 
 // ---------- tl recall ----------
 
-// The intents/ corpus — human objectives, searched by recall.
-function readIntents(dir) {
-  const out = [];
-  const intentsDir = path.join(dir, 'intents');
-  if (!isDir(intentsDir)) return out;
-  for (const f of fs.readdirSync(intentsDir).sort()) {
-    if (!f.endsWith('.md') || f.startsWith('.')) continue;
-    const file = path.join(intentsDir, f);
-    const { meta, body } = parseFrontmatter(safeRead(file) || '');
-    out.push({ path: 'intents/' + f, title: meta.title || f, meta, body, mtime: mtime(file) });
-  }
-  return out;
-}
-
-// The done/*/outcome/ corpus — FEEDBACK.md + ALIGNMENT.md, where completed work
-// recorded what actually happened. One record per outcome file found.
-function readOutcomes(dir) {
-  const out = [];
-  const doneDir = path.join(dir, 'done');
-  if (!isDir(doneDir)) return out;
-  for (const slug of fs.readdirSync(doneDir).sort()) {
-    if (slug.startsWith('.')) continue;
-    const outcomeDir = path.join(doneDir, slug, 'outcome');
-    if (!isDir(outcomeDir)) continue;
-    for (const f of fs.readdirSync(outcomeDir).sort()) {
-      if (!f.endsWith('.md') || f.startsWith('.')) continue;
-      const file = path.join(outcomeDir, f);
-      const { meta, body } = parseFrontmatter(safeRead(file) || '');
-      out.push({
-        path: 'done/' + slug + '/outcome/' + f,
-        title: meta.title || (slug + ' — ' + f.replace(/\.md$/, '')),
-        meta, body, mtime: mtime(file),
-      });
-    }
-  }
-  return out;
-}
-
-// Score a corpus item against the query terms. Title/frontmatter hits weigh more
-// than body hits; a query term must appear somewhere or the item is dropped.
-// Returns { score, snippet } or null when nothing matches. Transparent and
-// case-insensitive — no fuzzy matching, no index.
-function scoreMatch(item, terms) {
-  const title = String(item.title || '').toLowerCase();
-  const front = JSON.stringify(item.meta || {}).toLowerCase();
-  const body = String(item.body || '').toLowerCase();
-  const head = title + '\n' + front;
-
-  let score = 0;
-  for (const t of terms) {
-    if (head.includes(t)) score += 3;      // title/frontmatter hit — highest signal
-    else if (body.includes(t)) score += 1; // body hit
-    else return null;                       // a term with no home anywhere → not a match
-  }
-  return { score, snippet: firstMatchSnippet(item.body, terms) };
-}
-
-// The first body line that contains any query term, trimmed to one line of
-// context — enough to answer without re-opening the file.
-function firstMatchSnippet(body, terms) {
-  for (const raw of String(body).split('\n')) {
-    const line = raw.trim();
-    if (!line) continue;
-    const low = line.toLowerCase();
-    if (terms.some(t => low.includes(t))) {
-      return line.length > 160 ? line.slice(0, 157) + '…' : line;
-    }
-  }
-  return '';
-}
-
-// The kind bucket a match belongs to — decision / open thread / active spec /
-// done outcome / recommendation — best-effort from frontmatter + stage.
-function recallKind(item) {
-  const type = String(item.meta.type || '').toLowerCase();
-  const status = String(item.meta.status || '').toLowerCase();
-  if (item.path.startsWith('intents/')) return 'intent';
-  if (item.path.startsWith('done/') && item.path.includes('/outcome/')) return 'done outcome';
-  if (item.path.startsWith('threads/')) {
-    if (type === 'decision') return 'decision';
-    if (status === 'open' || status === 'parked' || type === 'question' || type === 'risk') return 'open thread';
-    return 'thread';
-  }
-  // a spec at some stage
-  if (item.stage === 'done') return type === 'research' ? 'recommendation' : 'done outcome';
-  if (type === 'research') return 'recommendation';
-  return 'ready / active spec';
-}
+// Corpus assembly, scoring, and kind-grouping live in lib/recall.js — the SAME
+// helpers the UI server's read-only GET /api/recall uses, so the CLI and the
+// cockpit cannot drift (the parity the tl-recall-skill outcome carried
+// forward). The CLI prints the full uncapped snapshot; the UI caps.
 
 function cmdRecall(args) {
   const ws = resolveWorkspace(args[0]);
@@ -1197,51 +1110,96 @@ function cmdRecall(args) {
     return;
   }
 
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-
-  // assemble the full corpus: intents, all spec stages, threads, done outcomes
-  const corpus = [];
-  for (const s of readAllSpecs(ws.dir)) corpus.push(s);
-  for (const t of readThreads(ws.dir)) corpus.push(t);
-  for (const i of readIntents(ws.dir)) corpus.push(i);
-  for (const o of readOutcomes(ws.dir)) corpus.push(o);
-
-  const hits = [];
-  for (const item of corpus) {
-    const m = scoreMatch(item, terms);
-    if (m) hits.push({ item, score: m.score, snippet: m.snippet, kind: recallKind(item) });
-  }
-  // rank: score first, then recency (newer wins ties)
-  hits.sort((a, b) => b.score - a.score || (b.item.mtime || 0) - (a.item.mtime || 0));
+  const { total, groups } = recallSearch(ws.dir, query);
 
   out('\n===== RECALL: ' + ws.name + ' — "' + query + '" =====\n');
-  if (!hits.length) {
+  if (!total) {
     out('No prior discussion found across intents, specs, threads, or done outcomes.');
     hr();
     out('recall found no prior art for "' + query + '" in workspace "' + ws.name + '". Answer: no — proceed, this looks new.');
     return;
   }
 
-  // group by kind, preserving the ranked order within each group
-  const order = ['decision', 'recommendation', 'done outcome', 'ready / active spec', 'open thread', 'intent', 'thread'];
-  const byKind = {};
-  for (const h of hits) (byKind[h.kind] = byKind[h.kind] || []).push(h);
-  const kinds = Object.keys(byKind).sort((a, b) => {
-    const ia = order.indexOf(a), ib = order.indexOf(b);
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
-  });
-
-  out('## Matches (' + hits.length + ', grouped by kind)');
-  for (const kind of kinds) {
-    out('\n### ' + kind);
-    for (const h of byKind[kind]) {
-      out('- ' + h.item.title + ' (' + h.item.path + ') [score ' + h.score + ']');
+  out('## Matches (' + total + ', grouped by kind)');
+  for (const g of groups) {
+    out('\n### ' + g.kind);
+    for (const h of g.hits) {
+      out('- ' + h.title + ' (' + h.path + ') [score ' + h.score + ']');
       if (h.snippet) out('    ↳ ' + h.snippet);
     }
   }
 
   hr();
   out('The matches above are the deterministic read across the workspace corpus. Now follow the recall SKILL: lead with have-we-discussed-this (yes / partially / no), summarize the prior discussion grouped by kind, and recommend the next action. Workspace "' + ws.name + '".');
+}
+
+// ---------- tl sync ----------
+
+// Offline validation of a workspace's JIRA sync config — the CLI surface for
+// lib/sync-map.js `normalizeTypeMap` (the canonical type-map contract the sync
+// skill stops-before-import on). Reads TRIAGE.yml only: never touches JIRA,
+// never reads credentials, safe to run anywhere. Full bidirectional sync stays
+// skill-driven (skills/sync/SKILL.md); this is its deterministic precondition
+// check as a command.
+function cmdSync(args) {
+  const [sub, ...rest] = args;
+  if (sub !== 'check' || rest.length > 1) {
+    fail('Usage: tl sync check [workspace] — validate TRIAGE.yml sync.jira.map offline (full sync stays skill-driven: skills/sync/SKILL.md)');
+  }
+  const ws = resolveWorkspace(rest[0]);
+  const raw = safeRead(path.join(ws.dir, 'TRIAGE.yml'));
+  let cfg = {};
+  try { cfg = (raw ? parseYaml(raw) : {}) || {}; } catch { cfg = {}; }
+  const sync = cfg.sync && typeof cfg.sync === 'object' && !Array.isArray(cfg.sync) ? cfg.sync : null;
+  const jira = sync && sync.jira && typeof sync.jira === 'object' && !Array.isArray(sync.jira) ? sync.jira : null;
+
+  out('===== SYNC CHECK: ' + ws.name + ' =====\n');
+
+  // Absent config is a calm no, not an error — local-only tl is a complete
+  // product, and this check must be safe to run on any workspace.
+  if (!jira) {
+    out('sync is not configured — no sync.jira section in TRIAGE.yml. Nothing to validate.');
+    out('To set it up, add the sync: block from skills/sync/SKILL.md (url, project, import_filter, map).');
+    return;
+  }
+
+  const url = typeof jira.url === 'string' && jira.url.trim() ? jira.url.trim() : '(unset)';
+  const project = typeof jira.project === 'string' && jira.project.trim() ? jira.project.trim() : '(unset)';
+  out(`jira: url ${url} · project ${project}`
+    + (url === '(unset)' || project === '(unset)' ? '  (needed for a real sync run; map validation is offline either way)' : ''));
+
+  const { map, errors } = normalizeTypeMap(jira.map);
+
+  // Invalid entries are the bridge's stop-before-import condition: list every
+  // offending key with its paste-ready fix hint (the exact lines the sync
+  // skill would print), then exit non-zero.
+  if (errors.length) {
+    out(`\nmap: INVALID — ${errors.length} entr${errors.length === 1 ? 'y' : 'ies'} rejected; sync stops before import on an invalid map:`);
+    for (const e of errors) out('  - ' + e);
+    out(`\nFix the entries above in projects/${ws.name}/TRIAGE.yml, then re-run: tl sync check ${ws.name}`);
+    fail(`sync.jira.map is invalid (${errors.length} error${errors.length === 1 ? '' : 's'}) — see the fix hints above.`);
+  }
+
+  // Valid: the effective map is defaults merged with the workspace entries
+  // (workspace wins on key collision). Show each entry with its provenance so
+  // "defaults in effect" is visible, not implied.
+  const rawMap = jira.map && typeof jira.map === 'object' && !Array.isArray(jira.map) ? jira.map : {};
+  const wsKeys = new Set(Object.keys(rawMap).map(normalizeTypeKey));
+  const entries = Object.entries(map);
+  const counts = { default: 0, override: 0, workspace: 0 };
+  out(`\nmap: OK — ${entries.length} effective entr${entries.length === 1 ? 'y' : 'ies'}:`);
+  for (const [key, e] of entries) {
+    const src = !wsKeys.has(key) ? 'default' : (DEFAULT_TYPE_MAP[key] ? 'override' : 'workspace');
+    counts[src]++;
+    const target = e.to === 'spec'
+      ? `spec (type: ${e.type}${e.tags && e.tags.length ? ', tags: [' + e.tags.join(', ') + ']' : ''})`
+      : e.to;
+    out(`  - ${key} → ${target}  [${src}]`);
+  }
+  out(`defaults in effect: ${counts.default} untouched · ${counts.override} overridden · ${counts.workspace} workspace-added`
+    + (wsKeys.size ? '' : '  (no workspace map — the shipped defaults are the whole contract)'));
+  hr();
+  out('Offline check only — no JIRA call was made and no credentials were read. A clean map is sync\'s stop-before-import precondition (lib/sync-map.js normalizeTypeMap).');
 }
 
 // ---------- tl sync-rules ----------
@@ -1286,6 +1244,7 @@ const CORE_RULES = [
   ['Honor scope and NOTES', 'Do the work only within the spec\'s Files to touch; treat Do not touch as a hard boundary. If a spec has NOTES.md, it is as binding as the acceptance criteria.'],
   ['Capture threads', 'Anything worth not losing but out of scope — a decision, follow-up, risk, or discovery — becomes a file in threads/ (see the capture verb). An undocumented discovery is a leak; it does not justify widening the current spec.'],
   ['Files only', 'Every change is a markdown/JSONL edit plus a folder move. No hidden state; specs/ is the only queue for *new* work, but a pending `_dispatch/` continuation outranks fresh claims — the folders are the status.'],
+  ['Ranking passes coordinate and write narrowly', 'Before ranking, acquire `_metrics/locks/triage.lock`; a fresh lock means triage is already running, so exit instead of racing. Triage writes only its allowed priority/hold/status fields with targeted edits, re-stats before every write, and skips a spec that moved since inventory.'],
 ];
 
 const GEN_MARKER = '<!-- generated by `tl sync-rules` from skills/*/SKILL.md — do not edit by hand -->';
@@ -1495,6 +1454,31 @@ function cmdSyncRules(args = []) {
   out('SKILL.md frontmatter is the single source of truth — re-run `tl sync-rules` after editing skills to refresh these.');
 }
 
+// ---------- tl triage-lock ----------
+
+function cmdTriageLock(args = []) {
+  const action = args[0];
+  const positional = [];
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--lane') { i++; continue; }
+    if (args[i].startsWith('--lane=')) continue;
+    positional.push(args[i]);
+  }
+  if (positional.length > 1) fail('Usage: tl triage-lock <acquire|touch|release|check> [workspace] [--lane <name>]');
+  const ws = resolveWorkspace(positional[0]);
+  const lane = flagValue(args, 'lane') || process.env.TL_AGENT || 'interactive';
+  let result;
+  if (action === 'acquire') result = acquireTriageLock(ws.dir, { lane });
+  else if (action === 'touch') result = touchTriageLock(ws.dir);
+  else if (action === 'release') result = releaseTriageLock(ws.dir);
+  else if (action === 'check') result = checkTriageLock(ws.dir);
+  else fail('Usage: tl triage-lock <acquire|touch|release|check> [workspace] [--lane <name>]');
+
+  if (result.state === 'held') fail(`triage already running (age ${result.ageMinutes}m)`);
+  if (result.state === 'taken-over') out(`stale triage lock taken over by ${lane} (older than 15m)`);
+  else out(`triage lock ${result.state}${action === 'acquire' ? ` by ${lane}` : ''}`);
+}
+
 // ---------- tl experiment ----------
 
 // Winner-application subcommands share an argument shape:
@@ -1582,7 +1566,7 @@ function cmdExperiment(args) {
   // verdict is a nomination; apply/reject stays an explicit human action.
   if (subcmd === 'drain') {
     const positional = [];
-    const flags = { agent: '', max: '', evaluatePartial: [], skipJudges: false, repo: '', testCommand: '' };
+    const flags = { agent: '', max: '', evaluatePartial: [], skipJudges: false, repo: '', testCommand: '', unsafeHostExec: false };
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i];
       if (a === '--agent') flags.agent = rest[++i] || '';
@@ -1592,9 +1576,10 @@ function cmdExperiment(args) {
       else if (a === '--skip-judges') flags.skipJudges = true;
       else if (a === '--repo') flags.repo = rest[++i] || '';
       else if (a === '--test-command') flags.testCommand = rest[++i] || '';
+      else if (a === '--unsafe-host-exec') flags.unsafeHostExec = true;
       else positional.push(a);
     }
-    if (!flags.agent) fail('Usage: tl experiment drain --agent <name> [workspace] [--max <n>] [--evaluate-partial <experiment-id>] [--skip-judges] [--repo <path>] [--test-command <cmd>]');
+    if (!flags.agent) fail('Usage: tl experiment drain --agent <name> [workspace] [--max <n>] [--evaluate-partial <experiment-id>] [--skip-judges] [--repo <path>] [--test-command <cmd>] [--unsafe-host-exec]');
     const ws = resolveWorkspace(positional[0]);
     try {
       const result = drainQueue(ws.dir, {
@@ -1604,6 +1589,10 @@ function cmdExperiment(args) {
         judges: !flags.skipJudges,
         repoDir: path.resolve(flags.repo || INSTALL_ROOT),
         testCommand: flags.testCommand || undefined,
+        // Explicit trust decision for unsandboxed shell rows in this drain —
+        // without it (or a row-level config.unsafe_host_exec) the shell
+        // runner fails closed. See lib/env-policy.js.
+        allowUnsafeHostExec: flags.unsafeHostExec || undefined,
       });
       out('===== tl experiment drain =====');
       out(`workspace: ${ws.name} · lane: ${flags.agent}`);
@@ -1842,6 +1831,8 @@ function usage(stream) {
   w('Four verbs. Underlying skills keep working; this is how you reach for them.');
   w('');
   w('steer — shape what to build');
+  w('  tl sync check [workspace]       Validate TRIAGE.yml sync.jira.map offline via lib/sync-map — no JIRA calls,');
+  w('                                  no credentials; the bridge\'s stop-before-import precondition as a command');
   w('  (skills / agent verbs: new, decompose, goal, promote, groom, capture, sync)');
   w('');
   w('run — start it, or leave automation to it');
@@ -1868,7 +1859,12 @@ function usage(stream) {
   w('              [--skip-judges]     Leave judge rows queued for the interactive skill path');
   w('              [--repo <path>]     Repo for the judge\'s patch-apply check (default: this repo)');
   w('              [--test-command <cmd>]');
-  w('                                  Judge gate: run tests in the isolated patched workdir');
+  w('                                  Judge gate: run tests in the isolated patched workdir (runs candidate');
+  w('                                  code on this host with a scrubbed env — an explicit trust decision)');
+  w('              [--unsafe-host-exec]');
+  w('                                  Trust opt-in for shell rows: config.command runs unsandboxed on this');
+  w('                                  host (a worktree isolates the checkout, not the machine). Without this');
+  w('                                  flag or row-level config.unsafe_host_exec, shell rows fail closed');
   w('  tl experiment fixture [workspace]');
   w('                                  (advanced) Create a deterministic fixture experiment proof');
   w('  tl experiment replay [workspace] <experiment-id> --candidate <tool>[:<model>]');
@@ -1905,6 +1901,7 @@ function usage(stream) {
   w('  (skills / agent verbs: map, reflect, insights)');
   w('');
   w('  tl sync-rules [--check]         Regenerate per-agent rules, or check for generated-rule drift');
+  w('  tl triage-lock <acquire|touch|release|check> [workspace] [--lane <name>]');
   w('');
   w('Workspace: an argument names a workspace under projects/; if exactly one exists it is used;');
   w('otherwise the available workspaces are listed.');
@@ -1929,8 +1926,10 @@ function main() {
     case 'review': return cmdReview(rest);
     case 'verify': return cmdVerify(rest);
     case 'recall': return cmdRecall(rest);
+    case 'sync': return cmdSync(rest);
     case 'experiment': return cmdExperiment(rest);
     case 'sync-rules': return cmdSyncRules(rest);
+    case 'triage-lock': return cmdTriageLock(rest);
     case undefined:
     case 'help':
     case '-h':

@@ -102,12 +102,19 @@ function main() {
       [path.join(ROOT, 'bin', 'tl.js'), 'run', ws.name, '--agent', lane],
       { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }),
 
-    spawnLane: ({ command, stdin }) => {
-      const r = spawnSync(command, {
-        cwd: ROOT, shell: true,
+    // Argv-first spawn (lib/worker.js buildInvocation): the default executes
+    // argv[0] directly with argv.slice(1) — no shell parses the command or the
+    // prompt anywhere. `shell: true` is the lane's explicit opt-in
+    // (lanes.<lane>.shell in TRIAGE.yml) and keeps the old sh -c behavior.
+    spawnLane: ({ argv, command, shell, stdin }) => {
+      const opts = {
+        cwd: ROOT,
         input: stdin != null ? stdin : undefined,
         stdio: [stdin != null ? 'pipe' : 'inherit', 'inherit', 'inherit'],
-      });
+      };
+      const r = shell
+        ? spawnSync(command, { ...opts, shell: true })
+        : spawnSync(argv[0], argv.slice(1), opts);
       if (r.error) throw r.error;
       return r.status === null ? 1 : r.status;
     },

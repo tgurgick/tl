@@ -72,7 +72,7 @@ the common case for you.
 
 ## Configure the lanes (`TRIAGE.yml`)
 
-A lane is any shell command; tl ships no provider integrations. See
+A lane is an agent CLI invocation; tl ships no provider integrations. See
 `_templates/SCHEMA.md` ("Headless lanes") for the full contract. Lane names
 must be path-safe lowercase keys: letters, numbers, dots, underscores, and
 hyphens only.
@@ -86,15 +86,42 @@ lanes:
     lock_timeout_minutes: 90    # optional; default 120
 ```
 
+**Spawns are argv-first — there is no shell by default.** A string `command`
+is split on whitespace into an argv array and executed directly
+(`spawnSync(argv[0], argv.slice(1))`), the same argv-array shape the
+experiment PROVIDERS table (`lib/experiment-runner.js`) and
+`verification.verifier_lanes` already use. Nothing between the worker and
+`execve` parses quotes, expands variables, or interprets operators — the
+quoting-injection surface simply does not exist on this path. Two other
+command shapes:
+
+- **YAML list form** — `command: [codex, exec, -c, sandbox_workspace_write.writable_roots=["/x"], -]`
+  passes each element verbatim as one argument. Use it when an argument
+  contains spaces or shell-looking characters; under argv those bytes are
+  plain data. (The hand-rolled parser splits inline lists on commas, so a
+  token containing a comma still needs the agent's profile file instead.)
+- **`shell: true`** — the explicit opt-in for a lane that genuinely needs
+  pipes or redirection. Only then does the worker run the command string
+  through the shell (old behavior), with the escape helpers guarding
+  placeholder substitution.
+
+A string command containing shell syntax (quotes, `|`, `&`, `;`, `<`, `>`,
+`(`, `)`, `$`, backticks, `\`, globs) **without** `shell: true` is a loud
+misconfiguration: the tick exits `1` with reason `shell_required` and
+executes nothing — never a silent wrong-argv split. Leading `~` is also
+rejected (no shell to expand it); use an absolute path.
+
 Prompt delivery: **stdin is canonical** — a command with no `{prompt_file}` or
 `{prompt}` placeholder receives the brief bytes on stdin (the shape every
-working lane uses). `{prompt}` substitutes a shell-escaped single-line brief
-(lossy — avoid for multiline run briefs). **`{prompt_file}` is wrong for
-CLIs that treat `-p <arg>` as literal prompt text** (notably `claude -p`): the
-worker substitutes the *path* to `_metrics/worker-prompts/<lane>-<timestamp>.txt`,
-so the session receives a filename string, not the brief — only works if the
-agent happens to open the path itself. Do not use `{prompt_file}` in claude
-lanes; pipe on stdin instead. Try it without side effects first:
+working lane uses). `{prompt}` substitutes the single-line brief (lossy —
+avoid for multiline run briefs); on the argv path it becomes exactly one
+argument with no escaping needed, on a `shell: true` lane it is
+shell-escaped. **`{prompt_file}` is wrong for CLIs that treat `-p <arg>` as
+literal prompt text** (notably `claude -p`): the worker substitutes the
+*path* to `_metrics/worker-prompts/<lane>-<timestamp>.txt`, so the session
+receives a filename string, not the brief — only works if the agent happens
+to open the path itself. Do not use `{prompt_file}` in claude lanes; pipe on
+stdin instead. Try it without side effects first:
 
 ```
 node bin/tl-worker.js throughline --agent claude --dry-run
@@ -208,21 +235,25 @@ lanes:
 
 ## No nested quoting in `lanes:` commands
 
-Hard rule: **a lane command must never contain nested quoting or escape
-sequences.** The TRIAGE.yml parser is hand-rolled and keeps backslash
-escapes literal — it does not unescape them the way a full YAML parser
-would. The failure that taught us this was an attempt to pass inline TOML
-to codex:
+Hard rule, now **enforced by the argv-first guard** rather than merely
+documented: a string lane command must never contain nested quoting or
+escape sequences — the tick refuses to run it (`shell_required`, exit `1`)
+instead of letting a wrong parse fail silently green. The failure that
+taught us this was an attempt to pass inline TOML to codex:
 
 ```
 codex exec ... -c 'sandbox_workspace_write.writable_roots=["…"]'
 ```
 
-The escapes survive into the argument as literal characters, producing
-invalid TOML — which codex silently treats as a raw string. No error
-anywhere; the setting just doesn't apply. Anything structured — arrays,
-TOML, JSON, quoted paths — goes in the agent's own config/profile file, and
-the lane command only names the profile.
+The TRIAGE.yml parser is hand-rolled and keeps backslash escapes literal, so
+the escapes survived into the argument as literal characters, producing
+invalid TOML — which codex silently treated as a raw string. No error
+anywhere; the setting just didn't apply. Anything structured — arrays, TOML,
+JSON, quoted paths — goes in the agent's own config/profile file (the lane
+command only names the profile), or in the YAML **list form**, where each
+element reaches the CLI verbatim without any shell in the way. `shell: true`
+lanes are the one exception: there the string is genuinely shell input, and
+the no-nested-quoting rule stays a hard manual rule.
 
 ## Sandboxed lanes and external repos: per-workspace writable roots
 

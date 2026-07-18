@@ -350,6 +350,30 @@ test('cohort config says agent_tool "codex" and it just works: structured overri
   assert.match(stdin, /controlled experiment/);
 });
 
+test('requested model not emitted by the provider adapter is recorded as an unfulfilled request', () => {
+  const repo = mkRepo(); const ws = mkWorkspace(); const bin = mkStubBin(); const out = mkStubOut();
+  queueExperiment(ws, {
+    spec: 'specs/demo/',
+    repoDir: repo,
+    experimentId: 'exp-model-honesty',
+    candidates: [{
+      id: 'cdx-model', role: 'primary', agent_tool: 'codex', agent_model: 'gpt-requested',
+      repo, env: stubEnv(bin, out),
+    }],
+    now: NOW,
+  });
+
+  assert.equal(drainQueue(ws, { agent: 'codex', now: NOW }).ran[0].status, 'succeeded');
+  assert.equal(readArgv(out).includes('gpt-requested'), false, 'requested model was not passed to the CLI');
+
+  const row = readQueueRows(ws).find(r => r.candidate_id === 'cdx-model');
+  const metrics = readMetrics(ws, row);
+  assert.equal(metrics.agent_model_requested, 'gpt-requested');
+  assert.equal(metrics.agent_model, 'unknown');
+  assert.equal(metrics.agent_model_auto, true);
+  assert.equal(metrics.agent_model_source, 'unfulfilled-request');
+});
+
 // ---------- the cockpit local-request bridge ----------
 
 function writeRequest(ws, name, cfg) {
@@ -481,10 +505,17 @@ function startUiServer(root, port) {
   return { child, ready };
 }
 
+// same-session write token — POSTs need the token the server injects at GET /
+async function fetchUiToken(port) {
+  const html = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+  return (html.match(/window\.TL_WRITE_TOKEN="([0-9a-f]+)"/) || [])[1] || '';
+}
+
+let UI_TOKEN = '';
 async function postExperimentQueue(port, body) {
   const r = await fetch(`http://127.0.0.1:${port}/api/experiment-queue`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-tl-token': UI_TOKEN },
     body: JSON.stringify(body),
   });
   return { status: r.status, body: await r.json() };
@@ -498,6 +529,7 @@ test('cockpit /api/experiment-queue writes runner+repo(+command) for runtime:loc
   const { child, ready } = startUiServer(root, port);
   try {
     await ready;
+    UI_TOKEN = await fetchUiToken(port);
 
     const ok = await postExperimentQueue(port, {
       ws: wsName, runtime: 'local', runner: 'claude', repo,

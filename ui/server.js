@@ -4,7 +4,10 @@
 // GET serves the cockpit read-only. A small set of localhost POST actions
 // (capture, priority override, thread status, research, review accept/kick,
 // notes) mutate the markdown workspace. Trust model: the server binds to
-// 127.0.0.1 for a single local user — there is no auth. Every write resolves
+// 127.0.0.1 for a single local user — there is no auth, but every mutating
+// POST must carry a per-process write token injected into the served HTML
+// (see "write guard" below), so an arbitrary web page open in the same
+// browser cannot fire cross-origin POSTs at the cockpit. Every write resolves
 // through safePath (can't escape the workspace) and mutates records via
 // lib/frontmatter (scoped, sanitized — no whole-file string surgery).
 // Usage: node ui/server.js [--port 4400] [--root <repo root>]
@@ -12,6 +15,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const args = process.argv.slice(2);
 function arg(name, fallback) {
@@ -29,12 +33,19 @@ const {
   fmValue, setFrontmatterField, appendToFrontmatterList, setFrontmatterList,
 } = require('../lib/frontmatter');
 const { buildProjectInsights, taskTitleFromBody, firstParagraph } = require('../lib/project-insights');
+const { localRepoPath } = require('../lib/batch');
 const { automationStatus } = require('../lib/automation');
 const {
   writeVerifyRequest, applyVerifyHumanDecision, readVerifierLanes,
   verifierStatusOf, readVerifyRequests,
 } = require('../lib/worker');
 const { canAdvanceToReview } = require('../lib/verification-gate');
+const { recallSearch } = require('../lib/recall');
+
+// "did we already discuss this?" is the product — capped and grouped, not a
+// search engine. The cap truncates the ranked list; grouping stays identical
+// to `tl recall` (both call lib/recall.js recallSearch).
+const RECALL_CAP = 30;
 
 // ---------- workspace reading ----------
 
@@ -173,6 +184,10 @@ function readWorkspace(ws) {
       .map(r => ({ path: r.file, spec: r.request.spec, target_lane: r.request.target_lane }));
   } catch { verifyRequests = []; }
 
+  // The workspace's own repo (PROJECT.md `repo:`) feeds the git-derived
+  // lines-of-code stat. localRepoPath ~-expands local refs and returns null
+  // for URLs/unset — gitLineStats degrades to unavailable, never throws.
+  const projectMeta = parseFrontmatter(safeRead(path.join(dir, 'PROJECT.md')) || '').meta;
   return {
     name: ws.name, example: ws.example,
     config, intents, specs, threads, metrics, automation,
@@ -183,9 +198,10 @@ function readWorkspace(ws) {
       specs,
       metrics,
       experiments: readExperiments(ws),
+      repoDir: localRepoPath(projectMeta.repo),
     }),
     priorities: readFirst(path.join(dir, 'PRIORITIES.md'), path.join(dir, 'priorities.md')),
-    project: parseFrontmatter(safeRead(path.join(dir, 'PROJECT.md')) || '').meta,
+    project: projectMeta,
   };
 }
 
@@ -624,6 +640,47 @@ primeSnapshots();
 const INDEX = path.join(__dirname, 'index.html');
 const LOGO = path.join(ROOT, 'assets', 'logo.png');
 
+// ---------- write guard (same-session token) ----------
+// Binding to 127.0.0.1 keeps remote hosts out, but any web page open in the
+// local browser can still fire cross-origin POSTs at localhost. So every
+// mutating POST must carry a per-process random token: it is minted fresh at
+// startup, injected into the HTML served at GET / (window.TL_WRITE_TOKEN),
+// never persisted to disk, and required in the x-tl-token header by every
+// POST /api/* route uniformly — a foreign page can neither read the token
+// (same-origin policy; CORS stays closed) nor forge the header cross-site
+// without a preflight the server never approves. Origin/Referer are checked
+// as defense-in-depth: browsers stamp Origin on cross-site POSTs, so a
+// non-local Origin is refused even with a valid token. This blocks ambient
+// browser POSTs from other pages; it does NOT make the server internet-safe.
+
+const WRITE_TOKEN = crypto.randomBytes(24).toString('hex');
+const TOKEN_HEADER = 'x-tl-token';
+const TOKEN_SNIPPET = `<script>window.TL_WRITE_TOKEN=${JSON.stringify(WRITE_TOKEN)};</script>`;
+const TOKEN_HINT = 'cockpit writes require the per-process write token served with the UI — '
+  + `reload the cockpit tab; clients read it from GET / (window.TL_WRITE_TOKEN) and send it in the ${TOKEN_HEADER} header`;
+
+// true when an Origin/Referer value points at this server (localhost-only)
+function sameServer(v) {
+  try {
+    const h = new URL(v);
+    if (h.hostname !== 'localhost' && h.hostname !== '127.0.0.1' && h.hostname !== '[::1]') return false;
+    return (h.port || (h.protocol === 'https:' ? '443' : '80')) === String(PORT);
+  } catch { return false; }
+}
+
+// null when the request may write; otherwise the reason for the 403.
+// Missing Origin AND Referer is allowed (curl, local scripts) — the token is
+// the guard of record; the Origin check only rejects browser-stamped foreign origins.
+function writeGuardReject(req) {
+  const origin = req.headers.origin;
+  if (origin != null && !sameServer(origin)) return 'cross-origin POST refused';
+  if (origin == null && req.headers.referer != null && !sameServer(req.headers.referer)) return 'cross-origin POST refused';
+  const got = Buffer.from(String(req.headers[TOKEN_HEADER] || ''));
+  const want = Buffer.from(WRITE_TOKEN);
+  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) return 'missing or bad write token';
+  return null;
+}
+
 function json(res, code, data) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
@@ -673,12 +730,20 @@ const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://localhost');
   try {
     if (req.method === 'POST' && u.pathname.startsWith('/api/')) {
+      // one gate for the whole write surface — every POST route, current and
+      // future, sits behind the same-session token (never per-endpoint checks)
+      const reject = writeGuardReject(req);
+      if (reject) return json(res, 403, { error: reject, hint: TOKEN_HINT });
       readBody(req).then(body => handlePost(u.pathname, body, res)).catch(() => json(res, 400, { error: 'bad body' }));
       return;
     }
     if (u.pathname === '/') {
       res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
-      res.end(safeRead(INDEX) || 'index.html missing');
+      const html = safeRead(INDEX);
+      // hand the write token to the (same-origin) page — head injection, no template step
+      res.end(html === null ? 'index.html missing'
+        : html.includes('</head>') ? html.replace('</head>', TOKEN_SNIPPET + '\n</head>')
+          : TOKEN_SNIPPET + '\n' + html);
     } else if (u.pathname === '/logo.png') {
       const buf = (() => { try { return fs.readFileSync(LOGO); } catch { return null; } })();
       if (buf) { res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(buf); }
@@ -735,6 +800,15 @@ const server = http.createServer((req, res) => {
       const detail = readExperimentDetail(ws, id);
       if (!detail) return json(res, 404, { error: 'experiment not found' });
       json(res, 200, detail);
+    } else if (u.pathname === '/api/recall') {
+      // read-only recall — same shared helpers as `tl recall` (lib/recall.js):
+      // plain text search over the workspace markdown, no index, no embeddings,
+      // no mutation. Results come back ranked, capped, and grouped by kind.
+      const ws = listWorkspaces().find(w => w.name === u.searchParams.get('ws'));
+      if (!ws) return json(res, 404, { error: 'unknown workspace' });
+      const q = String(u.searchParams.get('q') || '').trim();
+      if (!q) return json(res, 400, { error: 'missing query — /api/recall?ws=<name>&q=<query>' });
+      json(res, 200, recallSearch(ws.dir, q, { cap: RECALL_CAP }));
     } else if (u.pathname.startsWith('/api/ws/')) {
       const name = decodeURIComponent(u.pathname.slice('/api/ws/'.length));
       const ws = listWorkspaces().find(w => w.name === name);

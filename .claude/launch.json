@@ -25,6 +25,7 @@
       "name": "bench",
       "runtimeExecutable": "node",
       "runtimeArgs": [
+        "--env-file-if-exists=/Users/trevorgurgick/Documents/GitHub/bench/.env",
         "/Users/trevorgurgick/Documents/GitHub/bench/bin/bench.js",
         "serve",
         "--port",
