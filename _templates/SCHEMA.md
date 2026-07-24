@@ -703,6 +703,45 @@ The local policy store behind experiment primary/shadow selection (`lib/experime
 
 Append-only human feedback on a spec, left from the cockpit while work is in flight. Each note is a small dated section (`## YYYY-MM-DD — note`, or `— kicked back` for a review rejection). The file lives in the spec's own folder, so it travels with the spec through every stage. `/tl run` reads it as binding context (treat it like the acceptance criteria); `/tl review` surfaces it. There is no queue for *new* work — the `ready/` stage **is** the queue, the stage folders **are** the status, and the cockpit's write actions are review (accept / kick back) and notes. The one dispatch artifact that exists is the **continuation** trigger a kickback leaves behind (next section): it resumes already-claimed work, it never starts fresh work.
 
+## Activity trace (`<stage>/<slug>/TRACE.jsonl`, optional)
+
+The spec-scoped, human-readable activity trace: an append-only JSONL file **in the spec's own folder**, so it travels with the folder through every stage move — claim, kickback, verification, review. One JSON object per line; each event is a small observable action, never a transcript. This is the **canonical-spec** trace; the experiment candidate trace (`candidates/<candidate_id>/TRACE.jsonl`, above) is a **separate contract** with runner-fingerprint fields — cross-reference them, never merge them. Files only: no database, no server-side execution; the cockpit reads it through the existing file-watch path.
+
+Common fields (every row):
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `ts` | datetime | ISO timestamp |
+| `type` | string | event type (below) |
+| `summary` | string | short observable action or deliberate rationale summary (secret-redacted before write) |
+| `paths` | list | optional — workspace/repo-relative paths the event touched |
+| `actor_type` | enum | `human` `agent` `policy` `system` — who performed the action |
+| `actor_id` | string | e.g. `claude`, `trevor`, `tl-worker`; lane names for agents |
+| `initiation` | enum | `human` `automation` `policy` `continuation` — what set the action in motion |
+| `source` | enum | `cli` `cockpit` `worker` `scheduler` — the surface it came through |
+| `run_id` / `dispatch_id` | string | correlation when one exists — a worker tick's `run_id` matches its `_metrics/worker-prompts/` stamp; a continuation's `dispatch_id` is the `_dispatch/<slug>.json` (or verify-request) file |
+
+**The absence rule.** Historical omissions (and rows from writers that predate a field) mean `unknown` — absence must **never** be interpreted as `human`. Writers normalize missing provenance to the literal string `unknown` (`lib/worker.js` `appendSpecTraceEvent`); readers apply the same rule to rows that lack the fields entirely. Event-specific payload keys ride alongside the common fields; parsers preserve unknown fields.
+
+Event types (extensible — these are the documented core):
+
+| Type | Meaning / extra fields |
+|------|------------------------|
+| `claimed` | a claim was signed or committed — interactive `tl run` briefs append it with `initiation: human` / `source: cli`; a headless worker tick appends it at lock+prompt commit with `initiation: automation` / `source: worker` and its `run_id`, so a human-invoked run is distinguishable from a scheduled pickup even when the same agent does the work |
+| `dispatched` | work sent to a lane **without** signing a claim — continuation resumes (carries `dispatch_id`) |
+| `dispatch-failed` | an unsuccessful dispatch, first-class: `lane`, `reason` (`tl_run_failed` `spawn_failed` `agent_session_failed` …), the initiator/source/correlation of the attempt, and a sanitized failure detail (unavailable auth, invalid invocation, sandbox/workspace visibility). Always appended after any `claimed`/`dispatched` row for the attempt — a failed dispatch never leaves a spec looking successfully claimed |
+| `context-read` | the agent assembled its brief (spec, NOTES, intent, goal) |
+| `file-edited` | files changed — `paths`, a one-line summary, never diffs or reasoning |
+| `command-run` / `test-result` | checks executed and what they said |
+| `decision-summary` | a **deliberate external note** — "chose X because acceptance criterion Y requires it" — never a reasoning transcript |
+| `thread-captured` | a thread was captured; `paths` names it |
+| `blocked` | the spec blocked — same one-line reason as `blocked_reason` |
+| `handoff` | a stage move — `from_stage`, `to_stage`, and the same correlation identifier, producing a readable claim-to-review chain (in-progress → tests, tests → in-review, a review kickback, a reclaim) |
+
+**The privacy boundary (the core constraint).** Required = observable actions (files, commands, tests, stage moves, provenance). Optional = deliberate plan/rationale summaries the agent chooses to record. **Never** = private chain-of-thought or model-internal reasoning — it must not be requested, stored, or displayed. Writer-side redaction (`lib/experiment-trace.js` `redact`, reused by `appendSpecTraceEvent`) scrubs credential patterns before anything lands on disk, but agents should not write secrets in the first place.
+
+**Writers.** `lib/worker.js` `tick`/`verifyTick` (scheduler/worker provenance with run correlation), `bin/tl.js` (interactive `tl run` claim, `tl reclaim` handoff, `tl verify` human-decision handoff), and the running agent itself per `skills/run/SKILL.md`. One writer per dispatch path: a tick-driven `tl run` brief subprocess skips its interactive appends (the tick owns them). Flat `.md` specs have no folder, so they have no trace — folder-form specs only. **Readers degrade gracefully:** no trace file means fall back to the spec body/notes view; the trace is observability and its absence (or a failed append) never blocks lifecycle work.
+
 ## Continuation dispatches (`_dispatch/<slug>.json`)
 
 The continuation half of dispatch. When work moves *backwards* (`in-review/ → in-progress/` on a kickback) or is left mid-flight with binding `NOTES.md`, the kickback writes a small JSON trigger so the next `/tl run` — including a scheduled headless session — resumes that spec without a human re-assembling context. Files only; no server-side execution.

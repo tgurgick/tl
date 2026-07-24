@@ -58,7 +58,7 @@ const SKILLS = path.join(INSTALL_ROOT, 'skills');
 // separate copies of the parser, the batch rules, or the path guard.
 const { parseFrontmatter, parseYaml } = require('../lib/parse');
 const { safeRead, readFirst, isDir, mtime } = require('../lib/workspace');
-const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch, calmCap, selectContinuations, repoHoldReason } = require('../lib/batch');
+const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch, calmCap, selectContinuations, repoHoldReason, sameLocalRepo } = require('../lib/batch');
 const { stallThresholdMs, detectStalledClaims, reclaimStalled } = require('../lib/stall');
 const { runFixtureExperiment } = require('../lib/experiment-fixture');
 const { selectWinner, applyWinner, rejectWinner, sendWinnerToReview } = require('../lib/experiment-apply');
@@ -75,7 +75,7 @@ const {
 const {
   verifyTick, applyVerifyHumanDecision, verifierStatusOf, readVerifierLanes,
   verifierLaneIssues, builderOf, writeVerifyRequest, readVerifyRequests,
-  maybeAutoInitiateExperiment, workspaceRepoDir,
+  maybeAutoInitiateExperiment, workspaceRepoDir, appendSpecTraceEvent,
 } = require('../lib/worker');
 const { execFileSync, spawn, spawnSync } = require('child_process');
 
@@ -187,12 +187,9 @@ function dirtyGitPaths() {
 function workspaceIsThisRepo(specs) {
   const repoRef = specs.map(s => s.meta && s.meta.repo).find(Boolean);
   if (!repoRef) return false;
-  let r = String(repoRef).trim().replace(/\/+$/, '');
-  if (r.startsWith('~')) r = path.join(process.env.HOME || '', r.slice(1));
-  try {
-    return path.resolve(r) === path.resolve(INSTALL_ROOT)
-      || path.basename(path.resolve(r)) === path.basename(INSTALL_ROOT);
-  } catch { return false; }
+  // Exact resolved path only (lib/batch sameLocalRepo) — a sibling checkout
+  // that merely shares a leaf name must not enable the dirty-git conflict set.
+  return sameLocalRepo(repoRef, INSTALL_ROOT, process.env.HOME || '');
 }
 
 // The workspace's own repo identity — PROJECT.md `repo:` — the exemption input
@@ -710,12 +707,35 @@ function cmdRun(args) {
     // a named run is an explicit human choice — surface the pending resume, honor the name.
     out('Note: ' + live.length + ' pending continuation dispatch(es) — kicked-back work is waiting (resume it first unless this named run is intentional).\n');
   }
+  // Interactive dispatch provenance (SCHEMA.md "Activity trace"): a human
+  // typed `tl run`, so events carry initiation: human / source: cli — the
+  // trace distinguishes this from a scheduled pickup even when the same agent
+  // does the work. Skipped when the brief is tick-driven (TL_WORKER_DISPATCH:
+  // the worker owns dispatch provenance on that path — one writer per path)
+  // and on --dry-run (a dry run writes nothing).
+  const traceInteractive = !dryRun && !process.env.TL_WORKER_DISPATCH;
+  const cliRunId = 'cli-' + new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+
   if (live.length && !named) {
     // Several kickbacks can be pending at once — they fan out like a fresh
     // batch: ordered (priority, then oldest kickback), capped at the calm cap,
     // and conflict-checked against each other so two resumed specs never share
     // a file. Held continuations stay pending for the next run, with a reason.
     const resumed = selectContinuations(live, { cap, preflight });
+    if (traceInteractive) {
+      // A continuation resume signs no claim → `dispatched`, correlated by the
+      // dispatch file the kickback left behind.
+      for (const c of resumed.batch) {
+        appendSpecTraceEvent(path.join(ws.dir, c.spec.path), {
+          type: 'dispatched',
+          summary: `resume dispatched via interactive tl run brief (continuation${c.dispatch.reason ? ': ' + String(c.dispatch.reason).slice(0, 120) : ''})`,
+          paths: [c.spec.path],
+          actor_type: 'agent', actor_id: agent || 'unknown',
+          initiation: 'human', source: 'cli',
+          run_id: cliRunId, dispatch_id: c.file,
+        });
+      }
+    }
     out('## Continuation dispatches — resume these before fresh claims (' + resumed.batch.length + ')');
     for (const c of resumed.batch) {
       out(`\n### ${c.spec.title}  (${c.spec.path}) [${c.file}]`);
@@ -792,6 +812,21 @@ function cmdRun(args) {
     out('\n## Claim the whole batch first (folder moves before any work)');
     for (const s of batch) {
       out(`- ${s.path} → in-progress/${specSlug(s.path)}/  (set status: in-progress, stamp claimed_by + claimed_at)`);
+    }
+    if (traceInteractive) {
+      // The brief commits the batch, so the claim event lands now — in the
+      // specs/ folder, where it travels with the folder move the agent makes.
+      // The trace tells the truth if no claim follows: `claimed` here means
+      // "claim directed interactively", and skills/run says don't duplicate it.
+      for (const s of batch) {
+        appendSpecTraceEvent(path.join(ws.dir, s.path), {
+          type: 'claimed',
+          summary: `claim directed via interactive tl run brief${agent ? ' (agent lane: ' + agent + ')' : ''} — human-invoked run`,
+          paths: [s.path],
+          actor_type: 'agent', actor_id: agent || 'unknown',
+          initiation: 'human', source: 'cli', run_id: cliRunId,
+        });
+      }
     }
   }
 
@@ -896,6 +931,15 @@ function cmdReclaim(args) {
     }[res.reason] || res.reason;
     fail('reclaim refused: ' + why);
   }
+  // Handoff provenance: an explicit human-attributed reclaim moved the spec —
+  // record who, why, and the stage edge in the trace that travels with it.
+  appendSpecTraceEvent(path.join(ws.dir, res.to), {
+    type: 'handoff',
+    from_stage: res.from.split('/')[0], to_stage: res.to.split('/')[0],
+    summary: `reclaimed by ${by} (${res.mode}): ${String(reason || '').slice(0, 200)} — prior claim ${res.priorClaimedBy || 'unstamped'}`,
+    actor_type: 'human', actor_id: String(by),
+    initiation: 'human', source: 'cli',
+  });
   out(`reclaimed ${res.slug}: ${res.from} → ${res.to} (${res.mode})`);
   out(res.mode === 'advance'
     ? `builder attribution preserved (claimed_by: ${res.priorClaimedBy || 'unknown'}) — awaiting independent verification: tl verify ${ws.name}`
@@ -982,7 +1026,7 @@ function cmdVerify(args) {
   if (decide) {
     if (!named) fail('Human decision requires a spec slug: tl verify <ws> <spec> --authorize-fix-forward|--kick-back');
     try {
-      const got = applyVerifyHumanDecision(ws.dir, { slug: named, action: decide, note });
+      const got = applyVerifyHumanDecision(ws.dir, { slug: named, action: decide, note, by: 'human-cli', source: 'cli' });
       out(`Human decision recorded: ${decide} → ${got.path}`);
       out('No mutation was auto-applied. A continuation dispatch is pending for the next run.');
     } catch (e) { fail(e && e.message ? e.message : String(e)); }
@@ -1009,6 +1053,8 @@ function cmdVerify(args) {
     const result = verifyTick({
       root: INSTALL_ROOT, wsDir: ws.dir, wsName: ws.name,
       preferLane: agent || null, which,
+      // trace provenance: a human typed `tl verify --execute`
+      initiation: 'human', source: 'cli',
     });
     out(`verify tick: code ${result.code}` + (result.picked ? ` · ${result.picked}` : '')
       + (result.outcome ? ` · ${result.outcome}` : '')

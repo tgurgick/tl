@@ -644,6 +644,18 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .dr-notes { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line); }
 .dr-notes-h { font-family: var(--mono); font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; color: #b57fc7; margin-bottom: 10px; }
 .dr-notes-h .dim { color: var(--faint); text-transform: none; letter-spacing: 0; }
+.dr-trace { margin-bottom: 22px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 4px; }
+.dr-trace-h { font-family: var(--mono); font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin-bottom: 10px; }
+.dr-trace-row { display: grid; grid-template-columns: 52px 1fr; gap: 8px 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: .78rem; }
+.dr-trace-row:first-of-type { border-top: 0; padding-top: 0; }
+.dr-trace-ts { font-family: var(--mono); font-size: .58rem; color: var(--faint); padding-top: 3px; }
+.dr-trace-type { display: inline-block; font-family: var(--mono); font-size: .54rem; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--line2); color: var(--dim); margin-right: 6px; vertical-align: 1px; }
+.dr-trace-type.claimed, .dr-trace-type.dispatched { border-color: #6b8fc7; color: #6b8fc7; }
+.dr-trace-type.handoff { border-color: #7a9e7e; color: #7a9e7e; }
+.dr-trace-type.blocked, .dr-trace-type.dispatch-failed { border-color: #c47a6a; color: #c47a6a; }
+.dr-trace-sum { color: var(--ink); }
+.dr-trace-prov { font-family: var(--mono); font-size: .56rem; color: var(--faint); margin-top: 3px; }
+.dr-trace-cap { font-family: var(--mono); font-size: .54rem; color: var(--faint); margin-top: 8px; }
 .dr-note-input { width: 100%; box-sizing: border-box; font-family: var(--sans); font-size: .82rem; color: var(--ink); background: var(--card); border: 1px solid var(--line2); border-radius: 4px; padding: 8px 10px; }
 .dr-note-input:focus { border-color: #b57fc7; outline: none; }
 /* inline (PR-style) notes on body sections */
@@ -1002,6 +1014,9 @@ function md(src) {
 }
 
 /* ── drawer ── */
+// While open, remember which spec so SSE-driven loadSelected can re-render
+// the Trace timeline (and the rest of the drawer) from the fresh payload.
+let openDrawerKey = null; // `${ws}|${path}`
 // parse a spec's NOTES.md into {date, anchor, text} — anchor ties a note to a section (inline review)
 function parseNotes(raw) {
   if (!raw) return [];
@@ -1017,7 +1032,44 @@ function parseNotes(raw) {
   }
   return out;
 }
+// Spec-scoped TRACE.jsonl timeline — absent/unknown provenance stays "unknown"
+// (never defaults to human). No trace key → empty string so body/notes render alone.
+function renderSpecTrace(item) {
+  if (item.stage !== 'in-progress' && item.stage !== 'tests') return '';
+  const tr = item.trace;
+  if (!tr || !Array.isArray(tr.events) || !tr.events.length) return '';
+  const unk = (v) => {
+    const s = (v == null || v === '') ? 'unknown' : String(v);
+    return s === 'unknown' ? 'unknown' : s;
+  };
+  const shortTs = (ts) => {
+    try {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return esc(String(ts || ''));
+      return esc(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    } catch { return esc(String(ts || '')); }
+  };
+  const rows = tr.events.map(ev => {
+    const type = String(ev.type || 'status');
+    const typeCls = /^(claimed|dispatched|dispatch-failed|handoff|blocked)$/.test(type) ? type : '';
+    const handoff = (type === 'handoff' && (ev.from_stage || ev.to_stage))
+      ? ` <span class="dim">${esc(String(ev.from_stage || '?'))} → ${esc(String(ev.to_stage || '?'))}</span>`
+      : '';
+    const prov = `${unk(ev.actor_id)} · ${unk(ev.initiation)} · ${unk(ev.source)}`;
+    return `<div class="dr-trace-row">
+      <div class="dr-trace-ts">${shortTs(ev.ts)}</div>
+      <div>
+        <span class="dr-trace-type ${typeCls}">${esc(type)}</span>
+        <span class="dr-trace-sum">${esc(String(ev.summary || ''))}</span>${handoff}
+        <div class="dr-trace-prov">${esc(prov)}</div>
+      </div>
+    </div>`;
+  }).join('');
+  const cap = tr.truncated ? `<div class="dr-trace-cap">showing most recent ${tr.events.length} events</div>` : '';
+  return `<div class="dr-trace"><div class="dr-trace-h">Trace</div>${rows}${cap}</div>`;
+}
 function openDrawer(item) {
+  openDrawerKey = (item && item.path) ? `${item._ws || ''}|${item.path}` : null;
   const meta = item.meta || {};
   let pills = '';
   const p = (meta.priority || '').toLowerCase();
@@ -1106,6 +1158,7 @@ function openDrawer(item) {
     ${expHtml}
     ${decideHtml}
     ${outcomeHtml}
+    ${renderSpecTrace(item)}
     <div class="md dr-body">${md(body)}</div>
     ${notesHtml}`;
   if (item.stage === 'in-review') {
@@ -1207,13 +1260,23 @@ function decorateBlocks(bodyEl, item, anchored) {
     el.after(thread);
   });
 }
-$('scrim').onclick = () => document.body.classList.remove('open');
+$('scrim').onclick = () => { openDrawerKey = null; document.body.classList.remove('open'); };
 function wireModalClose() {
   const btn = $('drawer').querySelector('.dr-close');
-  if (btn) btn.onclick = () => document.body.classList.remove('open');
+  if (btn) btn.onclick = () => { openDrawerKey = null; document.body.classList.remove('open'); };
 }
-addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('open')) document.body.classList.remove('open'); });
-addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('open'); });
+addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.body.classList.contains('open')) {
+    openDrawerKey = null;
+    document.body.classList.remove('open');
+  }
+});
+addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    openDrawerKey = null;
+    document.body.classList.remove('open');
+  }
+});
 
 /* ── throughline repair (Map breaks → corrective action) ── */
 // an orphan spec: attach it to an existing intent, or create a new goal-carrying
@@ -3629,6 +3692,16 @@ async function loadSelected() {
   renderLanes(wss);
   setAgentLive(wss.some(w => (w.specs || []).some(s => s.stage === 'in-progress' || s.stage === 'tests')));
   syncButton();
+  // Live Trace (and drawer) refresh: when SSE reloads the workspace payload
+  // while a spec drawer is open, re-bind from the fresh item (incl. TRACE.jsonl).
+  if (openDrawerKey && document.body.classList.contains('open')) {
+    const bar = openDrawerKey.indexOf('|');
+    const wsName = openDrawerKey.slice(0, bar);
+    const specPath = openDrawerKey.slice(bar + 1);
+    const ws = wss.find(w => w.name === wsName);
+    const s = ws && (ws.specs || []).find(x => x.path === specPath);
+    if (s) openDrawer({ ...s, _ws: ws.name, _verifyRequests: ws.verifyRequests || [] });
+  }
 }
 function buildPanel() {
   $('wsPanel').innerHTML = '';

@@ -37,10 +37,11 @@ const { localRepoPath } = require('../lib/batch');
 const { automationStatus } = require('../lib/automation');
 const {
   writeVerifyRequest, applyVerifyHumanDecision, readVerifierLanes,
-  verifierStatusOf, readVerifyRequests,
+  verifierStatusOf, readVerifyRequests, loadSpecTracePayload,
 } = require('../lib/worker');
 const { canAdvanceToReview } = require('../lib/verification-gate');
 const { recallSearch } = require('../lib/recall');
+const { buildBenchmarkRecord, appendBenchmarkRecord, intentGoalIds } = require('../lib/benchmark-log');
 
 // "did we already discuss this?" is the product — capped and grouped, not a
 // search engine. The cap truncates the ranked list; grouping stays identical
@@ -102,6 +103,11 @@ function readStage(dir, stage, folder) {
       if (notes) item.notes = notes;
       if (stage === 'tests' || stage === 'in-progress' || stage === 'in-review') {
         item.verifier = verifierStatusOf(item, { wsDir: dir });
+        // Spec-scoped activity trace (TRACE.jsonl) — omit key when absent so
+        // the drawer falls back to body/notes. Rides the existing workspace
+        // payload + file-watch/SSE; no new endpoint or server-side execution.
+        const trace = loadSpecTracePayload(p);
+        if (trace) item.trace = trace;
       }
     }
     out.push(item);
@@ -1058,6 +1064,17 @@ function hReview(ws, body, res) {
     appendReviewLog(ws, {
       date: new Date().toISOString(), spec: rel + '/', action: 'accepted', via: 'cockpit', gate,
     });
+    // benchmark-log side effect — never blocks accept (failure-silent)
+    try {
+      const specText = safeRead(path.join(dest, 'SPEC.md'));
+      const feedbackText = safeRead(path.join(dest, 'outcome', 'FEEDBACK.md'));
+      const meta = parseFrontmatter(specText || '').meta || {};
+      const intentText = meta.intent ? safeRead(path.join(ws.dir, String(meta.intent))) : null;
+      appendBenchmarkRecord(ws.dir, buildBenchmarkRecord({
+        specText, specSlug: slug, project: ws.name, feedbackText,
+        goalIds: intentGoalIds(intentText),
+      }));
+    } catch { /* never block accept on metrics */ }
     return json(res, 200, { ok: true, path: 'done/' + slug + '/', gate });
   }
   if (action === 'reject') {

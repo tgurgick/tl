@@ -970,3 +970,41 @@ test('tl verify status surfaces queued and human-decision-required', () => {
     assert.match(r.stdout, /kick-back/);
   });
 });
+
+// bin-tl-same-local-repo: workspaceIsThisRepo uses sameLocalRepo (exact
+// resolved path) — a sibling checkout sharing only the leaf name must not
+// enable the dirty-git conflict set for the CLI run brief.
+test('run brief: same-basename sibling repo never enables dirty-git holds', () => {
+  const { execFileSync } = require('child_process');
+  let dirtyFile = null;
+  try {
+    const out = execFileSync('git', ['status', '--porcelain'], { cwd: REPO_ROOT, encoding: 'utf8' });
+    const line = out.split('\n').find(l => /^.[MA?]|^[MA?]/.test(l) && l.trim().length > 3);
+    if (line) dirtyFile = line.slice(3).trim();
+  } catch { /* no git — the sibling case below still proves the negative */ }
+  // a real directory that shares the checkout's basename but not its parent
+  const scratchSibling = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-sibling-'));
+  const sibling = path.join(scratchSibling, path.basename(REPO_ROOT));
+  fs.mkdirSync(path.join(sibling, '.git'), { recursive: true }); // looks like a checkout to the claim preflight
+  try {
+    const files = dirtyFile ? [dirtyFile] : ['some/file.js'];
+    withWorkspace([{ slug: 'sib-spec', files, repo: sibling }], (name) => {
+      const r = run('run', name);
+      // sibling repo → NOT this checkout → dirtyGitPaths never consulted
+      // anchor to the spec's own hold line — the skill prose echoed in the
+      // brief legitimately contains the phrase "conflicts with dirty git"
+      assert.ok(!/sib-spec[^\n]*dirty git/.test(r.stdout),
+        'same-basename sibling repo must not produce dirty-git holds:\n' + r.stdout);
+    });
+    if (dirtyFile) {
+      // control: exact checkout path → IS this repo → the same spec IS held
+      withWorkspace([{ slug: 'exact-spec', files: [dirtyFile], repo: REPO_ROOT }], (name) => {
+        const r = run('run', name);
+        assert.match(r.stdout, /exact-spec[^\n]*dirty git/,
+          'exact-path repo with a genuinely dirty declared file should hold');
+      });
+    }
+  } finally {
+    fs.rmSync(scratchSibling, { recursive: true, force: true });
+  }
+});
