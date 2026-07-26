@@ -503,6 +503,9 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .lcard .ws-tag { font-family: var(--mono); font-size: .55rem; color: var(--faint); display: block; margin-bottom: 3px; }
 .lcard .meta { display: flex; justify-content: space-between; margin-top: 7px; font-family: var(--mono); font-size: .58rem; }
 .lcard .lc-status { color: var(--accent); display: inline-flex; align-items: center; gap: 4px; }
+.lcard .lc-status.lc-stalled { color: #c0622a; letter-spacing: .02em; }
+.lcard.stalled { border-color: rgba(192,98,42,.45); }
+.lcard.stalled .pbar { display: none; }
 .lcard .elapsed { color: var(--dim); display: inline-flex; align-items: center; gap: 4px; }
 .lcard .agent-mark { display: inline-flex; align-items: center; color: var(--dim); opacity: .72; }
 .lcard.working .agent-mark { color: var(--accent); opacity: .9; }
@@ -707,6 +710,8 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .exp-item .eid { font-family: var(--mono); font-size: .64rem; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .exp-item .erow { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-family: var(--mono); font-size: .56rem; color: var(--dim); }
 .exp-item .ecount { margin-left: auto; }
+/* multi-project attribution — which workspace an experiment row belongs to */
+.exp-item .ews { color: var(--faint); letter-spacing: .04em; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .exp-st { font-family: var(--mono); font-size: .56rem; letter-spacing: .03em; padding: 1px 6px; border-radius: 2px; text-transform: uppercase; white-space: nowrap; }
 .exp-st.st-succeeded, .exp-st.st-selected, .exp-st.st-applied { color: var(--ok); background: rgba(111,174,132,.14); }
@@ -1102,6 +1107,16 @@ function openDrawer(item) {
   // the shaping hold pen, in the pop-out: release → ready when shaped
   const releaseHtml = item.stage === 'triage' ? `
     <div class="dr-review"><button class="dr-release">shaped — release → ready</button></div>` : '';
+  // stalled in-progress claim — explicit per-spec reclaim (confirm + reason); never bulk
+  const stall = item.stall && item.stall.stalled ? item.stall : null;
+  const stallOwner = stall
+    ? (stall.owner || (meta.claimed_by ? String(meta.claimed_by) : '') || 'unstamped')
+    : '';
+  const reclaimHtml = (item.stage === 'in-progress' && stall) ? `
+    <div class="dr-review" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div class="dim" style="font-size:.72rem">STALLED ~${esc(String(stall.idle_hours))}h · owner ${esc(stallOwner)} · idle ~${esc(String(stall.idle_hours))}h (threshold ${esc(String(stall.threshold_hours || 24))}h). Reclaim this one claim only — confirmation + a recorded reason required.</div>
+      <button class="dr-reject dr-reclaim">reclaim stalled claim…</button>
+    </div>` : '';
   // queue an experiment for this spec — opens the queue form pre-filled with the spec path.
   // only for real specs (folders), and not decay-inbox decision pop-outs.
   const expHtml = (isSpec && !item._decide) ? `
@@ -1153,6 +1168,7 @@ function openDrawer(item) {
     <div class="meta">${pills}</div>
     ${reviewHtml}
     ${releaseHtml}
+    ${reclaimHtml}
     ${dispatchHtml}
     ${mutationHtml}
     ${expHtml}
@@ -1171,6 +1187,26 @@ function openDrawer(item) {
     $('drawer').querySelector('.dr-release').onclick = async () => {
       try { await postJSON('/api/release', { ws: item._ws, spec: item.path }); document.body.classList.remove('open'); loadSelected(); }
       catch (err) { alert(err.message); }
+    };
+  }
+  if (item.stage === 'in-progress' && stall) {
+    // one stalled claim at a time — confirm, require a non-empty reason, then refresh
+    const btn = $('drawer').querySelector('.dr-reclaim');
+    if (btn) btn.onclick = async () => {
+      const ok = confirm(`Reclaim stalled claim "${item.title || item.path}"?\n\nOwner: ${stallOwner}\nIdle ~${stall.idle_hours}h\n\nThis releases or advances THIS spec only — never a bulk sweep.`);
+      if (!ok) return;
+      const reason = prompt('Why reclaim this claim? (required — recorded in NOTES.md)');
+      if (reason === null) return;
+      if (!String(reason).trim()) { alert('A non-empty reason is required.'); return; }
+      btn.disabled = true;
+      try {
+        await postJSON('/api/reclaim', { ws: item._ws, spec: item.path, reason: String(reason).trim(), by: 'cockpit' });
+        document.body.classList.remove('open');
+        loadSelected();
+      } catch (err) {
+        btn.disabled = false;
+        alert(err.message);
+      }
     };
   }
   if (decideBtns) {
@@ -3066,16 +3102,25 @@ function renderLanes(wss) {
       const slug = (s.path || '').replace(/\/$/, '').split('/').pop().replace(/\.md$/, '');
       const owner = ownerBadge(s);           // who claimed it (live), if stamped
       const showOwner = !!owner && (stage === 'in-progress' || stage === 'tests' || stage === 'in-review');
+      const stall = (stage === 'in-progress' && s.stall && s.stall.stalled) ? s.stall : null;
       const card = document.createElement('div');
-      card.className = 'lcard' + (stage === 'in-progress' ? ' working' : '') + (stage === 'done' ? ' done' : '') + (showOwner ? ' has-owner' : '');
+      card.className = 'lcard' + (stage === 'in-progress' ? ' working' : '') + (stall ? ' stalled' : '') + (stage === 'done' ? ' done' : '') + (showOwner ? ' has-owner' : '');
       const pr = (s.meta.priority || '').toLowerCase();
       const priBadge = pr ? `<span class="lc-pri ${pr}">${esc(pr.toUpperCase())}</span>` : '';
       let inner = (multi ? `<span class="ws-tag">${esc(s._ws)}</span>` : '') + `<p class="t">${priBadge}${esc(stage === 'triage' || stage === 'ready' ? s.title : slug)}</p>`;
       const amark = agentMark(s, 'currentColor');
       // the owner's brand logo sits absolute in the top-right corner, so it adds
       // no height and never collides with the gate label or the timestamp
-      if (stage === 'in-progress') inner += `<div class="pbar"><i></i></div>
+      if (stage === 'in-progress') {
+        if (stall) {
+          const ownerName = stall.owner || (s.meta && s.meta.claimed_by) || 'unstamped';
+          const h = stall.idle_hours;
+          inner += `<div class="meta"><span class="lc-status lc-stalled" title="idle past stall threshold — explicit reclaim in the drawer">STALLED ~${esc(String(h))}h</span><span class="elapsed">${esc(String(ownerName))} · idle ~${esc(String(h))}h</span></div>`;
+        } else {
+          inner += `<div class="pbar"><i></i></div>
         <div class="meta"><span class="lc-status">⚡ active</span><span class="elapsed">${showOwner ? '' : amark}${rel(s.mtime)}</span></div>`;
+        }
+      }
       if (stage === 'tests') {
         const vBadge = verifierStateBadge(s) || (s.meta.awaiting_verifier === true
           ? `<span class="gate gate-await" title="stopped at the tests gate — needs a non-builder agent">⊘ awaiting verifier</span>` : '');
@@ -3121,45 +3166,58 @@ const fmtCost = v => v == null ? '—' : '$' + Number(v).toFixed(2);
 const fmtDur = v => v == null ? '—' : Number(v) + 'm';
 const fmtTok = v => v == null ? '—' : Number(v).toLocaleString();
 let expActiveId = null;
+let expActiveWs = null;
 let expDetailCache = null;
 
 async function renderExperimentList() {
   const box = $('expList');
-  // one workspace at a time for experiments — use the first selected
-  const wsName = selected[0];
-  if (!wsName) { box.innerHTML = '<div class="exp-empty">no workspace selected</div>'; return; }
-  let list = [];
-  try { list = await (await fetch('/api/experiments?ws=' + encodeURIComponent(wsName))).json(); }
-  catch { box.innerHTML = '<div class="exp-empty">could not load experiments</div>'; return; }
-  if (!Array.isArray(list) || !list.length) {
+  // every selected workspace contributes — multi-select merges the per-workspace
+  // lists (each row attributed to its workspace); single-select renders as before.
+  const wsNames = selected.slice();
+  if (!wsNames.length) { box.innerHTML = '<div class="exp-empty">no workspace selected</div>'; return; }
+  let lists;
+  try {
+    lists = await Promise.all(wsNames.map(n =>
+      fetch('/api/experiments?ws=' + encodeURIComponent(n)).then(r => r.json())));
+  } catch { box.innerHTML = '<div class="exp-empty">could not load experiments</div>'; return; }
+  const list = [];
+  wsNames.forEach((n, i) => { if (Array.isArray(lists[i])) lists[i].forEach(e => list.push({ ...e, _ws: n })); });
+  // newest first across workspaces — same ordering the server applies per workspace
+  list.sort((a, b) => (b.created || '').localeCompare(a.created || '') || (b.mtime || 0) - (a.mtime || 0));
+  const multi = wsNames.length > 1;
+  if (!list.length) {
     box.innerHTML = `<div class="exp-empty">no experiments yet — <span style="color:var(--accent);cursor:pointer" id="expEmptyNew">queue one →</span></div>`;
-    const b = $('expEmptyNew'); if (b) b.onclick = () => openExperimentQueueForm(wsName);
+    const b = $('expEmptyNew'); if (b) b.onclick = () => openExperimentQueueForm(wsNames[0]);
     $('expDetail').innerHTML = '<div class="exp-empty">no experiments to show</div>';
     return;
   }
   box.innerHTML = '';
   list.forEach(e => {
     const el = document.createElement('div');
-    el.className = 'exp-item' + (e.id === expActiveId ? ' active' : '');
+    el.className = 'exp-item' + (e.id === expActiveId && e._ws === expActiveWs ? ' active' : '');
+    el.dataset.ws = e._ws; el.dataset.id = e.id;
     const shadows = (e.shadow_agents || []).length;
     // a variant (forked from another experiment) carries replay_of — mark it
     const variantTag = e.replay_of
       ? `<span class="exp-var-tag" title="variant of ${esc(e.replay_of)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h5"/><path d="M9 12l8-6"/><path d="M13 6h4v4"/><path d="M9 12l8 6"/><path d="M13 18h4v-4"/></svg>variant</span>`
       : '';
+    // multi-project mode: attribute each row to its workspace
+    const wsTag = multi ? `<span class="ews" title="workspace">${esc(e._ws)}</span>` : '';
     el.innerHTML = `<div class="eid">${variantTag}${esc(e.id)}</div>
-      <div class="erow"><span class="${expStClass(e.status)}">${esc(e.status)}</span>
+      <div class="erow">${wsTag}<span class="${expStClass(e.status)}">${esc(e.status)}</span>
         <span>${esc(e.primary_agent || '?')}${shadows ? ' +' + shadows : ''}</span>
         <span class="ecount">${e.candidate_count} cand</span></div>`;
-    el.onclick = () => selectExperiment(wsName, e.id);
+    el.onclick = () => selectExperiment(e._ws, e.id);
     box.appendChild(el);
   });
   // auto-open the first experiment if none is active
-  if (!expActiveId || !list.some(e => e.id === expActiveId)) selectExperiment(wsName, list[0].id);
+  if (!expActiveId || !list.some(e => e.id === expActiveId && e._ws === expActiveWs)) selectExperiment(list[0]._ws, list[0].id);
 }
 
 async function selectExperiment(wsName, id) {
   expActiveId = id;
-  document.querySelectorAll('#expList .exp-item').forEach(el => el.classList.toggle('active', el.querySelector('.eid').textContent === id));
+  expActiveWs = wsName;
+  document.querySelectorAll('#expList .exp-item').forEach(el => el.classList.toggle('active', el.dataset.id === id && el.dataset.ws === wsName));
   const det = $('expDetail');
   det.innerHTML = '<div class="exp-empty">loading…</div>';
   let d;
@@ -3715,7 +3773,7 @@ function buildPanel() {
       else selected = selected.filter(n => n !== w.name);
       if (!selected.length) { selected = [w.name]; e.target.checked = true; return; }
       localStorage.setItem('tl-sel', JSON.stringify(selected));
-      expActiveId = null;   // experiments are per-workspace — reset the selection
+      expActiveId = null; expActiveWs = null;   // selection changed — reset the active experiment
       loadSelected(); loadTrees();
       if (expVisible()) renderExperimentList();
     };

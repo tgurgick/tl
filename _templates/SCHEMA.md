@@ -185,6 +185,39 @@ verification:
 
 When required and no independent verifier is available, the builder **stops at `tests/`** (`status: blocked`) instead of self-verifying: it writes `outcome/FEEDBACK.md`, snapshots `git diff > outcome/BUILDER.diff`, sets spec frontmatter `awaiting_verifier: true` + `requested_at: YYYY-MM-DD`, and writes a minimal `VERIFY.md` request (builder, date, anything to flag) in the spec folder. `tl verify [ws] [--agent <name>]` lists these for any agent that is **not** the builder; `tl verify --execute` (or the scheduled `tl-worker --mode verify` tick) claims at most one eligible spec through a configured `verifier_lanes` entry, never the builder's own, under a per-spec lock at `_metrics/verify-locks/<slug>.lock`. Cockpit **Dispatch verify** only writes `_metrics/verify-requests/*.json` (target lane ≠ `claimed_by`, or `any-other`) — the UI/server never spawn agent CLIs. A clean isolated pass advances `tests → in-review` with `verified_by` / `verification_type: independent`. Mutation proposals become `human-decision-required` and stay at `tests/` until an explicit human choice (`authorize-fix-forward` or `kick-back`) — never auto-applied. Failures leave the spec in `tests/` with an auditable `blocked_reason`. Unsafe Gemini configs (missing `isolated`/`sandbox`, `allow_network: true`, `--dangerously-skip-permissions`) are rejected loudly at config/read time. A section absent from `TRIAGE.yml` means the gate is not enforced (pre-gate workspaces unchanged).
 
+## Handoff (`*/outcome/HANDOFF.json`)
+
+The **terminal builder handoff manifest**: a versioned JSON file that proves the declared builder artifacts and test evidence form one complete handoff. Written by `lib/handoff.js` `createHandoff`; validated by `validateHandoff`; classified for recovery/queue tooling by `classifyHandoff`. The file lives under `outcome/` and travels with the spec folder.
+
+**Write-last ordering.** Builders finalize evidence **before** the manifest:
+
+1. Acceptance checks green (recorded in the manifest `tests` array).
+2. Write `outcome/FEEDBACK.md` and snapshot `outcome/BUILDER.diff` (plus any extra declared artifacts).
+3. **Only then** write `outcome/HANDOFF.json` — `createHandoff` hashes every referenced path, refuses if any file is missing or unsafe, writes a unique per-attempt `HANDOFF.json.tmp.<attempt>`, and commits with an atomic no-replace link. Exactly one concurrent creator wins; a loser gets `manifest-exists` and cannot replace the winner's bytes. Explicit `overwrite: true` remains a deliberate replacement path.
+4. Stage move / verifier-queue stamps (folder → `tests/`, `awaiting_verifier`, `VERIFY.md`) happen **after** a valid manifest exists. Those surfaces are not part of this module’s write path: the manifest is the completion proof; new writers must not treat folder location, frontmatter flags, or request files as a second source of handoff truth.
+
+A crash before commit leaves either no `HANDOFF.json` or a legacy/attempt-scoped `.tmp` only — never a complete-looking binding that points at missing bytes. `classifyHandoff` reports that as `partial`, not legacy and not v1.
+
+**V1 shape** (`version: 1`):
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `version` | int | `1` — unsupported versions refuse as `unsupported-version` |
+| `builder` | string | Builder identity (must match `SPEC.md` `claimed_by` when that field is set) |
+| `claimed_at` | string\|null | Claim stamp copied for correlation; null when unknown |
+| `from_stage` / `to_stage` | stage enum | Intended handoff edge (typically `in-progress` → `tests`) |
+| `base_commit` | string | Source identity — git SHA (or equivalent) the `BUILDER.diff` was taken against |
+| `prepared_at` | datetime | ISO timestamp when the manifest was prepared |
+| `run_id` | string | Run / correlation ID tying TRACE / worker prompts to this handoff |
+| `artifacts` | list of `{ path, sha256 }` | Relative paths under the spec folder + full SHA-256 hex of file bytes. **Required paths:** `SPEC.md`, `outcome/FEEDBACK.md`, `outcome/BUILDER.diff`. Extra paths allowed when declared at create time. |
+| `tests` | list of `{ command, ok, exit_code?, summary? }` | Non-empty; each row needs a non-empty `command` string and boolean `ok` |
+
+**Validation refusals** (typed `reason` strings from `validateHandoff` / `createHandoff`): `missing-artifact`, `artifact-changed` (hash mismatch / tamper), `unsupported-version`, `unsafe-path` (traversal or escape), `malformed-tests`, `stage-mismatch`, `identity-mismatch`, plus `malformed-manifest` / `missing-manifest` / `partial-write` classification.
+
+**Migration / legacy.** Specs that already carry `outcome/FEEDBACK.md` + `outcome/BUILDER.diff` (and often `awaiting_verifier` / `VERIFY.md`) **without** `HANDOFF.json` are **legacy**: `classifyHandoff` returns `{ kind: 'legacy', legacy: true }` and remains readable for grandfathered verify/review paths. New handoffs must write V1. Opt-in enforcement (e.g. `verification.require_handoff_binding` on `canAdvanceToReview`) belongs to a follow-up wire-up — absent policy, legacy work stays valid. Do not retro-stamp historical `tests/` / `in-review/` / `done/` folders.
+
+**Integrity is not an OS sandbox.** Hashes prove the bound files match the bytes declared at handoff time; matching `builder` to `claimed_by` is consistency, not authenticated authorship. A process with shell access can rewrite artifacts and re-hash. This API is cooperative enforcement for agents and gates — same posture as `lib/stage.js` — not a permission boundary or signature scheme.
+
 ## Experiments (`_experiments/*`)
 
 Experiments compare one task across one primary candidate and zero or more shadow candidates. They are shadow attempts: they never move canonical `specs/`, `in-progress/`, `tests/`, `in-review/`, or `done/` folders by themselves. A winning patch becomes source-of-truth work only through a later explicit apply/review path.

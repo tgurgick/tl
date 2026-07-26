@@ -33,15 +33,17 @@ const {
   fmValue, setFrontmatterField, appendToFrontmatterList, setFrontmatterList,
 } = require('../lib/frontmatter');
 const { buildProjectInsights, taskTitleFromBody, firstParagraph } = require('../lib/project-insights');
-const { localRepoPath } = require('../lib/batch');
+const { localRepoPath, specSlug } = require('../lib/batch');
 const { automationStatus } = require('../lib/automation');
 const {
   writeVerifyRequest, applyVerifyHumanDecision, readVerifierLanes,
   verifierStatusOf, readVerifyRequests, loadSpecTracePayload,
+  readPendingContinuations, appendSpecTraceEvent,
 } = require('../lib/worker');
 const { canAdvanceToReview } = require('../lib/verification-gate');
 const { recallSearch } = require('../lib/recall');
 const { buildBenchmarkRecord, appendBenchmarkRecord, intentGoalIds } = require('../lib/benchmark-log');
+const { detectStalledClaims, reclaimStalled, stallThresholdMs } = require('../lib/stall');
 
 // "did we already discuss this?" is the product — capped and grouped, not a
 // search engine. The cap truncates the ranked list; grouping stays identical
@@ -139,6 +141,34 @@ function readWorkspace(ws) {
     ...readStage(dir, 'in-review', 'in-review'),
     ...readStage(dir, 'done', 'done'),
   ];
+
+  // Stall assessment for in-progress cards — eligibility comes from lib/stall.js
+  // (threshold + guards), never duplicated thresholds in the UI. Annotate only
+  // stalled claims so the cockpit can badge + offer an explicit per-spec reclaim.
+  try {
+    const thresholdMs = stallThresholdMs(config);
+    const forDetect = specs.filter(s => s.stage === 'in-progress' && String(s.path || '').endsWith('/')).map(s => ({
+      ...s,
+      dir: path.join(dir, s.path.replace(/\/$/, '')),
+    }));
+    const continuations = { live: readPendingContinuations(dir, specs) };
+    const stalled = detectStalledClaims(dir, forDetect, { thresholdMs, continuations });
+    const bySlug = new Map(stalled.map(x => [x.slug, x]));
+    for (const s of specs) {
+      if (s.stage !== 'in-progress') continue;
+      const hit = bySlug.get(specSlug(s.path));
+      if (!hit) continue;
+      s.stall = {
+        stalled: true,
+        idle_hours: hit.idleHours,
+        idle_ms: hit.idleMs,
+        last_seen_ms: hit.lastSeenMs,
+        reason: hit.reason,
+        owner: (s.meta && s.meta.claimed_by) || null,
+        threshold_hours: Math.round(thresholdMs / 3600000),
+      };
+    }
+  } catch { /* stall annotation is advisory — never break the board payload */ }
 
   const threads = [];
   const threadsDir = path.join(dir, 'threads');
@@ -303,6 +333,11 @@ function readExperiments(ws) {
   const out = [];
   for (const id of fs.readdirSync(base).sort()) {
     if (id.startsWith('.') || !isDir(path.join(base, id))) continue;
+    // only real experiment dirs — an experiment is defined by its EXPERIMENT.md
+    // (docs/agent-experiments.md). queue/ holds pending request JSONs, not an
+    // experiment, and must never render as a phantom "UNKNOWN" row or count in
+    // insights; same for any other non-experiment dir under _experiments/.
+    if (id === 'queue' || !fs.existsSync(path.join(base, id, 'EXPERIMENT.md'))) continue;
     out.push(experimentSummary(path.join(base, id), id));
   }
   return out.sort((a, b) => (b.created || '').localeCompare(a.created || '') || b.mtime - a.mtime);
@@ -1120,6 +1155,73 @@ function hRelease(ws, body, res) {
   return json(res, 200, { ok: true, path: 'specs/' + slug + '/' });
 }
 
+function hReclaim(ws, body, res) {
+  // Explicit per-spec reclaim of a stalled in-progress claim. One slug, one
+  // recorded reason — never a bulk sweep. Eligibility + writes live in
+  // lib/stall.js (reclaimStalled); this handler only wires cockpit inputs.
+  const rel = String(body.spec || '').replace(/\/$/, '');
+  if (!/^in-progress\/[^/]+$/.test(rel)) {
+    return json(res, 400, { error: 'only a single in-progress/<slug> claim can be reclaimed' });
+  }
+  const reason = String(body.reason || '').trim();
+  if (!reason) return json(res, 400, { error: 'a non-empty reason is required' });
+  const by = String(body.by || 'cockpit').trim() || 'cockpit';
+  const slug = rel.split('/').pop();
+  let cfg = {};
+  try { cfg = parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '') || {}; } catch { cfg = {}; }
+  const thresholdMs = stallThresholdMs(cfg);
+  // Continuations need the same shape detectStalledClaims/reclaimStalled expect
+  // ({ live: [...] }); readPendingContinuations already returns that list.
+  const specs = [
+    ...readStage(ws.dir, 'in-progress', 'in-progress'),
+    ...readStage(ws.dir, 'tests', 'tests'),
+  ];
+  const continuations = { live: readPendingContinuations(ws.dir, specs) };
+  const result = reclaimStalled(ws.dir, slug, { by, reason, thresholdMs, continuations });
+  if (!result.ok) {
+    const why = {
+      'reason-required': 'a non-empty reason is required',
+      'by-required': 'who is reclaiming is required',
+      'not-found': 'spec not found in in-progress',
+      'active-claim': 'claim shows recent activity — never force-steal live work',
+      'awaiting-verifier': 'verifier hand-off, not a stall',
+      'continuation-pending': 'a pending continuation owns the resume',
+      'blocked': 'spec records a blocker — unblock instead of reclaiming',
+      'destination-exists': 'destination folder already exists',
+      'no-evidence': 'no dateable activity for the claim',
+      'no-slug': 'missing spec slug',
+    }[result.reason] || result.reason;
+    const code = result.reason === 'not-found' ? 404
+      : (result.reason === 'active-claim' || result.reason === 'awaiting-verifier'
+        || result.reason === 'continuation-pending' || result.reason === 'blocked'
+        || result.reason === 'no-evidence') ? 409
+        : 400;
+    return json(res, code, { ok: false, error: why, reason: result.reason });
+  }
+  // Same append-only reclaim audit as `tl reclaim` — NOTES.md already written
+  // by reclaimStalled; add a handoff TRACE row that travels with the folder.
+  try {
+    appendSpecTraceEvent(path.join(ws.dir, result.to), {
+      type: 'handoff',
+      from_stage: result.from.split('/')[0],
+      to_stage: result.to.split('/')[0],
+      summary: `reclaimed by ${by} (${result.mode}): ${reason.slice(0, 200)} — prior claim ${result.priorClaimedBy || 'unstamped'}`,
+      actor_type: 'human', actor_id: String(by),
+      initiation: 'human', source: 'cockpit',
+    });
+  } catch { /* trace is observability; reclaim already succeeded */ }
+  return json(res, 200, {
+    ok: true,
+    mode: result.mode,
+    from: result.from,
+    to: result.to,
+    slug: result.slug,
+    priorClaimedBy: result.priorClaimedBy,
+    idleHours: result.idleHours,
+    thresholdHours: result.thresholdHours,
+  });
+}
+
 function hNote(ws, body, res) {
   // leave feedback on any spec, in any stage — appended to its NOTES.md so it travels with the spec.
   // an optional `anchor` ties the note to a section of the spec (inline, PR-review style).
@@ -1372,6 +1474,7 @@ const ROUTES = {
   '/api/research': hResearch,
   '/api/review': hReview,
   '/api/release': hRelease,
+  '/api/reclaim': hReclaim,
   '/api/note': hNote,
   '/api/verify-dispatch': hVerifyDispatch,
   '/api/verify-decision': hVerifyDecision,

@@ -51,7 +51,7 @@ Each verb is one `skills/<name>/SKILL.md` — read the skill and follow its step
 - `tl sync` — Sync a tl workspace with JIRA — import assigned issues as specs and epics as intents, push TL status and human priority changes back.
 - `tl triage` — Rank a tl workspace's backlog — score specs against the goals, allocation targets, and rules in its TRIAGE.yml, detect human priority overrides, and rewrite PRIORITIES.md via targeted priority-field edits — never whole-frontmatter rewrites, never stage folders or claim fields, and re-stat before every write (a spec that moved since inventory is skipped, not restored).
 - `tl ui` — Start the Throughline web UI and pop it open in the browser — live board (Learn / Run / Review surfaces), ranked backlog, activity feed, and file changes for watching agents work.
-- `tl verify` — Independently verify specs waiting at the TESTS gate — a non-builder agent reviews the diff against the acceptance criteria and review gates, remediates with the builder (bounded), writes the ALIGNMENT record, and advances the spec to in-review.
+- `tl verify` — Independently verify specs waiting at the TESTS gate — a non-builder agent leases the spec, reviews the diff against the acceptance criteria and review gates read-only, records the ALIGNMENT record and an immutable result, and advances a clean pass to in-review; any desired change is a proposal for a human, never an edit.
 
 ## Critical rules
 

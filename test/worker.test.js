@@ -14,7 +14,13 @@ const {
   readVerifierLanes, validateVerifierLane, verifierLaneIssues, verifierLaneAvailable,
   pickVerifyWork, writeVerifyRequest, verifyTick, applyVerifyHumanDecision,
   verifyLockPath,
+  builderLeasePath, builderLeaseState, ownsLease,
+  acquireBuilderLease, renewBuilderLease, releaseBuilderLease, expireBuilderLease,
+  finalizeBuilderHandoff, builderLeaseTrailer,
+  isAwaitingVerifier, verifierStatusOf, readSpecTrace,
+  DEFAULT_BUILDER_LEASE_TTL_MINUTES, BUILDER_LEASES_DIR,
 } = require('../lib/worker');
+const { validateHandoff, classifyHandoff, createHandoff } = require('../lib/handoff');
 const { RESULT_BEGIN: VB, RESULT_END: VE } = require('../lib/verifier-worker');
 
 // build a spec object shaped like readWorkspaceSpecs produces
@@ -557,7 +563,9 @@ test('tick: eligible ready spec spawns once — prompt file written, lock held d
     assert.match(spawns[0].argv[3], /worker-prompts.*\.txt$/);
     assert.equal(spawns[0].stdin, null);              // {prompt_file} template → no stdin
     assert.equal(lockDuringSpawn, true);              // created just before spawn
-    assert.equal(promptDuringSpawn, 'THE BRIEF\nsecond line\n');
+    assert.ok(promptDuringSpawn.startsWith('THE BRIEF\nsecond line\n'));
+    assert.match(promptDuringSpawn, /builder lease \(write-last handoff contract\)/);
+    assert.match(promptDuringSpawn, /--lease renew --spec r --agent claude/);
     assert.equal(fs.existsSync(lock), false);         // removed after child exit
     const line = readLog(ws)[0];
     assert.equal(line.picked, 'specs/r/');
@@ -574,7 +582,8 @@ test('tick: template with no placeholder delivers the brief on stdin', () => {
     assert.equal(spawns[0].shell, false);
     assert.deepEqual(spawns[0].argv, ['echo', 'codex-stdin']);
     assert.equal(spawns[0].command, 'echo codex-stdin');
-    assert.equal(spawns[0].stdin, 'STDIN BRIEF\n');
+    assert.ok(spawns[0].stdin.startsWith('STDIN BRIEF\n'));   // + builder lease trailer
+    assert.match(spawns[0].stdin, /builder lease \(write-last handoff contract\)/);
   });
 });
 
@@ -633,7 +642,9 @@ test('tick: lanes.<lane>.model trailer lands in the {prompt_file} prompt too; no
       lane: 'codex', brief: 'PLAIN BRIEF\n',
       onSpawn: () => { lockBody = JSON.parse(fs.readFileSync(lock, 'utf8')); },
     });
-    assert.equal(spawns[0].stdin, 'PLAIN BRIEF\n');   // byte-identical — no trailer
+    assert.ok(spawns[0].stdin.startsWith('PLAIN BRIEF\n'));
+    assert.doesNotMatch(spawns[0].stdin, /claimed_model/);   // no model → no model trailer
+    assert.match(spawns[0].stdin, /builder lease/);          // lease trailer always rides
     assert.equal('model' in lockBody, false);
   });
 });
@@ -696,7 +707,7 @@ test('tick: YAML list-form lane command spawns verbatim argv', () => {
     assert.equal(result.code, 0);
     assert.equal(spawns[0].shell, false);
     assert.deepEqual(spawns[0].argv, ['echo', 'run', '--flag', '-p']);
-    assert.equal(spawns[0].stdin, 'B\n');   // no placeholder → stdin
+    assert.ok(spawns[0].stdin.startsWith('B\n'));   // no placeholder → stdin (+ lease trailer)
   });
 });
 
@@ -1170,3 +1181,564 @@ void VB; void VE; void verifierLaneIssues;
 function specSlug(p) {
   return String(p || '').replace(/\/$/, '').split('/').pop();
 }
+
+// ---------- builder leases (_metrics/builder-leases/<slug>.json) ----------
+
+const LEASE_ARGS = { slug: 's1', actor: 'claude', runId: 'claude-r1' };
+
+function leaseWs(fn) {
+  return withWorkspace({}, fn);
+}
+
+test('acquireBuilderLease: records actor, run ID, stage, issued/heartbeat/expiry times, ttl', () => {
+  leaseWs(ws => {
+    const now = new Date('2026-07-25T10:00:00.000Z');
+    const r = acquireBuilderLease(ws.dir, { ...LEASE_ARGS, stage: 'in-progress', ttlMinutes: 60, now });
+    assert.equal(r.ok, true);
+    assert.equal(r.takeover, false);
+    assert.equal(r.path, BUILDER_LEASES_DIR + '/s1.json');
+    const onDisk = JSON.parse(fs.readFileSync(builderLeasePath(ws.dir, 's1'), 'utf8'));
+    assert.equal(onDisk.slug, 's1');
+    assert.equal(onDisk.actor, 'claude');
+    assert.equal(onDisk.run_id, 'claude-r1');
+    assert.equal(onDisk.stage, 'in-progress');
+    assert.equal(onDisk.issued_at, '2026-07-25T10:00:00.000Z');
+    assert.equal(onDisk.heartbeat_at, '2026-07-25T10:00:00.000Z');
+    assert.equal(onDisk.expires_at, '2026-07-25T11:00:00.000Z');   // issued + 60m
+    assert.equal(onDisk.ttl_minutes, 60);
+    assert.equal(typeof onDisk.pid, 'number');
+    assert.equal(builderLeaseState(ws.dir, 's1', now.getTime()).state, 'live');
+    // garbage/absent ttl falls back to the default
+    const d = acquireBuilderLease(ws.dir, { slug: 's2', actor: 'claude', runId: 'r', ttlMinutes: 'banana', now });
+    assert.equal(d.ok, true);
+    assert.equal(d.lease.ttl_minutes, DEFAULT_BUILDER_LEASE_TTL_MINUTES);
+  });
+});
+
+test('acquireBuilderLease: a live foreign lease is a typed lease-held with holder details — never forced', () => {
+  leaseWs(ws => {
+    const now = new Date();
+    assert.equal(acquireBuilderLease(ws.dir, { ...LEASE_ARGS, now }).ok, true);
+    const foreign = acquireBuilderLease(ws.dir, { slug: 's1', actor: 'codex', runId: 'codex-r9', now });
+    assert.equal(foreign.ok, false);
+    assert.equal(foreign.reason, 'lease-held');
+    assert.equal(foreign.holder.actor, 'claude');
+    assert.equal(foreign.holder.run_id, 'claude-r1');
+    assert.ok(foreign.holder.expires_at);
+    // same actor but a DIFFERENT run is still foreign — one session, one run
+    const otherRun = acquireBuilderLease(ws.dir, { slug: 's1', actor: 'claude', runId: 'claude-r2', now });
+    assert.equal(otherRun.ok, false);
+    assert.equal(otherRun.reason, 'lease-held');
+    // the holder's own re-acquire is an idempotent renewal that keeps issued_at
+    const again = acquireBuilderLease(ws.dir, { ...LEASE_ARGS, now: new Date(now.getTime() + 60000) });
+    assert.equal(again.ok, true);
+    const onDisk = JSON.parse(fs.readFileSync(builderLeasePath(ws.dir, 's1'), 'utf8'));
+    assert.equal(Date.parse(onDisk.heartbeat_at) - now.getTime(), 60000);
+  });
+});
+
+test('acquireBuilderLease: an expired lease is takeover-eligible; contention resolves by read-back CAS', () => {
+  leaseWs(ws => {
+    const past = new Date(Date.now() - 3 * 60 * 60 * 1000);   // issued 3h ago, 60m ttl → long expired
+    assert.equal(acquireBuilderLease(ws.dir, { ...LEASE_ARGS, ttlMinutes: 60, now: past }).ok, true);
+    assert.equal(builderLeaseState(ws.dir, 's1').state, 'expired');
+    const taken = acquireBuilderLease(ws.dir, { slug: 's1', actor: 'codex', runId: 'codex-r1', stage: 'in-progress' });
+    assert.equal(taken.ok, true);
+    assert.equal(taken.takeover, true);
+    assert.equal(JSON.parse(fs.readFileSync(builderLeasePath(ws.dir, 's1'), 'utf8')).actor, 'codex');
+    // the dead original owner cannot renew what it lost
+    const stale = renewBuilderLease(ws.dir, LEASE_ARGS);
+    assert.equal(stale.ok, false);
+    assert.equal(stale.reason, 'foreign-lease');
+    assert.equal(stale.holder.actor, 'codex');
+  });
+});
+
+test('renewBuilderLease: the heartbeat — owner advances heartbeat/expiry atomically, may update stage', () => {
+  leaseWs(ws => {
+    const t0 = new Date('2026-07-25T10:00:00.000Z');
+    acquireBuilderLease(ws.dir, { ...LEASE_ARGS, stage: 'in-progress', ttlMinutes: 30, now: t0 });
+    const t1 = new Date('2026-07-25T10:10:00.000Z');
+    const r = renewBuilderLease(ws.dir, { ...LEASE_ARGS, now: t1 });
+    assert.equal(r.ok, true);
+    assert.equal(r.lease.issued_at, '2026-07-25T10:00:00.000Z');     // issue time survives renewals
+    assert.equal(r.lease.heartbeat_at, '2026-07-25T10:10:00.000Z');
+    assert.equal(r.lease.expires_at, '2026-07-25T10:40:00.000Z');    // heartbeat + ttl
+    assert.equal(r.lease.stage, 'in-progress');
+    const staged = renewBuilderLease(ws.dir, { ...LEASE_ARGS, stage: 'tests', now: new Date('2026-07-25T10:11:00.000Z') });
+    assert.equal(staged.lease.stage, 'tests');
+  });
+});
+
+test('renewBuilderLease: typed refusals — missing, foreign, and expired-own leases never quietly revive', () => {
+  leaseWs(ws => {
+    assert.equal(renewBuilderLease(ws.dir, LEASE_ARGS).reason, 'lease-missing');
+    const t0 = new Date('2026-07-25T10:00:00.000Z');
+    acquireBuilderLease(ws.dir, { ...LEASE_ARGS, ttlMinutes: 30, now: t0 });
+    const foreign = renewBuilderLease(ws.dir, { slug: 's1', actor: 'codex', runId: 'x', now: new Date(t0.getTime() + 1000) });
+    assert.equal(foreign.reason, 'foreign-lease');
+    // past expiry, the owner is presumed dead — renewal refuses; re-acquire is the path back
+    const late = renewBuilderLease(ws.dir, { ...LEASE_ARGS, now: new Date('2026-07-25T11:00:00.000Z') });
+    assert.equal(late.reason, 'lease-expired');
+    const back = acquireBuilderLease(ws.dir, { ...LEASE_ARGS, now: new Date('2026-07-25T11:00:00.000Z') });
+    assert.equal(back.ok, true);
+    assert.equal(back.takeover, true);
+  });
+});
+
+test('releaseBuilderLease: owner releases; missing is idempotent; foreign refuses', () => {
+  leaseWs(ws => {
+    assert.deepEqual(releaseBuilderLease(ws.dir, LEASE_ARGS), { ok: true, released: false, slug: 's1' });
+    acquireBuilderLease(ws.dir, LEASE_ARGS);
+    const foreign = releaseBuilderLease(ws.dir, { slug: 's1', actor: 'codex', runId: 'x' });
+    assert.equal(foreign.reason, 'foreign-lease');
+    assert.ok(fs.existsSync(builderLeasePath(ws.dir, 's1')));
+    const r = releaseBuilderLease(ws.dir, LEASE_ARGS);
+    assert.equal(r.released, true);
+    assert.equal(fs.existsSync(builderLeasePath(ws.dir, 's1')), false);
+    assert.equal(builderLeaseState(ws.dir, 's1').state, 'none');
+  });
+});
+
+test('expireBuilderLease: owner marks its lease expired NOW with a reason — evidence, not deletion', () => {
+  leaseWs(ws => {
+    acquireBuilderLease(ws.dir, { ...LEASE_ARGS, ttlMinutes: 120 });
+    const r = expireBuilderLease(ws.dir, { ...LEASE_ARGS, reason: 'session-exited-0-without-finalize' });
+    assert.equal(r.ok, true);
+    assert.equal(r.expired, true);
+    const st = builderLeaseState(ws.dir, 's1', Date.now() + 1000);
+    assert.equal(st.state, 'expired');
+    assert.equal(st.lease.ended_reason, 'session-exited-0-without-finalize');
+    // foreign expire refused; expire of nothing is idempotent
+    acquireBuilderLease(ws.dir, { slug: 's2', actor: 'codex', runId: 'x' });
+    assert.equal(expireBuilderLease(ws.dir, { slug: 's2', actor: 'claude', runId: 'y' }).reason, 'foreign-lease');
+    assert.deepEqual(expireBuilderLease(ws.dir, { slug: 'ghost', actor: 'a', runId: 'b' }), { ok: true, expired: false, slug: 'ghost' });
+  });
+});
+
+test('builder lease: a malformed lease file cannot wedge the spec — held while fresh, takeover once old', () => {
+  leaseWs(ws => {
+    const file = builderLeasePath(ws.dir, 's1');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'not json {{{');
+    const fresh = builderLeaseState(ws.dir, 's1');
+    assert.equal(fresh.state, 'live');
+    assert.equal(fresh.malformed, true);
+    const held = acquireBuilderLease(ws.dir, LEASE_ARGS);
+    assert.equal(held.reason, 'lease-held');
+    assert.equal(held.malformed, true);
+    assert.equal(renewBuilderLease(ws.dir, LEASE_ARGS).reason, 'malformed-lease');
+    // age the corrupt file past the default TTL → expired → takeover works
+    const old = new Date(Date.now() - (DEFAULT_BUILDER_LEASE_TTL_MINUTES + 60) * 60000);
+    fs.utimesSync(file, old, old);
+    assert.equal(builderLeaseState(ws.dir, 's1').state, 'expired');
+    const taken = acquireBuilderLease(ws.dir, LEASE_ARGS);
+    assert.equal(taken.ok, true);
+    assert.equal(taken.takeover, true);
+  });
+});
+
+// ---------- finalizeBuilderHandoff (in-progress → tests under an expiring lease) ----------
+
+const GREEN = [{ command: 'node --test test/x.test.js', ok: true, exit_code: 0 }];
+const FIN = { slug: 'ship', actor: 'claude', runId: 'claude-r1', baseCommit: 'abc123', tests: GREEN };
+
+// One staged builder spec: claimed, in in-progress/, checks green, outcome
+// artifacts + VERIFY.md written — i.e. the exact moment finalize takes over.
+function builderWs(fn, { slug = 'ship', claimedBy = 'claude', omit = [] } = {}) {
+  const files = {};
+  if (!omit.includes('BUILDER.diff')) files[`in-progress/${slug}/outcome/BUILDER.diff`] = 'diff --git a/a.js b/a.js\n';
+  return withWorkspace({
+    specs: [{
+      slug, stage: 'in-progress', status: 'in-progress', claimedBy, files: ['a.js'],
+      extraFm: ['claimed_at: "2026-07-25"'],
+      verifyMd: omit.includes('VERIFY.md') ? undefined : '# Verify request\n- builder: claude\n',
+      feedback: omit.includes('FEEDBACK.md') ? undefined : '# Feedback\nshipped\n',
+    }],
+    files,
+  }, fn);
+}
+
+test('finalize: the one write-last order — stamps + manifest before the guarded move; lands in tests/ verifier-eligible with no request file', () => {
+  builderWs(ws => {
+    const r = finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN, initiation: 'automation', source: 'worker' });
+    assert.equal(r.ok, true);
+    assert.equal(r.path, 'tests/ship/');
+    assert.equal(r.run_id, 'claude-r1');
+    assert.equal(r.reused_manifest, false);
+    assert.equal(r.lease_released, true);
+
+    // folder moved; provenance preserved
+    assert.ok(fs.existsSync(path.join(ws.dir, 'tests', 'ship', 'SPEC.md')));
+    assert.equal(fs.existsSync(path.join(ws.dir, 'in-progress', 'ship')), false);
+    const fm = fs.readFileSync(path.join(ws.dir, 'tests', 'ship', 'SPEC.md'), 'utf8');
+    assert.match(fm, /status: "tests"/);
+    assert.match(fm, /awaiting_verifier: true/);
+    assert.match(fm, /requested_at: "\d{4}-\d{2}-\d{2}"/);
+    assert.match(fm, /claimed_by: claude/);
+
+    // terminal manifest binds builder, edge, base commit, run id, and 4 artifacts (3 required + VERIFY.md)
+    const v = validateHandoff({ specDir: path.join(ws.dir, 'tests', 'ship') });
+    assert.equal(v.ok, true);
+    assert.equal(v.builder, 'claude');
+    assert.equal(v.from_stage, 'in-progress');
+    assert.equal(v.to_stage, 'tests');
+    assert.equal(v.base_commit, 'abc123');
+    assert.equal(v.run_id, 'claude-r1');
+    assert.equal(v.manifest.artifacts.length, 4);
+    assert.ok(v.manifest.artifacts.some(a => a.path === 'VERIFY.md'));
+    assert.deepEqual(v.manifest.tests, GREEN);
+    assert.equal(v.manifest.claimed_at, '2026-07-25');
+
+    // exactly one correlated handoff trace event
+    const handoffs = readSpecTrace(path.join(ws.dir, 'tests', 'ship')).filter(e => e.type === 'handoff');
+    assert.equal(handoffs.length, 1);
+    assert.equal(handoffs[0].from_stage, 'in-progress');
+    assert.equal(handoffs[0].to_stage, 'tests');
+    assert.equal(handoffs[0].run_id, 'claude-r1');
+    assert.equal(handoffs[0].actor_id, 'claude');
+    assert.equal(handoffs[0].initiation, 'automation');
+
+    // lease released; canonical eligibility without a request-file race
+    assert.equal(builderLeaseState(ws.dir, 'ship').state, 'none');
+    assert.equal(fs.existsSync(path.join(ws.dir, '_metrics', 'verify-requests')), false);
+
+    // legacy awaiting_verifier remains readable: existing queue/status readers see it
+    const spec = readWorkspaceSpecs(ws.dir).find(s => s.path === 'tests/ship/');
+    assert.equal(isAwaitingVerifier(spec), true);
+    assert.equal(verifierStatusOf(spec, { wsDir: ws.dir }).status, 'queued');
+  });
+});
+
+test('finalize: red or malformed checks are a block, not a handoff — typed refusal before any write', () => {
+  builderWs(ws => {
+    const red = finalizeBuilderHandoff({
+      wsDir: ws.dir, ...FIN,
+      tests: [{ command: 'npm test', ok: true }, { command: 'npm run lint', ok: false, exit_code: 1 }],
+    });
+    assert.equal(red.ok, false);
+    assert.equal(red.reason, 'failing-tests');
+    assert.deepEqual(red.failing, ['npm run lint']);
+    assert.equal(finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN, tests: [] }).reason, 'malformed-tests');
+    assert.equal(finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN, baseCommit: '' }).reason, 'malformed-manifest');
+    // nothing happened: no stamps, no manifest, no lease, folder unmoved
+    const fm = fs.readFileSync(path.join(ws.dir, 'in-progress', 'ship', 'SPEC.md'), 'utf8');
+    assert.doesNotMatch(fm, /awaiting_verifier: true/);
+    assert.equal(fs.existsSync(path.join(ws.dir, 'in-progress', 'ship', 'outcome', 'HANDOFF.json')), false);
+    assert.equal(builderLeaseState(ws.dir, 'ship').state, 'none');
+  });
+});
+
+test('finalize: crash BEFORE the manifest (partial artifacts) — missing-artifact refusal, zero false-success stamps', () => {
+  builderWs(ws => {
+    const r = finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'missing-artifact');
+    assert.equal(r.path, 'outcome/BUILDER.diff');
+    // observed stage kept, no stamps, no manifest — classify sees partial, never legacy/complete
+    assert.ok(fs.existsSync(path.join(ws.dir, 'in-progress', 'ship')));
+    const fm = fs.readFileSync(path.join(ws.dir, 'in-progress', 'ship', 'SPEC.md'), 'utf8');
+    assert.doesNotMatch(fm, /awaiting_verifier: true/);
+    assert.match(fm, /status: in-progress/);
+    const cls = classifyHandoff(path.join(ws.dir, 'in-progress', 'ship'));
+    assert.equal(cls.kind, 'partial');
+    assert.equal(cls.ok, false);
+    // the refusal is recorded as an actionable trace breadcrumb
+    const blocked = readSpecTrace(path.join(ws.dir, 'in-progress', 'ship')).filter(e => e.type === 'blocked');
+    assert.equal(blocked.length, 1);
+    assert.match(blocked[0].summary, /missing-artifact/);
+  }, { omit: ['BUILDER.diff'] });
+});
+
+test('finalize: VERIFY.md is part of the hand-off — absent request is a refusal, not a silent stop', () => {
+  builderWs(ws => {
+    const r = finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'missing-artifact');
+    assert.equal(r.path, 'VERIFY.md');
+    assert.ok(fs.existsSync(path.join(ws.dir, 'in-progress', 'ship')));
+  }, { omit: ['VERIFY.md'] });
+});
+
+test('finalize: ownership is binding — foreign claim and live foreign lease are typed stops', () => {
+  builderWs(ws => {
+    const foreign = finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN, actor: 'codex', runId: 'codex-r1' });
+    assert.equal(foreign.ok, false);
+    assert.equal(foreign.reason, 'foreign-claim');
+    assert.equal(foreign.claimed_by, 'claude');
+
+    acquireBuilderLease(ws.dir, { slug: 'ship', actor: 'claude', runId: 'claude-OTHER' });
+    const held = finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN });
+    assert.equal(held.ok, false);
+    assert.equal(held.reason, 'lease-held');
+    assert.equal(held.holder.run_id, 'claude-OTHER');
+    assert.ok(fs.existsSync(path.join(ws.dir, 'in-progress', 'ship')));
+  });
+});
+
+test('finalize: wrong observed stage is stale-stage with the observed board attached', () => {
+  withWorkspace({ specs: [{ slug: 'ship', stage: 'ready', files: ['a.js'] }] }, ws => {
+    const r = finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'stale-stage');
+    assert.deepEqual(r.observed_stages, ['specs']);
+  });
+});
+
+test('finalize: THE incident — killed between manifest and move; a retry (even a new run after lease expiry) completes idempotently', () => {
+  builderWs(ws => {
+    // Build the exact crash state a killed finalize leaves behind: stamps
+    // written, terminal manifest committed, folder still in in-progress/, and
+    // the dead run's lease unreleased and long expired.
+    const specDir = path.join(ws.dir, 'in-progress', 'ship');
+    const { setFrontmatterField } = require('../lib/frontmatter');
+    let fm = fs.readFileSync(path.join(specDir, 'SPEC.md'), 'utf8');
+    fm = setFrontmatterField(fm, 'status', 'tests');
+    fm = setFrontmatterField(fm, 'awaiting_verifier', 'true');
+    fm = setFrontmatterField(fm, 'requested_at', '2026-07-25');
+    fs.writeFileSync(path.join(specDir, 'SPEC.md'), fm);
+    const c = createHandoff({
+      specDir, builder: 'claude', from_stage: 'in-progress', to_stage: 'tests',
+      base_commit: 'abc123', run_id: 'claude-r1', tests: GREEN, artifacts: ['VERIFY.md'],
+    });
+    assert.equal(c.ok, true);
+    const past = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    assert.equal(acquireBuilderLease(ws.dir, { slug: 'ship', actor: 'claude', runId: 'claude-r1', ttlMinutes: 60, now: past }).ok, true);
+    assert.equal(builderLeaseState(ws.dir, 'ship').state, 'expired');
+    const before = fs.readFileSync(path.join(specDir, 'outcome', 'HANDOFF.json'), 'utf8');
+
+    // A NEW session (new run id) retries: expired-lease takeover, manifest
+    // reused byte-for-byte, requested_at kept, exactly one handoff event.
+    const r2 = finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN, runId: 'claude-r2' });
+    assert.equal(r2.ok, true);
+    assert.equal(r2.reused_manifest, true);
+    assert.equal(r2.run_id, 'claude-r1');   // correlation keeps the run that prepared the handoff
+    assert.equal(r2.requested_at, '2026-07-25');
+    assert.equal(fs.readFileSync(path.join(ws.dir, 'tests', 'ship', 'outcome', 'HANDOFF.json'), 'utf8'), before);
+    const handoffs = readSpecTrace(path.join(ws.dir, 'tests', 'ship')).filter(e => e.type === 'handoff');
+    assert.equal(handoffs.length, 1);
+    assert.equal(handoffs[0].run_id, 'claude-r1');
+    assert.equal(handoffs[0].finalized_by_run, 'claude-r2');
+    assert.equal(builderLeaseState(ws.dir, 'ship').state, 'none');
+
+    // Finalize after success is already_finalized — no double handoff.
+    const r3 = finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN, runId: 'claude-r3' });
+    assert.equal(r3.ok, true);
+    assert.equal(r3.already_finalized, true);
+    assert.equal(readSpecTrace(path.join(ws.dir, 'tests', 'ship')).filter(e => e.type === 'handoff').length, 1);
+  });
+});
+
+test('finalize: a duplicate-slug board (spec in both in-progress/ and tests/) refuses destination-exists before any write', () => {
+  builderWs(ws => {
+    fs.mkdirSync(path.join(ws.dir, 'tests', 'ship'), { recursive: true });
+    const r = finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'destination-exists');
+    assert.deepEqual(r.observed_stages, ['in-progress', 'tests']);
+    // refused BEFORE stamps/manifest/lease — zero false-success state
+    const fm = fs.readFileSync(path.join(ws.dir, 'in-progress', 'ship', 'SPEC.md'), 'utf8');
+    assert.doesNotMatch(fm, /awaiting_verifier: true/);
+    assert.equal(fs.existsSync(path.join(ws.dir, 'in-progress', 'ship', 'outcome', 'HANDOFF.json')), false);
+    assert.equal(builderLeaseState(ws.dir, 'ship').state, 'none');
+    // ...but the actionable reason is on disk as a trace breadcrumb
+    const blocked = readSpecTrace(path.join(ws.dir, 'in-progress', 'ship')).filter(e => e.type === 'blocked');
+    assert.equal(blocked.length, 1);
+    assert.match(blocked[0].summary, /destination-exists/);
+  });
+});
+
+test('finalize: a stale committed manifest (bytes changed since) is recreated under the lease, not shipped', () => {
+  builderWs(ws => {
+    // commit a manifest, then change FEEDBACK under it — retry must re-bind
+    const specDir = path.join(ws.dir, 'in-progress', 'ship');
+    const c = createHandoff({
+      specDir, builder: 'claude', from_stage: 'in-progress', to_stage: 'tests',
+      base_commit: 'abc123', run_id: 'claude-r0', tests: GREEN, artifacts: ['VERIFY.md'],
+    });
+    assert.equal(c.ok, true);
+    fs.appendFileSync(path.join(specDir, 'outcome', 'FEEDBACK.md'), 'amended after crash\n');
+    const r = finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN });
+    assert.equal(r.ok, true);
+    assert.equal(r.reused_manifest, false);
+    assert.equal(r.run_id, 'claude-r1');   // fresh binding under the finalizing run
+    assert.equal(validateHandoff({ specDir: path.join(ws.dir, 'tests', 'ship') }).ok, true);
+  });
+});
+
+test('finalize: interactive/headless parity — identical board state, only trace provenance differs', () => {
+  let headless;
+  builderWs(ws => {
+    assert.equal(finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN, initiation: 'automation', source: 'worker' }).ok, true);
+    headless = {
+      fm: fs.readFileSync(path.join(ws.dir, 'tests', 'ship', 'SPEC.md'), 'utf8').replace(/requested_at: "[^"]*"/, 'requested_at: X'),
+      manifest: JSON.parse(fs.readFileSync(path.join(ws.dir, 'tests', 'ship', 'outcome', 'HANDOFF.json'), 'utf8')),
+      trace: readSpecTrace(path.join(ws.dir, 'tests', 'ship')).filter(e => e.type === 'handoff')[0],
+    };
+  });
+  builderWs(ws => {
+    assert.equal(finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN, initiation: 'human', source: 'skill' }).ok, true);
+    const fm = fs.readFileSync(path.join(ws.dir, 'tests', 'ship', 'SPEC.md'), 'utf8').replace(/requested_at: "[^"]*"/, 'requested_at: X');
+    const manifest = JSON.parse(fs.readFileSync(path.join(ws.dir, 'tests', 'ship', 'outcome', 'HANDOFF.json'), 'utf8'));
+    const trace = readSpecTrace(path.join(ws.dir, 'tests', 'ship')).filter(e => e.type === 'handoff')[0];
+    assert.equal(fm.replace(/title: "[^"]*"/, 't'), headless.fm.replace(/title: "[^"]*"/, 't'));
+    for (const k of ['version', 'builder', 'from_stage', 'to_stage', 'base_commit', 'run_id']) {
+      assert.deepEqual(manifest[k], headless.manifest[k], k);
+    }
+    assert.deepEqual(manifest.tests, headless.manifest.tests);
+    assert.equal(trace.initiation, 'human');
+    assert.equal(headless.trace.initiation, 'automation');
+    assert.equal(trace.source, 'skill');
+    assert.equal(headless.trace.source, 'worker');
+  });
+});
+
+// ---------- tick × builder lease wiring ----------
+
+test('tick: a fresh pick is dispatched under a lease — held during spawn, trailer in the brief, expired-on-exit when the session never finalizes', () => {
+  withWorkspace({ specs: [{ slug: 'r', files: ['a.js'] }] }, ws => {
+    let leaseDuringSpawn = null, lockRun = null, prompt = null;
+    const { result } = runTick(ws, {
+      brief: 'THE BRIEF\n',
+      onSpawn: args => {
+        prompt = fs.readFileSync(args.argv[3], 'utf8');
+        leaseDuringSpawn = JSON.parse(fs.readFileSync(builderLeasePath(ws.dir, 'r'), 'utf8'));
+        lockRun = JSON.parse(fs.readFileSync(lockPathFor(ws.dir, 'claude'), 'utf8')).run_id;
+      },
+    });
+    assert.equal(result.code, 0);
+    // lease held for the session: actor = lane, run = this tick's run, intended stage
+    assert.equal(leaseDuringSpawn.actor, 'claude');
+    assert.equal(leaseDuringSpawn.run_id, lockRun);
+    assert.equal(leaseDuringSpawn.stage, 'in-progress');
+    assert.equal(leaseDuringSpawn.ttl_minutes, 120);   // lane lock timeout parity
+    // the brief tells the session its lease + renew/finalize commands
+    assert.match(prompt, new RegExp('--lease renew --spec r --agent claude --run ' + lockRun));
+    assert.match(prompt, /--finalize --spec r/);
+    // the child exited without finalizing → immediately, attributably expired
+    const after = JSON.parse(fs.readFileSync(builderLeasePath(ws.dir, 'r'), 'utf8'));
+    assert.equal(after.ended_reason, 'session-exited-0-without-finalize');
+    assert.equal(builderLeaseState(ws.dir, 'r', Date.now() + 1000).state, 'expired');
+    assert.equal(readLog(ws).pop().builder_lease, 'expired-on-exit');
+  });
+});
+
+test('tick: a session that finalizes under its dispatched lease leaves tests/ + manifest and a released lease', () => {
+  withWorkspace({
+    specs: [{
+      slug: 'kicked', stage: 'in-progress', status: 'in-progress', claimedBy: 'claude',
+      files: ['a.js'], extraFm: ['claimed_at: "2026-07-25"'],
+      verifyMd: '# Verify request\n', feedback: '# Feedback\n',
+    }],
+    files: {
+      'in-progress/kicked/outcome/BUILDER.diff': 'diff\n',
+      '_dispatch/kicked.json': JSON.stringify({ spec: 'kicked', mode: 'continuation', status: 'pending' }),
+    },
+  }, ws => {
+    const { result } = runTick(ws, {
+      onSpawn: () => {
+        // the spawned session's finalize, exactly as the trailer instructs
+        const runId = JSON.parse(fs.readFileSync(lockPathFor(ws.dir, 'claude'), 'utf8')).run_id;
+        const r = finalizeBuilderHandoff({
+          wsDir: ws.dir, slug: 'kicked', actor: 'claude', runId,
+          baseCommit: 'abc123', tests: GREEN, initiation: 'continuation', source: 'worker',
+        });
+        assert.equal(r.ok, true);
+      },
+    });
+    assert.equal(result.code, 0);
+    assert.ok(fs.existsSync(path.join(ws.dir, 'tests', 'kicked', 'outcome', 'HANDOFF.json')));
+    assert.equal(fs.existsSync(builderLeasePath(ws.dir, 'kicked')), false);
+    assert.equal(readLog(ws).pop().builder_lease, 'released');
+    // continuation lease was acquired at the spec's observed stage
+  });
+});
+
+test('tick: a live foreign builder lease holds the spawn — exit 2, no lock, no prompt, nothing executed', () => {
+  withWorkspace({ specs: [{ slug: 'r', files: ['a.js'] }] }, ws => {
+    const held = acquireBuilderLease(ws.dir, { slug: 'r', actor: 'codex', runId: 'codex-r7' });
+    assert.equal(held.ok, true);
+    const { result, lines, spawns } = runTick(ws);
+    assert.equal(result.code, 2);
+    assert.equal(result.reason, 'lease_held');
+    assert.equal(spawns.length, 0);
+    assert.match(lines.join('\n'), /builder lease held for specs\/r\/ by codex \(run codex-r7/);
+    assert.equal(fs.existsSync(lockPathFor(ws.dir, 'claude')), false);
+    assert.equal(fs.existsSync(path.join(ws.dir, '_metrics', 'worker-prompts')), false);
+    // the foreign lease is untouched
+    assert.equal(JSON.parse(fs.readFileSync(builderLeasePath(ws.dir, 'r'), 'utf8')).actor, 'codex');
+    // once it expires, the next tick proceeds normally
+    expireBuilderLease(ws.dir, { slug: 'r', actor: 'codex', runId: 'codex-r7', reason: 'test' });
+    const next = runTick(ws);
+    assert.equal(next.result.code, 0);
+    assert.equal(next.result.spawned, true);
+  });
+});
+
+test('tick: dry run stays write-free even with the lease gate in play', () => {
+  withWorkspace({ specs: [{ slug: 'r', files: ['a.js'] }] }, ws => {
+    const { result } = runTick(ws, { dryRun: true });
+    assert.equal(result.code, 0);
+    assert.equal(fs.existsSync(builderLeasePath(ws.dir, 'r')), false);
+    assert.equal(fs.existsSync(path.join(ws.dir, '_metrics', 'builder-leases')), false);
+  });
+});
+
+// ---------- bin/tl-worker.js lease/finalize wiring (real subprocess smoke) ----------
+
+test('bin: --lease acquire/renew/show and --finalize drive the same contract from the CLI', () => {
+  const { spawnSync } = require('node:child_process');
+  const bin = path.join(ROOT, 'bin', 'tl-worker.js');
+  const cli = args => {
+    const r = spawnSync(process.execPath, [bin, ...args], { cwd: ROOT, encoding: 'utf8' });
+    let out = null;
+    try { out = JSON.parse(r.stdout); } catch { /* fail() paths print to stderr */ }
+    return { status: r.status, out, stderr: r.stderr };
+  };
+  withWorkspace({
+    specs: [{
+      slug: 'ship', stage: 'in-progress', status: 'in-progress', claimedBy: 'claude',
+      files: ['a.js'], verifyMd: '# Verify request\n', feedback: '# Feedback\n',
+    }],
+    files: { 'in-progress/ship/outcome/BUILDER.diff': 'diff\n' },
+  }, ws => {
+    const acq = cli([ws.name, '--lease', 'acquire', '--spec', 'ship', '--agent', 'claude', '--run', 'claude-r1', '--stage', 'in-progress']);
+    assert.equal(acq.status, 0, acq.stderr);
+    assert.equal(acq.out.ok, true);
+
+    const renew = cli([ws.name, '--lease', 'renew', '--spec', 'ship', '--agent', 'claude', '--run', 'claude-r1']);
+    assert.equal(renew.status, 0, renew.stderr);
+    assert.equal(renew.out.lease.run_id, 'claude-r1');
+
+    const foreign = cli([ws.name, '--lease', 'renew', '--spec', 'ship', '--agent', 'codex', '--run', 'x']);
+    assert.equal(foreign.status, 1);
+    assert.equal(foreign.out.reason, 'foreign-lease');
+
+    const show = cli([ws.name, '--lease', 'show', '--spec', 'ship']);
+    assert.equal(show.status, 0);
+    assert.equal(show.out.state, 'live');
+
+    const testsFile = path.join(ws.dir, '_metrics', 'ship-tests.json');
+    fs.mkdirSync(path.dirname(testsFile), { recursive: true });
+    fs.writeFileSync(testsFile, JSON.stringify(GREEN));
+    const fin = cli([
+      ws.name, '--finalize', '--spec', 'ship', '--agent', 'claude', '--run', 'claude-r1',
+      '--base', 'abc123', '--tests', testsFile, '--initiation', 'human', '--source', 'skill',
+    ]);
+    assert.equal(fin.status, 0, fin.stderr);
+    assert.equal(fin.out.ok, true);
+    assert.equal(fin.out.path, 'tests/ship/');
+    assert.ok(fs.existsSync(path.join(ws.dir, 'tests', 'ship', 'outcome', 'HANDOFF.json')));
+    assert.equal(fs.existsSync(builderLeasePath(ws.dir, 'ship')), false);
+
+    // refusals exit 1 with the typed result on stdout
+    const again = cli([ws.name, '--finalize', '--spec', 'ship', '--agent', 'claude', '--run', 'claude-r9',
+      '--base', 'abc123', '--tests', testsFile]);
+    assert.equal(again.status, 0);                       // already_finalized is ok:true
+    assert.equal(again.out.already_finalized, true);
+    const stale = cli([ws.name, '--finalize', '--spec', 'ghost', '--agent', 'claude', '--run', 'r',
+      '--base', 'abc123', '--tests', testsFile]);
+    assert.equal(stale.status, 1);
+    assert.equal(stale.out.reason, 'stale-stage');
+  });
+});
