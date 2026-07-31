@@ -165,6 +165,124 @@ test('autoInitiateDial: garbage caps fall back to defaults; valid values stick',
   assert.deepEqual(ok.lanes, ['codex']);       // lowercased, empties dropped
 });
 
+// ---------- sample rate (`auto_initiate_rate`) ----------
+
+test('autoInitiateDial: rate defaults to 1.0 when on, 0 when off; garbage falls back to 1.0; valid values stick', () => {
+  assert.equal(autoInitiateDial({ auto_initiate: true }).rate, 1.0);          // absent = every eligible claim (pre-rate behavior)
+  assert.equal(autoInitiateDial({}).rate, 0);                                 // dial off = nothing initiates
+  assert.equal(autoInitiateDial({ auto_initiate_rate: 0.25 }).rate, 0);       // rate without the dial is still off
+  for (const garbage of ['lots', -0.1, 1.5, true, false, null, '']) {
+    assert.equal(autoInitiateDial({ auto_initiate: true, auto_initiate_rate: garbage }).rate, 1.0, String(garbage));
+  }
+  assert.equal(autoInitiateDial({ auto_initiate: true, auto_initiate_rate: 0.25 }).rate, 0.25);
+  assert.equal(autoInitiateDial({ auto_initiate: true, auto_initiate_rate: 0 }).rate, 0);
+  assert.equal(autoInitiateDial({ auto_initiate: true, auto_initiate_rate: '0.5' }).rate, 0.5); // numeric string ok
+});
+
+test('rate 0 never initiates — deterministic sample_rate skip, no draw, no artifacts beyond the log', () => {
+  withWorkspace({ specs: [{ slug: 'r', files: ['a.js'] }] }, ws => {
+    const bomb = () => { throw new Error('rate 0 must not draw the RNG'); };
+    const out = maybeAutoInitiateExperiment({
+      wsDir: ws.dir, specPath: 'specs/r/', spec: specObj('r'),
+      triageCfg: cfg({ auto_initiate_rate: 0 }), repoDir: ROOT, sampleRng: bomb, rng: bomb,
+    });
+    assert.equal(out.decision, 'skipped');
+    assert.equal(out.reason, 'sample_rate');
+    assert.equal(experimentDirs(ws).length, 0);
+
+    const row = readAutoInitiationLog(ws.dir).pop();
+    assert.equal(row.decision, 'skipped');
+    assert.equal(row.level, 'debug');
+    assert.equal(row.reason, 'sample_rate');
+    assert.equal(row.experiment_id, null);
+    assert.equal(row.policy.auto_initiate_rate, 0);
+    assert.equal(row.policy.sample_draw, null);   // no Bernoulli draw at rate 0
+  });
+});
+
+test('rate 1 draws nothing and matches pre-rate initiation — the RNG is untouched by the sample gate', () => {
+  withWorkspace({ specs: [{ slug: 'r', files: ['a.js'] }] }, ws => {
+    const out = maybeAutoInitiateExperiment({
+      wsDir: ws.dir, specPath: 'specs/r/', spec: specObj('r'),
+      triageCfg: cfg({ auto_initiate_rate: 1 }), repoDir: ROOT,
+      sampleRng: () => { throw new Error('rate 1 must not draw the sample RNG'); },
+    });
+    assert.equal(out.decision, 'initiated');
+    assert.equal(readAutoInitiationLog(ws.dir).pop().policy.auto_initiate_rate, 1);
+  });
+});
+
+test('mid rate: injected RNG decides the Bernoulli trial — draw < rate initiates, draw >= rate skips', () => {
+  withWorkspace({ specs: [{ slug: 'r', files: ['a.js'] }, { slug: 's', files: ['b.js'] }] }, ws => {
+    const config = cfg({ auto_initiate_rate: 0.5 });
+    const miss = maybeAutoInitiateExperiment({
+      wsDir: ws.dir, specPath: 'specs/r/', spec: specObj('r'),
+      triageCfg: config, repoDir: ROOT, sampleRng: () => 0.9,
+    });
+    assert.equal(miss.decision, 'skipped');
+    assert.equal(miss.reason, 'sample_rate');
+    assert.equal(readAutoInitiationLog(ws.dir).pop().policy.sample_draw, 0.9);
+    assert.equal(experimentDirs(ws).length, 0);
+
+    const hit = maybeAutoInitiateExperiment({
+      wsDir: ws.dir, specPath: 'specs/s/', spec: specObj('s'),
+      triageCfg: config, repoDir: ROOT, sampleRng: () => 0.1,
+    });
+    assert.equal(hit.decision, 'initiated');
+    assert.equal(experimentDirs(ws).length, 1);
+  });
+});
+
+test('sample misses never touch budgets: skips are not initiations, and the gate runs before any budget hold', () => {
+  withWorkspace({ specs: [{ slug: 'r', files: ['a.js'] }, { slug: 's', files: ['b.js'] }, { slug: 't', files: ['c.js'] }] }, ws => {
+    const config = cfg({ auto_initiate_rate: 0.5, auto_initiate_daily_max: 1, auto_initiate_max_concurrent: 5 });
+    const t0 = new Date('2026-07-25T10:00:00Z');
+    const first = maybeAutoInitiateExperiment({
+      wsDir: ws.dir, specPath: 'specs/r/', spec: specObj('r'),
+      triageCfg: config, repoDir: ROOT, now: t0, sampleRng: () => 0.1,
+    });
+    assert.equal(first.decision, 'initiated');
+    assert.equal(autoInitiateBudget(ws.dir, t0.toISOString()).daily_used, 1);
+
+    // Budget is now exhausted — but a sampled-out claim is a sample_rate skip,
+    // never a held: the gate is cheaper than the budget read and a miss must
+    // not spend a log-visible hold on work that would not have initiated.
+    const miss = maybeAutoInitiateExperiment({
+      wsDir: ws.dir, specPath: 'specs/s/', spec: specObj('s'),
+      triageCfg: config, repoDir: ROOT, now: new Date('2026-07-25T10:01:00Z'), sampleRng: () => 0.9,
+    });
+    assert.equal(miss.decision, 'skipped');
+    assert.equal(miss.reason, 'sample_rate');
+    assert.equal(autoInitiateBudget(ws.dir, t0.toISOString()).daily_used, 1); // unchanged
+
+    // A sampled-IN claim under the exhausted budget still holds as before.
+    const held = maybeAutoInitiateExperiment({
+      wsDir: ws.dir, specPath: 'specs/t/', spec: specObj('t'),
+      triageCfg: config, repoDir: ROOT, now: new Date('2026-07-25T10:02:00Z'), sampleRng: () => 0.1,
+    });
+    assert.equal(held.decision, 'held');
+    assert.match(held.reason, /daily auto-experiment budget exhausted \(1\/1/);
+  });
+});
+
+test('explore_rate does not substitute for the sample rate — and vice versa', () => {
+  withWorkspace({ specs: [{ slug: 'r', files: ['a.js'] }, { slug: 's', files: ['b.js'] }] }, ws => {
+    // explore_rate 0 (pure exploitation) with no sample rate: still initiates.
+    const exploit = maybeAutoInitiateExperiment({
+      wsDir: ws.dir, specPath: 'specs/r/', spec: specObj('r'),
+      triageCfg: cfg({ explore_rate: 0 }), repoDir: ROOT,
+    });
+    assert.equal(exploit.decision, 'initiated');
+    // explore_rate 1 (always explore) with sample rate 0: never initiates.
+    const sampledOut = maybeAutoInitiateExperiment({
+      wsDir: ws.dir, specPath: 'specs/s/', spec: specObj('s'),
+      triageCfg: cfg({ explore_rate: 1, auto_initiate_rate: 0 }), repoDir: ROOT,
+    });
+    assert.equal(sampledOut.decision, 'skipped');
+    assert.equal(sampledOut.reason, 'sample_rate');
+  });
+});
+
 // ---------- dial-off inertness ----------
 
 test('inertness: absent experiments section — tick claims and spawns, zero experiment artifacts', () => {
@@ -438,6 +556,17 @@ test('failure-silent: maybeAutoInitiateExperiment never throws, even on a bogus 
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+// ---------- winner application stays human ----------
+
+test('auto-initiation never touches winner application: worker does not import or call experiment-apply', () => {
+  // Same ban the queue/runner/judge/automation modules carry — the worker
+  // tick (the auto-initiation host) must never grow a path into
+  // lib/experiment-apply.js; applying winners stays an explicit human action.
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'worker.js'), 'utf8');
+  assert.equal(/require\(['"]\.\/experiment-apply['"]\)/.test(src), false, 'lib/worker.js imports experiment-apply');
+  assert.equal(/applyWinner/.test(src), false, 'lib/worker.js references applyWinner');
 });
 
 // ---------- only fresh ready claims initiate ----------

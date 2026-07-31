@@ -36,6 +36,8 @@ const {
   buildLaneEnv,
   redactSecretValues,
   hostExecAllowed,
+  isAutoInitiated,
+  autoTestCommandAllowed,
 } = require('../lib/env-policy');
 const { runCandidate } = require('../lib/experiment-runner');
 const { queueExperiment, drainQueue, readQueueRows } = require('../lib/experiment-queue');
@@ -114,6 +116,7 @@ function queueDemo(ws, repo, candidates, extra = {}) {
     judge: extra.judge || { id: 'fixture-judge', agent_tool: 'fixture' },
     budgetUsd: extra.budgetUsd,
     timeoutMinutes: extra.timeoutMinutes,
+    initiatedBy: extra.initiatedBy,
     now: NOW,
   });
 }
@@ -267,6 +270,35 @@ test('hostExecAllowed: only a literal true opts in — truthy look-alikes fail c
   assert.equal(hostExecAllowed({}, {}), false);
 });
 
+test('hostExecAllowed: auto-initiated experiments refuse unconditionally — no row flag or drain opt-in widens the auto path', () => {
+  const autoMeta = { initiated_by: 'policy' };
+  // Both opt-ins together still refuse when the experiment is auto-initiated.
+  assert.equal(hostExecAllowed({ unsafe_host_exec: true }, { allowUnsafeHostExec: true, meta: autoMeta }), false);
+  assert.equal(hostExecAllowed({ unsafe_host_exec: true }, { meta: autoMeta }), false);
+  assert.equal(hostExecAllowed({}, { allowUnsafeHostExec: true, meta: autoMeta }), false);
+  // Human provenance (absent meta, absent stamp, other values) keeps the old contract.
+  assert.equal(hostExecAllowed({ unsafe_host_exec: true }, { meta: {} }), true);
+  assert.equal(hostExecAllowed({ unsafe_host_exec: true }, { meta: { initiated_by: 'human' } }), true);
+  assert.equal(isAutoInitiated({ initiated_by: 'policy' }), true);
+  assert.equal(isAutoInitiated({ initiated_by: 'human' }), false);
+  assert.equal(isAutoInitiated({}), false);
+  assert.equal(isAutoInitiated(null), false);
+});
+
+test('autoTestCommandAllowed: human experiments always may; auto experiments only on the literal opt-in dial', () => {
+  // Human provenance: the drain-level --test-command was the trust decision.
+  assert.equal(autoTestCommandAllowed({}, {}), true);
+  assert.equal(autoTestCommandAllowed(null, {}), true);
+  // Auto provenance: fails closed by default and on every truthy look-alike.
+  const auto = { initiated_by: 'policy' };
+  assert.equal(autoTestCommandAllowed(auto, {}), false);
+  assert.equal(autoTestCommandAllowed(auto, null), false);
+  for (const v of ['true', 1, 'yes', {}, []]) {
+    assert.equal(autoTestCommandAllowed(auto, { auto_initiate_allow_test_command: v }), false, String(v));
+  }
+  assert.equal(autoTestCommandAllowed(auto, { auto_initiate_allow_test_command: true }), true);
+});
+
 // ---------- runner end-to-end: provider lanes ----------
 
 test('provider spawn env is scrubbed with the lane\'s own auth passed back — proven from inside the spawned CLI', () => {
@@ -341,6 +373,41 @@ test('shell opt-in paths both work: row-level config.unsafe_host_exec and drain-
   // Drain-level opt-in: the explicit trusted drain runs the remaining row.
   const second = drainQueue(ws, { agent: 'shell', now: NOW, allowUnsafeHostExec: true });
   assert.deepEqual(second.ran.map(r => [r.row.candidate_id, r.status]), [['sh-drain', 'succeeded']]);
+});
+
+test('auto-initiated shell rows refuse host exec even with BOTH opt-ins — the command never executes on the auto path', () => {
+  const repo = mkRepo(); const ws = mkWorkspace();
+  const sentinel = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tl-envpol-auto-')), 'ran.txt');
+  // Worst case by construction: initiated_by "policy" (queued atomically by
+  // queueExperiment — the worker's auto path) AND a row-level unsafe_host_exec
+  // AND a drain-wide --unsafe-host-exec. Still refused, before execution.
+  queueDemo(ws, repo, [
+    { id: 'sh-auto', role: 'primary', agent_tool: 'shell', repo, command: `echo ran > ${sentinel}`, unsafe_host_exec: true },
+  ], { initiatedBy: 'policy' });
+
+  const result = drainQueue(ws, { agent: 'shell', now: NOW, allowUnsafeHostExec: true });
+  assert.deepEqual(result.ran.map(r => [r.row.candidate_id, r.status]), [['sh-auto', 'failed']]);
+  assert.match(result.ran[0].reason, /auto-initiated/);
+  assert.match(result.ran[0].reason, /initiated_by: policy/);
+  assert.match(result.ran[0].reason, /--unsafe-host-exec are ignored on the auto path/);
+  assert.match(result.ran[0].reason, /tl experiment queue/); // the concrete way out
+
+  // Fails CLOSED before host execution: no sentinel, repo untouched, artifact set intact.
+  assert.equal(fs.existsSync(sentinel), false, 'auto-path shell command must never execute');
+  assert.deepEqual(fs.readdirSync(repo).filter(f => f !== '.git').sort(), ['existing.txt']);
+  const row = readQueueRows(ws).find(r => r.candidate_id === 'sh-auto');
+  assert.equal(row.status, 'failed');
+  for (const f of ['PATCH.diff', 'FEEDBACK.md', 'METRICS.json', 'TRACE.jsonl']) {
+    assert.ok(fs.existsSync(path.join(candDir(ws, row), f)), `${f} missing`);
+  }
+  assert.match(readArtifact(ws, row, 'FEEDBACK.md'), /auto-initiated/);
+
+  // The same cohort queued by a human (no stamp) keeps the shipped opt-in contract.
+  queueDemo(ws, repo, [
+    { id: 'sh-human', role: 'primary', agent_tool: 'shell', repo, command: 'echo ok > ok.txt', unsafe_host_exec: true },
+  ], { experimentId: 'exp-human' });
+  const human = drainQueue(ws, { agent: 'shell', now: NOW });
+  assert.deepEqual(human.ran.map(r => [r.row.candidate_id, r.status]), [['sh-human', 'succeeded']]);
 });
 
 test('a trusted shell command still gets a scrubbed environment: ambient credentials are empty inside the run', () => {

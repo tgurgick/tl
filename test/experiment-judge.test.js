@@ -234,6 +234,79 @@ test('a failing test command fails the tests_pass gate and the candidate cannot 
   assert.match(fs.readFileSync(path.join(ws, '_experiments', 'exp-t', 'EXPERIMENT.md'), 'utf8'), /status: "failed"/);
 });
 
+// ---------- auto-initiated experiments: live test commands default OFF ----------
+
+test('auto-initiated judges refuse a drain-wide test command by default — tests_pass stays null, never a silent execution', () => {
+  const repo = mkRepo();
+  const ws = mkWorkspace(); // no TRIAGE.yml at all — the fail-closed default
+  const sentinel = path.join(os.tmpdir(), `tl-judge-auto-${process.pid}-${Math.random().toString(36).slice(2, 8)}.txt`);
+  queueDemo(ws, repo, undefined, { initiatedBy: 'policy' }); // fixture defaults, policy provenance
+  drainCandidatesOnly(ws, 'fixture');
+
+  const result = drainQueue(ws, {
+    agent: 'fixture', now: NOW, judges: true, repoDir: repo,
+    testCommand: `echo ran > ${sentinel}`,
+  });
+  assert.deepEqual(result.judged.map(j => [j.status, j.winner]), [['succeeded', 'fixture-a']]);
+
+  // The command never executed; the refusal is recorded honestly as null +
+  // note — declared unavailable, which does not fail the gate.
+  assert.equal(fs.existsSync(sentinel), false, 'auto-path judge test command must never execute');
+  const scores = JSON.parse(fs.readFileSync(path.join(ws, '_experiments', 'exp-t', 'evaluation', 'fixture-judge', 'SCORES.json'), 'utf8'));
+  for (const cid of ['fixture-a', 'fixture-b']) {
+    assert.equal(scores.candidates[cid].gates.patch_applies, true); // apply --check still runs — it executes nothing
+    assert.equal(scores.candidates[cid].gates.tests_pass, null);
+  }
+  const evaluation = fs.readFileSync(path.join(ws, '_experiments', 'exp-t', 'evaluation', 'fixture-judge', 'EVALUATION.md'), 'utf8');
+  assert.match(evaluation, /auto-initiated experiment \(initiated_by: policy\): live test command refused/);
+  assert.match(evaluation, /auto_initiate_allow_test_command/); // the concrete opt-in is named
+});
+
+test('the explicit dial widens it: auto_initiate_allow_test_command: true lets an auto judge run the test command', () => {
+  const repo = mkRepo();
+  const ws = mkWorkspace();
+  fs.writeFileSync(path.join(ws, 'TRIAGE.yml'), [
+    'experiments:',
+    '  enabled: true',
+    '  auto_initiate: true',
+    '  auto_initiate_allow_test_command: true',
+    '',
+  ].join('\n'));
+  queueDemo(ws, repo, undefined, { initiatedBy: 'policy' });
+  drainCandidatesOnly(ws, 'fixture');
+
+  const result = drainQueue(ws, { agent: 'fixture', now: NOW, judges: true, repoDir: repo, testCommand: 'true' });
+  assert.deepEqual(result.judged.map(j => [j.status, j.winner]), [['succeeded', 'fixture-a']]);
+  const scores = JSON.parse(fs.readFileSync(path.join(ws, '_experiments', 'exp-t', 'evaluation', 'fixture-judge', 'SCORES.json'), 'utf8'));
+  assert.equal(scores.candidates['fixture-a'].gates.tests_pass, true); // the command actually ran
+});
+
+test('the opt-in dial requires literal true — a garbage value stays fail-closed; human experiments are untouched by all of it', () => {
+  const repo = mkRepo();
+  const ws = mkWorkspace();
+  fs.writeFileSync(path.join(ws, 'TRIAGE.yml'), [
+    'experiments:',
+    '  enabled: true',
+    '  auto_initiate: true',
+    '  auto_initiate_allow_test_command: "yes"', // truthy garbage, not literal true
+    '',
+  ].join('\n'));
+  queueDemo(ws, repo, undefined, { initiatedBy: 'policy' });
+  drainCandidatesOnly(ws, 'fixture');
+  const auto = drainQueue(ws, { agent: 'fixture', now: NOW, judges: true, repoDir: repo, testCommand: 'true' });
+  assert.equal(auto.judged[0].status, 'succeeded');
+  const autoScores = JSON.parse(fs.readFileSync(path.join(ws, '_experiments', 'exp-t', 'evaluation', 'fixture-judge', 'SCORES.json'), 'utf8'));
+  assert.equal(autoScores.candidates['fixture-a'].gates.tests_pass, null);
+
+  // A human-queued experiment in the SAME workspace runs the test command as shipped.
+  queueDemo(ws, repo, undefined, { experimentId: 'exp-human' });
+  drainCandidatesOnly(ws, 'fixture');
+  const human = drainQueue(ws, { agent: 'fixture', now: NOW, judges: true, repoDir: repo, testCommand: 'true' });
+  assert.equal(human.judged[0].status, 'succeeded');
+  const humanScores = JSON.parse(fs.readFileSync(path.join(ws, '_experiments', 'exp-human', 'evaluation', 'fixture-judge', 'SCORES.json'), 'utf8'));
+  assert.equal(humanScores.candidates['fixture-a'].gates.tests_pass, true);
+});
+
 // ---------- hard gates: patch that won't apply ----------
 
 test('a patch that fails git apply --check is invalid_output — gate-failed, still scored, never the winner', () => {
