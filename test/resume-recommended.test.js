@@ -212,3 +212,15 @@ test('open loops: does not flag all-done intent as starving', () => {
   const loops = collectOpenLoops({ specs, threads: [], intents, goals, now });
   assert.equal(loops.filter(l => l.kind === 'starving').length, 0);
 });
+
+test('collectOpenLoops: healthLoops from doctor surface as open loops', () => {
+  const loops = collectOpenLoops({
+    specs: [], threads: [], intents: [], goals: [], now,
+    healthLoops: [
+      { kind: 'capacity', text: 'verifier unsafe: gemini — allow_network', fix: 'set allow_network: false' },
+      { kind: 'lifecycle', text: 'duplicate-stage: twins', fix: 'repair board' },
+    ],
+  });
+  assert.ok(loops.some(l => l.health && /unsafe/.test(l.title)));
+  assert.ok(loops.some(l => l.health && /duplicate-stage/.test(l.title)));
+});

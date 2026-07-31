@@ -208,6 +208,26 @@ function readWorkspace(ws) {
       lanes: st.lanes,
       issues: st.issues.map(i => ({ lane: i.lane, problem: i.problem })),
       experiment: st.automation.experiment,
+      // Shared doctor payload (lib/doctor.js) — observe only.
+      health: st.health ? {
+        ok: st.health.ok,
+        stuck_at_tests: st.health.stuck_at_tests,
+        lifecycle: {
+          ok: st.health.lifecycle.summary.ok,
+          total: st.health.lifecycle.summary.total,
+          findings: (st.health.lifecycle.findings || []).slice(0, 20).map(f => ({
+            kind: f.kind, slug: f.slug, stage: f.stage || null, detail: f.detail || null, fix: f.fix || null,
+          })),
+        },
+        capacity: {
+          ok: st.health.capacity.summary.ok,
+          available: st.health.capacity.summary.available || [],
+          lanes: (st.health.capacity.verifier_lanes || []).map(r => ({
+            id: r.id, agent: r.agent, state: r.state, ok: r.ok,
+            reason: r.reason || null, fix: r.fix || null,
+          })),
+        },
+      } : null,
     };
   } catch { automation = null; }
 

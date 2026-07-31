@@ -2231,6 +2231,18 @@ function renderResume(wss) {
       if (auto.stuckAtTests > 0) {
         parts.push(`<span class="stuck">stuck at tests: ${auto.stuckAtTests}</span>`);
       }
+      const cap = auto.health && auto.health.capacity;
+      if (cap && !cap.ok) {
+        const blocked = (cap.lanes || []).filter(l => !l.ok).map(l => l.state).filter(Boolean);
+        const uniq = [...new Set(blocked)];
+        if (uniq.length) parts.push(`<span class="stuck">verifier: ${esc(uniq.join(', '))}</span>`);
+      } else if (cap && cap.ok && (cap.available || []).length) {
+        parts.push(`<span>verifier: ${esc((cap.available || []).join(', '))}</span>`);
+      }
+      const life = auto.health && auto.health.lifecycle;
+      if (life && !life.ok && life.total > 0) {
+        parts.push(`<span class="stuck">lifecycle: ${life.total} finding${life.total === 1 ? '' : 's'}</span>`);
+      }
       autoEl.innerHTML = parts.join(' · ');
       autoEl.title = 'run — read-only; tl up installs the schedule; the UI never spawns agents';
       block.appendChild(autoEl);

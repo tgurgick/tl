@@ -348,3 +348,35 @@ test('generateLaunchd-via-artifacts: XML-escapes & in paths so the plist stays p
   assert.match(art.plist.content, /<key>WorkingDirectory<\/key><string>\/repo &amp; co<\/string>/);
   assert.ok(!/<string>[^<]*&(?!amp;|lt;|gt;)/.test(art.plist.content));
 });
+
+test('automationStatus: attaches shared doctor health (capacity + stuck)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-auto-health-'));
+  const home = path.join(dir, 'home');
+  try {
+    fs.mkdirSync(path.join(dir, 'tests', 'stuck'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'tests', 'stuck', 'SPEC.md'),
+      '---\ntitle: stuck\nstatus: tests\nawaiting_verifier: true\nclaimed_by: claude\n---\n\n## Objective\nx\n');
+    const cfg = {
+      lanes: { claude: { command: 'claude -p {prompt_file}' } },
+      automation: { enabled: false },
+      verification: {
+        verifier_lanes: {
+          claude: { agent: 'claude', isolated: true, sandbox: 'required', command: ['claude'] },
+        },
+      },
+    };
+    const st = automationStatus({
+      wsDir: dir, wsName: 'w', root: ROOT, cfg, home,
+      which: () => '/bin/claude', env: { CLAUDE_CODE_OAUTH_TOKEN: 'x' },
+    });
+    assert.equal(st.stuckAtTests, 1);
+    assert.ok(st.health);
+    assert.equal(st.health.stuck_at_tests, 1);
+    assert.ok(st.health.capacity);
+    // builder-only: only awaiting work was built by claude
+    const row = st.health.capacity.verifier_lanes.find(r => r.agent === 'claude');
+    assert.equal(row.state, 'builder-only');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

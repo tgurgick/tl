@@ -73,6 +73,9 @@ const {
   experimentScheduleSummary, laneAvailability, formatLaneAvailability,
 } = require('../lib/automation');
 const {
+  diagnoseWorkspace, formatLifecycleFindings, formatCapacityRows, healthOpenLoops,
+} = require('../lib/doctor');
+const {
   verifyTick, applyVerifyHumanDecision, verifierStatusOf, readVerifierLanes,
   verifierLaneIssues, builderOf, writeVerifyRequest, readVerifyRequests,
   maybeAutoInitiateExperiment, workspaceRepoDir, appendSpecTraceEvent,
@@ -354,6 +357,31 @@ function cmdResume(args) {
   if (!loops.length) out('none — clean.');
   else loops.forEach(l => out('- ' + l));
 
+  // Shared health classifier — lifecycle findings + blocked verifier capacity.
+  try {
+    const cfg = triage ? parseYaml(triage) : {};
+    const health = diagnoseWorkspace(ws.dir, {
+      cfg,
+      which: bin => {
+        try {
+          const r = spawnSync('which', [bin], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+          return r.status === 0 ? String(r.stdout || '').trim() : '';
+        } catch { return ''; }
+      },
+    });
+    const hLoops = healthOpenLoops(health);
+    out('\n## Health (lifecycle · verifier capacity)');
+    if (!hLoops.length && health.lifecycle.summary.ok) {
+      out('lifecycle ok'
+        + (health.capacity.summary.ok
+          ? ` · verifier available: ${(health.capacity.summary.available || []).join(', ') || '(none)'}`
+          : ` · verifier blocked: ${(health.capacity.verifier_lanes || []).filter(r => !r.ok).map(r => r.state).join(', ')}`));
+    } else {
+      for (const line of formatLifecycleFindings(health.lifecycle.findings)) out(line);
+      for (const line of formatCapacityRows(health.capacity.verifier_lanes)) out(line);
+    }
+  } catch { /* best-effort — snapshot still useful without health */ }
+
   // backlog reference
   out('\n## Backlog · parked (reference)');
   out(`ready: ${counts.ready}  ·  triage: ${counts.triage}  ·  threads: ${threads.length} (${parked} parked)`);
@@ -570,17 +598,26 @@ async function cmdUp(args) {
     : ''));
 
   out('\n## Lane availability');
+  const whichBin = bin => {
+    try {
+      const r = spawnSync('which', [bin], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      return r.status === 0 ? String(r.stdout || '').trim() : '';
+    } catch { return ''; }
+  };
   const availability = laneAvailability({
     wsDir: ws.dir,
     cfg,
-    which: bin => {
-      try {
-        const r = spawnSync('which', [bin], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-        return r.status === 0 ? String(r.stdout || '').trim() : '';
-      } catch { return ''; }
-    },
+    which: whichBin,
   });
   for (const line of formatLaneAvailability(availability)) out(line);
+
+  // Shared lifecycle + verifier capacity (lib/doctor.js) — same object the
+  // cockpit and automation status consume. Observation only.
+  const health = diagnoseWorkspace(ws.dir, { cfg, which: whichBin });
+  out('\n## Lifecycle integrity');
+  for (const line of formatLifecycleFindings(health.lifecycle.findings)) out(line);
+  out('\n## Verifier capacity');
+  for (const line of formatCapacityRows(health.capacity.verifier_lanes)) out(line);
 
   // ---- (d) one next human action ----
   const specs = readAllSpecs(ws.dir);
