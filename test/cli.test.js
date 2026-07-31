@@ -1008,3 +1008,110 @@ test('run brief: same-basename sibling repo never enables dirty-git holds', () =
     fs.rmSync(scratchSibling, { recursive: true, force: true });
   }
 });
+
+// ---------- tl recover (prepared-handoff recovery; lib/stall.js recovery contract) ----------
+//
+// The CLI surface only — the classification/refusal matrix is covered in
+// test/stall.test.js. Here: usage lists the command, list/inspect are
+// read-only and typed, act finishes the committed hand-off through the
+// finalize path, and a live builder lease is a typed never-steal refusal.
+
+// Turn an in-progress scaffold spec into a committed builder hand-off: stamp
+// the finalize frontmatter (byte-stable re-stamp), write outcome artifacts,
+// commit the terminal manifest, and drop a builder lease in the given state.
+function prepareCommittedHandoff(name, slug, { lease = 'expired', builder = 'claude', runId = 'run-cli-1' } = {}) {
+  const { createHandoff } = require('../lib/handoff');
+  const { setFrontmatterField } = require('../lib/frontmatter');
+  const dir = workspacePath(name, 'in-progress', slug);
+  const specFile = path.join(dir, 'SPEC.md');
+  let t = fs.readFileSync(specFile, 'utf8');
+  t = setFrontmatterField(t, 'claimed_by', builder);
+  t = setFrontmatterField(t, 'claimed_at', '2026-07-10');
+  t = setFrontmatterField(t, 'status', 'tests');
+  t = setFrontmatterField(t, 'awaiting_verifier', true);
+  t = setFrontmatterField(t, 'requested_at', '2026-07-10');
+  fs.writeFileSync(specFile, t);
+  fs.mkdirSync(path.join(dir, 'outcome'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'outcome', 'FEEDBACK.md'), 'built; gates green\n');
+  fs.writeFileSync(path.join(dir, 'outcome', 'BUILDER.diff'), 'diff --git a/x b/x\n');
+  fs.writeFileSync(path.join(dir, 'VERIFY.md'), '---\nawaiting_verifier: true\nbuilder: ' + builder + '\n---\n\nverify\n');
+  const created = createHandoff({
+    specDir: dir, builder, from_stage: 'in-progress', to_stage: 'tests',
+    base_commit: 'abc123', run_id: runId, tests: [{ command: 'npm test', ok: true }],
+    artifacts: ['VERIFY.md'],
+  });
+  assert.equal(created.ok, true, JSON.stringify(created));
+  if (lease !== 'none') {
+    const lf = workspacePath(name, '_metrics', 'builder-leases', slug + '.json');
+    fs.mkdirSync(path.dirname(lf), { recursive: true });
+    const delta = lease === 'live' ? 60 * 60000 : -60 * 60000;
+    fs.writeFileSync(lf, JSON.stringify({
+      slug, actor: builder, run_id: runId, stage: 'in-progress',
+      issued_at: new Date(Date.now() - 2 * 3600000).toISOString(),
+      heartbeat_at: new Date(Date.now() - 3600000).toISOString(),
+      expires_at: new Date(Date.now() + delta).toISOString(),
+      ttl_minutes: 120, pid: 4242,
+    }, null, 2) + '\n');
+  }
+  return dir;
+}
+
+test('usage: tl recover is listed with the never-steal and grace contract', () => {
+  const r = run('help');
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /tl recover \[workspace\] \[spec\]/);
+  assert.match(r.stdout, /the builder stays the builder/);
+  assert.match(r.stdout, /--allow-no-lease/);
+  assert.match(r.stdout, /FEEDBACK\.md alone is never completion/);
+});
+
+test('tl recover: list is read-only and distinguishes recoverable vs active vs plain stalls', () => {
+  withWorkspace([
+    { slug: 'committed-dead', stage: 'in-progress' },
+    { slug: 'committed-live', stage: 'in-progress' },
+    { slug: 'plain-stall', stage: 'in-progress', frontmatter: 'claimed_by: gemini\nclaimed_at: "2026-07-01"' },
+  ], name => {
+    prepareCommittedHandoff(name, 'committed-dead', { lease: 'expired' });
+    prepareCommittedHandoff(name, 'committed-live', { lease: 'live' });
+    const r = run('recover', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /RECOVERY CANDIDATES/);
+    assert.match(r.stdout, /committed-dead[^\n]*RECOVERABLE/);
+    assert.match(r.stdout, /committed-live[^\n]*ACTIVE — live builder lease/);
+    assert.match(r.stdout, /1 in-progress claim\(s\) without a committed handoff[^\n]*tl reclaim/);
+    assert.match(r.stdout, /nothing was changed by this listing/);
+    assert.ok(fs.existsSync(workspacePath(name, 'in-progress', 'committed-dead', 'SPEC.md')));
+    assert.ok(fs.existsSync(workspacePath(name, 'in-progress', 'committed-live', 'SPEC.md')));
+  });
+});
+
+test('tl recover <spec> --by --reason: finishes the hand-off; builder attribution and manifest preserved', () => {
+  withWorkspace([{ slug: 'finish-me', stage: 'in-progress' }], name => {
+    const dir = prepareCommittedHandoff(name, 'finish-me');
+    const before = fs.readFileSync(path.join(dir, 'outcome', 'HANDOFF.json'));
+    const r = run('recover', name, 'finish-me', '--by', 'trevor', '--reason', 'session died after committing');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /recovered finish-me: in-progress\/finish-me\/ → tests\/finish-me\/ \(lease-expired\)/);
+    assert.match(r.stdout, /builder attribution preserved \(claude, run run-cli-1\)/);
+    const toDir = workspacePath(name, 'tests', 'finish-me');
+    assert.deepEqual(fs.readFileSync(path.join(toDir, 'outcome', 'HANDOFF.json')), before); // byte-identical
+    const { parseFrontmatter } = require('../lib/parse');
+    const meta = parseFrontmatter(fs.readFileSync(path.join(toDir, 'SPEC.md'), 'utf8')).meta;
+    assert.equal(meta.claimed_by, 'claude'); // the builder, not the recoverer
+    assert.match(fs.readFileSync(path.join(toDir, 'NOTES.md'), 'utf8'), /recovered by: trevor/);
+  });
+});
+
+test('tl recover: live lease refuses non-zero with holder; inspect stays read-only', () => {
+  withWorkspace([{ slug: 'hands-off', stage: 'in-progress' }], name => {
+    prepareCommittedHandoff(name, 'hands-off', { lease: 'live' });
+    const inspect = run('recover', name, 'hands-off');
+    assert.equal(inspect.status, 0, inspect.stderr);
+    assert.match(inspect.stdout, /RECOVERY INSPECT/);
+    assert.match(inspect.stdout, /ACTIVE — live builder lease \(claude/);
+    const act = run('recover', name, 'hands-off', '--by', 'trevor', '--reason', 'now please');
+    assert.notEqual(act.status, 0);
+    assert.match(act.stderr, /recovery never steals live builders/);
+    assert.ok(fs.existsSync(workspacePath(name, 'in-progress', 'hands-off', 'SPEC.md')));
+  });
+});

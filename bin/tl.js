@@ -59,7 +59,7 @@ const SKILLS = path.join(INSTALL_ROOT, 'skills');
 const { parseFrontmatter, parseYaml } = require('../lib/parse');
 const { safeRead, readFirst, isDir, mtime } = require('../lib/workspace');
 const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch, calmCap, selectContinuations, repoHoldReason, sameLocalRepo } = require('../lib/batch');
-const { stallThresholdMs, detectStalledClaims, reclaimStalled } = require('../lib/stall');
+const { stallThresholdMs, detectStalledClaims, reclaimStalled, classifyRecovery, recoverPreparedHandoff } = require('../lib/stall');
 const { runFixtureExperiment } = require('../lib/experiment-fixture');
 const { selectWinner, applyWinner, rejectWinner, sendWinnerToReview } = require('../lib/experiment-apply');
 const { queueExperiment, drainQueue, readQueueRows } = require('../lib/experiment-queue');
@@ -945,6 +945,126 @@ function cmdReclaim(args) {
     ? `builder attribution preserved (claimed_by: ${res.priorClaimedBy || 'unknown'}) — awaiting independent verification: tl verify ${ws.name}`
     : `prior claim (${res.priorClaimedBy || 'unstamped'}) recorded in NOTES.md; spec re-queued as ready.`);
   out(`idle ~${res.idleHours}h > threshold ${res.thresholdHours}h — the why is logged in ${res.to}NOTES.md`);
+}
+
+// ---------- tl recover ----------
+
+// Finish a COMMITTED builder handoff whose session died before the move —
+// the counterpart to reclaim (which owns pre-manifest stalls). Same CLI
+// discipline: list-then-act, --by/--reason mandatory to act, typed refusals,
+// one spec at a time, never a sweep.
+//
+//   tl recover [ws]                    list recovery candidates, act on nothing
+//   tl recover [ws] <spec>             inspect ONE spec's typed state (read-only)
+//   tl recover [ws] <spec> --by <who> --reason "<why>" [--allow-no-lease]
+//                                      finish that one committed hand-off
+//
+// The contract lives in lib/stall.js classifyRecovery/recoverPreparedHandoff:
+// eligibility needs a valid terminal HANDOFF.json for in-progress → tests and
+// an EXPIRED builder lease; a live lease refuses with holder details (never
+// steal a live builder); partial writes, invalid/changed manifests, and
+// missing manifests refuse (FEEDBACK.md alone is never completion). The
+// recovery delegates to the worker finalize path — byte-identical manifest
+// reuse, stage-CAS move — so the original builder keeps attribution; the
+// recoverer is logged separately in NOTES.md and the spec's TRACE.jsonl.
+function cmdRecover(args) {
+  let by = null, reason = null, allowNoLease = false;
+  const pos = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--by') by = args[++i];
+    else if (args[i].startsWith('--by=')) by = args[i].slice(5);
+    else if (args[i] === '--reason') reason = args[++i];
+    else if (args[i].startsWith('--reason=')) reason = args[i].slice(9);
+    else if (args[i] === '--allow-no-lease') allowNoLease = true;
+    else pos.push(args[i]);
+  }
+  const ws = resolveWorkspace(pos[0]);
+  const slug = pos[1] ? specSlug(pos[1]) : null;
+  const cfg = parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '') || {};
+  const thresholdMs = stallThresholdMs(cfg);
+  const thresholdHours = Math.round(thresholdMs / 3600000);
+
+  const stateLine = (c) => {
+    switch (c.state) {
+      case 'recoverable':
+        return `RECOVERABLE — valid HANDOFF.json (builder ${c.builder}, run ${c.run_id}), lease expired, idle ~${Math.round((c.idleMs || 0) / 3600000)}h`;
+      case 'no-lease':
+        return `NO-LEASE — valid manifest (builder ${c.builder}) but no builder lease on record (legacy). Explicit grace: --allow-no-lease, requires idle > ${thresholdHours}h (now ~${Math.round((c.idleMs || 0) / 3600000)}h)`;
+      case 'active':
+        return `ACTIVE — live builder lease (${(c.holder && c.holder.actor) || 'unknown'}, run ${(c.holder && c.holder.run_id) || '?'}, expires ${(c.holder && c.holder.expires_at) || 'per file age'}) — never steal a live builder`;
+      case 'partial':
+        return `PARTIAL — ${c.detail || c.reason} — not a committed handoff; not recoverable`;
+      case 'invalid':
+        return `INVALID — manifest refused (${c.reason}) — changed bytes / mismatch refuse; inspect by hand`;
+      case 'finalized':
+        return `FINALIZED — already in tests/ with a valid manifest (builder ${c.builder}) — nothing to recover`;
+      case 'conflict':
+        return `CONFLICT — spec observed in ${(c.observed_stages || []).join(' AND ')} — repair the duplicate before recovery`;
+      default:
+        return `${String(c.state || 'unknown').toUpperCase()} — ${c.detail || c.reason || ''}`;
+    }
+  };
+
+  if (!slug) {
+    const specs = readAllSpecs(ws.dir).filter(s => s.stage === 'in-progress' && s.dir);
+    out(`===== RECOVERY CANDIDATES: ${ws.name} (committed handoffs only) =====\n`);
+    let shown = 0, plain = 0;
+    for (const s of specs) {
+      const c = classifyRecovery(ws.dir, specSlug(s.path), {});
+      if (c.state === 'no-manifest') { plain++; continue; }
+      shown++;
+      out(`- ${s.title} (${s.path}) — ${stateLine(c)}`);
+      if (c.state === 'recoverable') out(`    run: tl recover ${ws.name} ${c.slug} --by <you> --reason "<why>"`);
+      if (c.state === 'no-lease') out(`    run: tl recover ${ws.name} ${c.slug} --by <you> --reason "<why>" --allow-no-lease`);
+    }
+    if (!shown) out('none — no in-progress claim holds a committed handoff manifest.');
+    if (plain) out(`\n${plain} in-progress claim(s) without a committed handoff — plain stalls belong to: tl reclaim ${ws.name}`);
+    out('\nrecover acts on ONE named spec; nothing was changed by this listing.');
+    return;
+  }
+
+  if (by == null && reason == null) {
+    // Inspect surface: one spec's typed state, read-only, exit 0.
+    const c = classifyRecovery(ws.dir, slug, {});
+    out(`===== RECOVERY INSPECT: ${ws.name} ${slug} =====\n`);
+    out(stateLine(c));
+    if (c.state === 'recoverable') out(`\nact: tl recover ${ws.name} ${slug} --by <you> --reason "<why>"`);
+    else if (c.state === 'no-lease') out(`\nact (explicit legacy grace): tl recover ${ws.name} ${slug} --by <you> --reason "<why>" --allow-no-lease`);
+    else out('\nnot recoverable in this state; nothing was changed by this inspection.');
+    return;
+  }
+
+  const res = recoverPreparedHandoff(ws.dir, slug, { by, reason, thresholdMs, allowNoLease });
+  if (!res.ok) {
+    const holder = res.holder ? ` (holder ${res.holder.actor || 'unknown'}, run ${res.holder.run_id || '?'}, expires ${res.holder.expires_at || 'per file age'})` : '';
+    const why = {
+      'reason-required': 'a recorded --reason "<why>" is mandatory — recovery always logs why.',
+      'by-required': 'say who recovers: --by <agent-or-human>.',
+      'not-found': `no committed hand-off for "${slug}" — not in in-progress/ and not finalized in tests/.`,
+      'live-lease': `a live builder lease holds this spec${holder} — recovery never steals live builders; wait for expiry or let the builder finalize.`,
+      'partial-handoff': 'the handoff is a partial write / incomplete artifact set — not a committed manifest; tl reclaim owns pre-manifest stalls.',
+      'no-manifest': 'no committed HANDOFF.json — FEEDBACK.md alone is never completion; tl reclaim owns pre-manifest stalls.',
+      'invalid-manifest': `the committed manifest does not validate (${res.cause || 'refused'}) — changed bytes refuse; inspect by hand.`,
+      'no-lease': 'no builder lease on record — the legacy grace path is explicit: add --allow-no-lease (idle past threshold still required).',
+      'recent-activity': `the folder shows activity inside the threshold (${thresholdHours}h) — a builder may be alive without a lease; grace refuses.`,
+      'destination-exists': 'the spec is observed in more than one stage — repair the duplicate before recovery.',
+      'failing-tests': 'the committed manifest records failing tests — a red gate is never handed off; kick it back instead.',
+      'lease-held': `another run holds the builder lease${holder} — a concurrent recovery/retry is live; let it finish.`,
+      'lease-lost': 'lost the lease race to a concurrent recovery/retry — re-run tl recover to see the resulting state.',
+      'stale-stage': 'the spec moved stages mid-recovery — re-run tl recover to see the resulting state.',
+      'manifest-invalidated': 'artifact bytes drifted mid-recovery — reuse_only refused before stamp, overwrite, or move; inspect in-progress/' + slug + '/ by hand: ' + (res.detail || ''),
+      're-prepared': 'artifact bytes drifted mid-recovery and the manifest was re-prepared — inspect provenance by hand: ' + (res.detail || ''),
+      'invariant-breach': 'recovery invariant failed after finalize — inspect provenance by hand: ' + (res.detail || ''),
+    }[res.reason] || (res.detail || res.reason);
+    fail('recover refused: ' + why);
+  }
+  if (res.already_finalized) {
+    out(`already finalized: tests/${slug}/ holds the valid committed manifest (builder ${res.builder || 'unknown'}) — recovery had nothing to do (idempotent).`);
+    return;
+  }
+  out(`recovered ${res.slug}: ${res.from} → ${res.to} (${res.mode})`);
+  out(`builder attribution preserved (${res.builder}, run ${res.run_id}) — the manifest was reused byte-identically${res.byte_identical ? '' : ' (WARNING: manifest bytes could not be confirmed identical)'}; recovery is logged in NOTES.md + TRACE.jsonl as ${res.recovered_by}`);
+  out(`awaiting independent verification: tl verify ${ws.name}`);
 }
 
 // ---------- tl review ----------
@@ -1892,6 +2012,12 @@ function usage(stream) {
   w('                                  with a spec: return it to specs/ (or advance to tests/ when builder artifacts exist)');
   w('              --by <who>          Who reclaims — recorded in the spec\'s NOTES.md log');
   w('              --reason "<why>"    Mandatory — a reclaim always logs why; fresh claims always refuse');
+  w('  tl recover [workspace] [spec]   Finish a committed builder hand-off whose session died before the move:');
+  w('                                  no spec lists candidates; a spec alone inspects its typed state (read-only)');
+  w('              --by <who>          Who recovers — logged in NOTES.md + TRACE.jsonl; the builder stays the builder');
+  w('              --reason "<why>"    Mandatory to act — recovery always logs why; live builder leases always refuse');
+  w('              [--allow-no-lease]  Explicit legacy grace (pre-lease work): idle past threshold AND a valid');
+  w('                                  committed HANDOFF.json still required — FEEDBACK.md alone is never completion');
   w('  tl experiment queue [workspace] <spec>');
   w('                                  (advanced) Initiate an experiment: hash the spec, record base_commit, write candidate queue rows');
   w('              [--config <file>]   Explicit candidates/judge JSON (default: deterministic fixture pair)');
@@ -1969,6 +2095,7 @@ function main() {
     case 'open': return void cmdUp(rest).catch(e => fail(e && e.message ? e.message : String(e)));
     case 'run': return cmdRun(rest);
     case 'reclaim': return cmdReclaim(rest);
+    case 'recover': return cmdRecover(rest);
     case 'review': return cmdReview(rest);
     case 'verify': return cmdVerify(rest);
     case 'recall': return cmdRecall(rest);

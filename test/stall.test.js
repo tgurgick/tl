@@ -18,8 +18,12 @@ const { spawnSync } = require('node:child_process');
 const {
   DEFAULT_STALL_HOURS, stallThresholdMs, latestActivityMs,
   assessClaim, detectStalledClaims, reclaimStalled, stripFrontmatterFields,
+  classifyRecovery, recoverPreparedHandoff,
 } = require('../lib/stall');
 const { parseFrontmatter } = require('../lib/parse');
+const { createHandoff, sha256Hex } = require('../lib/handoff');
+const { setFrontmatterField } = require('../lib/frontmatter');
+const { readSpecTrace, finalizeBuilderHandoff } = require('../lib/worker');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const BIN = path.join(REPO_ROOT, 'bin', 'tl.js');
@@ -283,4 +287,382 @@ test('tl resume: stalled claim carries a STALLED flag; a live claim does not', (
   assert.match(r.stdout, /old-claim \(in-progress\/old-claim\/\) — STALLED: claimed_by codex/);
   assert.match(r.stdout, /live-claim \(in-progress\/live-claim\/\)\n/); // no flag
   assert.match(r.stdout, /tl reclaim /);
+}));
+
+// ---------- prepared-handoff recovery (classifyRecovery / recoverPreparedHandoff) ----------
+//
+// The rule under test: recovery finishes ONLY a committed hand-off — a valid
+// terminal HANDOFF.json for in-progress → tests with an EXPIRED builder lease
+// — by delegating to the worker finalize path (byte-identical manifest reuse,
+// stage-CAS move). Live leases, partial writes, invalid/changed manifests, and
+// missing manifests refuse with typed reasons; legacy no-lease work needs the
+// explicit grace flag plus idleness; the builder keeps attribution and the
+// recoverer is logged separately.
+
+// A spec that completed the canonical finalize order up to (but not including)
+// the folder move: stamped frontmatter, outcome artifacts, committed manifest,
+// and a builder lease in the requested liveness state.
+function writeCommittedHandoff(ws, slug, {
+  builder = 'claude', runId = 'run-orig-1', at = NOW - 48 * HOUR,
+  lease = 'expired', leaseNow = NOW, stamp = true,
+  tests = [{ command: 'npm test', ok: true }],
+} = {}) {
+  const dir = writeClaim(ws, slug, {
+    claimedBy: builder,
+    files: {
+      'outcome/FEEDBACK.md': 'built it; gates green\n',
+      'outcome/BUILDER.diff': 'diff --git a/x b/x\n',
+      'VERIFY.md': '---\nawaiting_verifier: true\nbuilder: ' + builder + '\n---\n\nverify me\n',
+    },
+    at,
+  });
+  if (stamp) {
+    // The stamps finalize writes BEFORE the manifest binds SPEC.md bytes —
+    // applied via the same setFrontmatterField the worker uses, so a recovery
+    // re-stamp is byte-stable.
+    const f = path.join(dir, 'SPEC.md');
+    let t = fs.readFileSync(f, 'utf8');
+    t = setFrontmatterField(t, 'status', 'tests');
+    t = setFrontmatterField(t, 'awaiting_verifier', true);
+    t = setFrontmatterField(t, 'requested_at', '2026-07-13');
+    fs.writeFileSync(f, t);
+  }
+  const created = createHandoff({
+    specDir: dir, builder,
+    from_stage: 'in-progress', to_stage: 'tests',
+    base_commit: 'abc123', run_id: runId,
+    prepared_at: '2026-07-13T10:00:00Z',
+    tests, artifacts: ['VERIFY.md'],
+  });
+  assert.equal(created.ok, true, JSON.stringify(created));
+  if (lease !== 'none') {
+    const lf = path.join(ws, '_metrics', 'builder-leases', slug + '.json');
+    fs.mkdirSync(path.dirname(lf), { recursive: true });
+    fs.writeFileSync(lf, JSON.stringify({
+      slug, actor: builder, run_id: runId, stage: 'in-progress',
+      issued_at: '2026-07-13T09:00:00Z', heartbeat_at: '2026-07-13T10:00:00Z',
+      expires_at: new Date(lease === 'live' ? leaseNow + HOUR : leaseNow - HOUR).toISOString(),
+      ttl_minutes: 120, pid: 12345,
+    }, null, 2) + '\n');
+  }
+  backdate(dir, at);
+  return dir;
+}
+
+const manifestSha = dir => sha256Hex(fs.readFileSync(path.join(dir, 'outcome', 'HANDOFF.json')));
+
+// ---------- recovery: classification ----------
+
+test('classifyRecovery: valid manifest + expired lease → recoverable; live lease → active with holder', () => withWorkspace(({ ws }) => {
+  writeCommittedHandoff(ws, 'dead-after-commit', { lease: 'expired' });
+  const c = classifyRecovery(ws, 'dead-after-commit', { now: NOW });
+  assert.equal(c.state, 'recoverable');
+  assert.equal(c.builder, 'claude');
+  assert.equal(c.run_id, 'run-orig-1');
+  assert.ok(c.idleMs > 24 * HOUR);
+
+  writeCommittedHandoff(ws, 'still-building', { lease: 'live' });
+  const a = classifyRecovery(ws, 'still-building', { now: NOW });
+  assert.equal(a.state, 'active');
+  assert.equal(a.reason, 'live-lease');
+  assert.equal(a.holder.actor, 'claude');
+  assert.equal(a.holder.run_id, 'run-orig-1');
+  assert.ok(a.holder.expires_at);
+}));
+
+test('classifyRecovery: partial writes, legacy artifacts, and absent handoffs are never recoverable', () => withWorkspace(({ ws }) => {
+  // Interrupted manifest write: tmp without HANDOFF.json.
+  writeClaim(ws, 'torn-write', { files: { 'outcome/HANDOFF.json.tmp.1-2-abc': '{', 'outcome/FEEDBACK.md': 'x\n' } });
+  assert.equal(classifyRecovery(ws, 'torn-write', { now: NOW }).state, 'partial');
+
+  // FEEDBACK alone: partial artifact set.
+  writeClaim(ws, 'half-done', { files: { 'outcome/FEEDBACK.md': 'x\n' } });
+  const half = classifyRecovery(ws, 'half-done', { now: NOW });
+  assert.equal(half.state, 'partial');
+
+  // FEEDBACK + diff without a manifest: legacy — completion is NOT inferred.
+  writeClaim(ws, 'pre-manifest', { files: { 'outcome/FEEDBACK.md': 'x\n', 'outcome/BUILDER.diff': 'd\n' } });
+  const legacy = classifyRecovery(ws, 'pre-manifest', { now: NOW });
+  assert.equal(legacy.state, 'no-manifest');
+  assert.equal(legacy.reason, 'legacy-artifacts');
+
+  // Nothing at all.
+  writeClaim(ws, 'bare-claim', {});
+  assert.equal(classifyRecovery(ws, 'bare-claim', { now: NOW }).state, 'no-manifest');
+
+  assert.equal(classifyRecovery(ws, 'ghost', { now: NOW }).state, 'not-found');
+}));
+
+test('classifyRecovery: changed bytes, wrong stage edge, and unstamped SPEC.md are invalid', () => withWorkspace(({ ws }) => {
+  // Bytes changed after the manifest committed.
+  const dir = writeCommittedHandoff(ws, 'tampered', {});
+  fs.writeFileSync(path.join(dir, 'outcome', 'FEEDBACK.md'), 'edited after commit\n');
+  const c = classifyRecovery(ws, 'tampered', { now: NOW });
+  assert.equal(c.state, 'invalid');
+  assert.equal(c.reason, 'artifact-changed');
+
+  // Manifest for a different edge.
+  const dir2 = writeClaim(ws, 'wrong-edge', {
+    files: { 'outcome/FEEDBACK.md': 'x\n', 'outcome/BUILDER.diff': 'd\n' },
+  });
+  const made = createHandoff({
+    specDir: dir2, builder: 'claude', from_stage: 'in-progress', to_stage: 'in-review',
+    base_commit: 'abc', run_id: 'r9', tests: [{ command: 't', ok: true }],
+  });
+  assert.equal(made.ok, true);
+  const e = classifyRecovery(ws, 'wrong-edge', { now: NOW });
+  assert.equal(e.state, 'invalid');
+  assert.equal(e.reason, 'stage-mismatch');
+
+  // Manifest binds SPEC.md bytes that predate the finalize stamps: delegating
+  // would invalidate the committed manifest, so recovery refuses instead.
+  writeCommittedHandoff(ws, 'unstamped', { stamp: false });
+  const u = classifyRecovery(ws, 'unstamped', { now: NOW });
+  assert.equal(u.state, 'invalid');
+  assert.equal(u.reason, 'unstamped-spec');
+}));
+
+test('classifyRecovery: duplicate board is a conflict; finalized in tests/ is finalized', () => withWorkspace(({ ws }) => {
+  writeCommittedHandoff(ws, 'twins', {});
+  fs.mkdirSync(path.join(ws, 'tests', 'twins'), { recursive: true });
+  assert.equal(classifyRecovery(ws, 'twins', { now: NOW }).state, 'conflict');
+}));
+
+// ---------- recovery: the recover path ----------
+
+test('recover: finishes the committed hand-off — byte-identical manifest, builder attribution, recoverer logged, lease released', () => withWorkspace(({ ws }) => {
+  const fromDir = writeCommittedHandoff(ws, 'crashed-mid-move', {});
+  const shaBefore = manifestSha(fromDir);
+
+  const res = recoverPreparedHandoff(ws, 'crashed-mid-move', {
+    by: 'trevor', reason: 'host restart killed the session between manifest and move', now: NOW,
+  });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.mode, 'lease-expired');
+  assert.equal(res.to, 'tests/crashed-mid-move/');
+  assert.equal(res.builder, 'claude');            // the builder, NOT the recoverer
+  assert.equal(res.recovered_by, 'trevor');
+  assert.equal(res.reused_manifest, true);        // never re-prepared
+  assert.equal(res.byte_identical, true);
+  assert.equal(res.lease_released, true);
+
+  const toDir = path.join(ws, 'tests', 'crashed-mid-move');
+  assert.ok(!fs.existsSync(fromDir));
+  assert.equal(manifestSha(toDir), shaBefore);    // byte-identical reuse, proven
+
+  const { meta } = parseFrontmatter(fs.readFileSync(path.join(toDir, 'SPEC.md'), 'utf8'));
+  assert.equal(meta.claimed_by, 'claude');        // attribution preserved
+  assert.equal(String(meta.awaiting_verifier), 'true');
+  assert.equal(meta.status, 'tests');
+
+  // The recoverer is recorded separately: NOTES.md + a `recovery` trace event
+  // correlated to the manifest's run_id.
+  const notes = fs.readFileSync(path.join(toDir, 'NOTES.md'), 'utf8');
+  assert.match(notes, /## Recovered /);
+  assert.match(notes, /builder: claude \(run run-orig-1\)/);
+  assert.match(notes, /recovered by: trevor/);
+  assert.match(notes, /host restart killed the session/);
+
+  const events = readSpecTrace(toDir);
+  const handoff = events.find(e => e.type === 'handoff');
+  const recovery = events.find(e => e.type === 'recovery');
+  assert.ok(handoff, 'finalize handoff event present');
+  assert.equal(handoff.actor_id, 'claude');
+  assert.ok(recovery, 'recovery provenance event present');
+  assert.equal(recovery.actor_id, 'trevor');
+  assert.equal(recovery.run_id, 'run-orig-1');
+  assert.equal(recovery.recovered_by, 'trevor');
+
+  // The lease is gone — released through the finalize contract.
+  assert.ok(!fs.existsSync(path.join(ws, '_metrics', 'builder-leases', 'crashed-mid-move.json')));
+}));
+
+test('recover: repeat is idempotent — already finalized returns ok without touching anything', () => withWorkspace(({ ws }) => {
+  writeCommittedHandoff(ws, 'twice', {});
+  const first = recoverPreparedHandoff(ws, 'twice', { by: 'trevor', reason: 'died', now: NOW });
+  assert.equal(first.ok, true);
+  const toDir = path.join(ws, 'tests', 'twice');
+  const sha = manifestSha(toDir);
+  const notesBefore = fs.readFileSync(path.join(toDir, 'NOTES.md'), 'utf8');
+
+  const again = recoverPreparedHandoff(ws, 'twice', { by: 'cursor', reason: 'retry', now: NOW + HOUR });
+  assert.equal(again.ok, true);
+  assert.equal(again.already_finalized, true);
+  assert.equal(manifestSha(toDir), sha);
+  assert.equal(fs.readFileSync(path.join(toDir, 'NOTES.md'), 'utf8'), notesBefore); // no second note
+}));
+
+test('recover refuses: live lease — never steal a live builder, holder reported', () => withWorkspace(({ ws }) => {
+  writeCommittedHandoff(ws, 'alive', { lease: 'live' });
+  const res = recoverPreparedHandoff(ws, 'alive', { by: 'trevor', reason: 'impatient', now: NOW });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'live-lease');
+  assert.equal(res.holder.actor, 'claude');
+  assert.equal(res.holder.run_id, 'run-orig-1');
+  assert.ok(fs.existsSync(path.join(ws, 'in-progress', 'alive', 'SPEC.md'))); // untouched
+}));
+
+test('recover refuses: partial, invalid, no-manifest, missing by/reason, not-found, conflict', () => withWorkspace(({ ws }) => {
+  writeClaim(ws, 'torn', { files: { 'outcome/HANDOFF.json.tmp.9-9-ff': '{', 'outcome/FEEDBACK.md': 'x\n' } });
+  assert.equal(recoverPreparedHandoff(ws, 'torn', { by: 'x', reason: 'y', now: NOW }).reason, 'partial-handoff');
+
+  const dir = writeCommittedHandoff(ws, 'drifted', {});
+  fs.writeFileSync(path.join(dir, 'outcome', 'BUILDER.diff'), 'changed\n');
+  const inv = recoverPreparedHandoff(ws, 'drifted', { by: 'x', reason: 'y', now: NOW });
+  assert.equal(inv.reason, 'invalid-manifest');
+  assert.equal(inv.cause, 'artifact-changed');
+
+  writeClaim(ws, 'legacy-work', { files: { 'outcome/FEEDBACK.md': 'x\n', 'outcome/BUILDER.diff': 'd\n' } });
+  assert.equal(recoverPreparedHandoff(ws, 'legacy-work', { by: 'x', reason: 'y', now: NOW }).reason, 'no-manifest');
+
+  writeCommittedHandoff(ws, 'needs-why', {});
+  assert.equal(recoverPreparedHandoff(ws, 'needs-why', { by: 'x', now: NOW }).reason, 'reason-required');
+  assert.equal(recoverPreparedHandoff(ws, 'needs-why', { reason: 'y', now: NOW }).reason, 'by-required');
+  assert.ok(fs.existsSync(path.join(ws, 'in-progress', 'needs-why', 'SPEC.md')));
+
+  assert.equal(recoverPreparedHandoff(ws, 'ghost', { by: 'x', reason: 'y', now: NOW }).reason, 'not-found');
+
+  writeCommittedHandoff(ws, 'doubled', {});
+  fs.mkdirSync(path.join(ws, 'tests', 'doubled'), { recursive: true });
+  assert.equal(recoverPreparedHandoff(ws, 'doubled', { by: 'x', reason: 'y', now: NOW }).reason, 'destination-exists');
+}));
+
+test('recover: legacy no-lease grace is explicit — refuses without the flag, refuses on fresh activity, recovers when idle', () => withWorkspace(({ ws }) => {
+  // No lease, no flag: typed refusal that documents the grace path.
+  writeCommittedHandoff(ws, 'pre-lease-era', { lease: 'none' });
+  const bare = recoverPreparedHandoff(ws, 'pre-lease-era', { by: 'trevor', reason: 'old work', now: NOW, thresholdMs: 24 * HOUR });
+  assert.equal(bare.ok, false);
+  assert.equal(bare.reason, 'no-lease');
+  assert.match(String(bare.detail), /FEEDBACK\.md alone is never completion/);
+
+  // Flag + fresh activity: a builder may be alive without a lease — refuse.
+  writeCommittedHandoff(ws, 'maybe-alive', { lease: 'none', at: NOW - 2 * HOUR, claimedAt: '2026-07-14' });
+  const fresh = recoverPreparedHandoff(ws, 'maybe-alive', {
+    by: 'trevor', reason: 'old work', now: NOW, thresholdMs: 24 * HOUR, allowNoLease: true,
+  });
+  assert.equal(fresh.ok, false);
+  assert.equal(fresh.reason, 'recent-activity');
+
+  // Flag + idle past threshold + valid manifest: the documented grace path.
+  const ok = recoverPreparedHandoff(ws, 'pre-lease-era', {
+    by: 'trevor', reason: 'legacy work, valid manifest, long idle', now: NOW, thresholdMs: 24 * HOUR, allowNoLease: true,
+  });
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  assert.equal(ok.mode, 'no-lease-grace');
+  const notes = fs.readFileSync(path.join(ws, 'tests', 'pre-lease-era', 'NOTES.md'), 'utf8');
+  assert.match(notes, /legacy grace/);
+}));
+
+test('recover: grace never treats FEEDBACK.md alone as completion — no manifest, no recovery, flag or not', () => withWorkspace(({ ws }) => {
+  writeClaim(ws, 'smells-done', { files: { 'outcome/FEEDBACK.md': 'looks finished\n', 'outcome/BUILDER.diff': 'd\n' } });
+  const res = recoverPreparedHandoff(ws, 'smells-done', {
+    by: 'trevor', reason: 'looks done to me', now: NOW, allowNoLease: true, thresholdMs: 24 * HOUR,
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'no-manifest');
+  assert.ok(fs.existsSync(path.join(ws, 'in-progress', 'smells-done', 'SPEC.md')));
+}));
+
+test('recover: manifest recording a failing test refuses through the finalize gate', () => withWorkspace(({ ws }) => {
+  writeCommittedHandoff(ws, 'red-gate', { tests: [{ command: 'npm test', ok: false, exit_code: 1 }] });
+  const res = recoverPreparedHandoff(ws, 'red-gate', { by: 'trevor', reason: 'try anyway', now: NOW });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'failing-tests');
+  assert.ok(fs.existsSync(path.join(ws, 'in-progress', 'red-gate', 'SPEC.md'))); // refused before any move
+}));
+
+test('recover race: mutate bound artifact between classify and finalize — no canonical bytes or stage change', () => withWorkspace(({ ws }) => {
+  // Deterministic classify→finalize window: classification succeeds, then a
+  // bound artifact drifts before reuse_only finalize runs. Prove refuse-before-
+  // write: HANDOFF.json bytes unchanged, SPEC.md unchanged, still in-progress/.
+  const fromDir = writeCommittedHandoff(ws, 'race-drift', {});
+  const c = classifyRecovery(ws, 'race-drift', { now: NOW });
+  assert.equal(c.state, 'recoverable');
+  const shaBefore = manifestSha(fromDir);
+  const specBefore = fs.readFileSync(path.join(fromDir, 'SPEC.md'));
+  fs.writeFileSync(path.join(fromDir, 'outcome', 'FEEDBACK.md'), 'tampered between classify and finalize\n');
+
+  const REQUIRED = ['SPEC.md', 'outcome/FEEDBACK.md', 'outcome/BUILDER.diff'];
+  const fin = finalizeBuilderHandoff({
+    wsDir: ws, slug: 'race-drift',
+    actor: c.builder, runId: c.run_id,
+    baseCommit: String(c.manifest.base_commit),
+    tests: c.manifest.tests,
+    artifacts: c.manifest.artifacts.map(a => a.path).filter(p => !REQUIRED.includes(p)),
+    initiation: 'human', source: 'recovery',
+    reuseOnly: true,
+    now: new Date(NOW),
+  });
+  assert.equal(fin.ok, false, JSON.stringify(fin));
+  assert.equal(fin.reason, 'manifest-invalidated');
+  assert.equal(fin.cause, 'artifact-changed');
+  assert.ok(fs.existsSync(path.join(ws, 'in-progress', 'race-drift', 'SPEC.md')));
+  assert.equal(fs.existsSync(path.join(ws, 'tests', 'race-drift')), false);
+  assert.equal(manifestSha(fromDir), shaBefore);
+  assert.equal(fs.readFileSync(path.join(fromDir, 'SPEC.md')).equals(specBefore), true);
+
+  // Full recover path after the same drift: classify refuses before finalize.
+  const res = recoverPreparedHandoff(ws, 'race-drift', { by: 'cursor', reason: 'race probe', now: NOW });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'invalid-manifest');
+  assert.equal(res.cause, 'artifact-changed');
+  assert.equal(manifestSha(fromDir), shaBefore);
+  assert.ok(fs.existsSync(path.join(ws, 'in-progress', 'race-drift', 'SPEC.md')));
+}));
+
+// ---------- recovery: CLI surface ----------
+
+test('tl recover (no spec): lists typed candidates, changes nothing; plain stalls are routed to reclaim', () => withWorkspace(({ root, name, ws }) => {
+  writeCommittedHandoff(ws, 'ready-to-finish', {});
+  writeCommittedHandoff(ws, 'builder-alive', { lease: 'live', leaseNow: Date.now(), at: Date.now() - HOUR });
+  writeClaim(ws, 'plain-stall', { at: Date.now() - 60 * HOUR });
+  const r = run(root, 'recover', name);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /RECOVERY CANDIDATES/);
+  assert.match(r.stdout, /ready-to-finish.*RECOVERABLE/);
+  assert.match(r.stdout, /builder-alive.*ACTIVE — live builder lease \(claude/);
+  assert.match(r.stdout, /1 in-progress claim\(s\) without a committed handoff.*tl reclaim/);
+  assert.ok(fs.existsSync(path.join(ws, 'in-progress', 'ready-to-finish', 'SPEC.md'))); // listing acted on nothing
+  assert.ok(fs.existsSync(path.join(ws, 'in-progress', 'builder-alive', 'SPEC.md')));
+}));
+
+test('tl recover <spec> (no flags): read-only inspect distinguishes states', () => withWorkspace(({ root, name, ws }) => {
+  writeCommittedHandoff(ws, 'inspect-me', {});
+  const r = run(root, 'recover', name, 'inspect-me');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /RECOVERY INSPECT/);
+  assert.match(r.stdout, /RECOVERABLE — valid HANDOFF\.json \(builder claude, run run-orig-1\)/);
+  assert.ok(fs.existsSync(path.join(ws, 'in-progress', 'inspect-me', 'SPEC.md'))); // no writes
+
+  const dir = writeCommittedHandoff(ws, 'inspect-bad', {});
+  fs.writeFileSync(path.join(dir, 'outcome', 'FEEDBACK.md'), 'drifted\n');
+  const bad = run(root, 'recover', name, 'inspect-bad');
+  assert.equal(bad.status, 0, bad.stderr);
+  assert.match(bad.stdout, /INVALID — manifest refused \(artifact-changed\)/);
+}));
+
+test('tl recover <spec> --by --reason: performs the recovery end to end', () => withWorkspace(({ root, name, ws }) => {
+  writeCommittedHandoff(ws, 'finish-line', {});
+  const r = run(root, 'recover', name, 'finish-line', '--by', 'trevor', '--reason', 'session died after commit');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /recovered finish-line: in-progress\/finish-line\/ → tests\/finish-line\/ \(lease-expired\)/);
+  assert.match(r.stdout, /builder attribution preserved \(claude, run run-orig-1\)/);
+  assert.ok(fs.existsSync(path.join(ws, 'tests', 'finish-line', 'outcome', 'HANDOFF.json')));
+}));
+
+test('tl recover <spec> --by without --reason: non-zero exit, typed message, nothing moves', () => withWorkspace(({ root, name, ws }) => {
+  writeCommittedHandoff(ws, 'no-why', {});
+  const r = run(root, 'recover', name, 'no-why', '--by', 'trevor');
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /--reason/);
+  assert.ok(fs.existsSync(path.join(ws, 'in-progress', 'no-why', 'SPEC.md')));
+}));
+
+test('tl recover live lease: non-zero exit, never-steal message with holder', () => withWorkspace(({ root, name, ws }) => {
+  writeCommittedHandoff(ws, 'mid-build', { lease: 'live', leaseNow: Date.now(), at: Date.now() - HOUR });
+  const r = run(root, 'recover', name, 'mid-build', '--by', 'trevor', '--reason', 'want it now');
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /live builder lease/);
+  assert.match(r.stderr, /holder claude/);
+  assert.ok(fs.existsSync(path.join(ws, 'in-progress', 'mid-build', 'SPEC.md')));
 }));

@@ -1566,6 +1566,38 @@ test('finalize: a stale committed manifest (bytes changed since) is recreated un
   });
 });
 
+test('finalize: reuse_only refuses a drifted manifest before stamp, overwrite, or move', () => {
+  builderWs(ws => {
+    const { setFrontmatterField } = require('../lib/frontmatter');
+    const { sha256Hex } = require('../lib/handoff');
+    const specDir = path.join(ws.dir, 'in-progress', 'ship');
+    // Match recovery's pre-move state: already stamped so a reuse_only stamp is a no-op.
+    let fm = fs.readFileSync(path.join(specDir, 'SPEC.md'), 'utf8');
+    fm = setFrontmatterField(fm, 'status', 'tests');
+    fm = setFrontmatterField(fm, 'awaiting_verifier', true);
+    fm = setFrontmatterField(fm, 'requested_at', '2026-07-25');
+    fs.writeFileSync(path.join(specDir, 'SPEC.md'), fm);
+    const c = createHandoff({
+      specDir, builder: 'claude', from_stage: 'in-progress', to_stage: 'tests',
+      base_commit: 'abc123', run_id: 'claude-r0', tests: GREEN, artifacts: ['VERIFY.md'],
+    });
+    assert.equal(c.ok, true);
+    const beforeManifest = fs.readFileSync(path.join(specDir, 'outcome', 'HANDOFF.json'));
+    const beforeSha = sha256Hex(beforeManifest);
+    const beforeSpec = fs.readFileSync(path.join(specDir, 'SPEC.md'));
+    fs.appendFileSync(path.join(specDir, 'outcome', 'FEEDBACK.md'), 'drifted after classify\n');
+
+    const r = finalizeBuilderHandoff({ wsDir: ws.dir, ...FIN, reuseOnly: true });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'manifest-invalidated');
+    assert.equal(r.cause, 'artifact-changed');
+    assert.ok(fs.existsSync(path.join(ws.dir, 'in-progress', 'ship', 'SPEC.md')));
+    assert.equal(fs.existsSync(path.join(ws.dir, 'tests', 'ship')), false);
+    assert.equal(sha256Hex(fs.readFileSync(path.join(specDir, 'outcome', 'HANDOFF.json'))), beforeSha);
+    assert.equal(fs.readFileSync(path.join(specDir, 'SPEC.md')).equals(beforeSpec), true);
+  });
+});
+
 test('finalize: interactive/headless parity — identical board state, only trace provenance differs', () => {
   let headless;
   builderWs(ws => {
