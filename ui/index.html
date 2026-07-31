@@ -364,6 +364,12 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .hz-legend { display: flex; gap: 14px; margin-top: 10px; font-family: var(--mono); font-size: .56rem; color: var(--dim); }
 .hz-legend i { font-style: normal; }
 .hz-empty { font-size: .78rem; color: var(--dim); padding: 8px 0; }
+/* hide-done: a calm toggle — state readable from the label and aria-pressed */
+.hz-controls { display: flex; justify-content: flex-end; padding: 0 0 6px; }
+.hz-toggle { font-family: var(--mono); font-size: .58rem; letter-spacing: .02em; color: var(--dim); background: transparent; border: 1px solid var(--line2); border-radius: 3px; padding: 2px 8px; cursor: pointer; }
+.hz-toggle:hover { color: var(--ink); border-color: var(--ink); }
+.hz-toggle.on { color: var(--accent); border-color: var(--accent-line); background: var(--accent-bg); }
+.hz-alldone { font-family: var(--mono); font-size: .58rem; color: var(--dim); padding: 5px 0; }
 
 .expand { display: none; padding: 2px 0 6px; }
 .expand.open { display: block; }
@@ -461,7 +467,10 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 /* ════ LIVE LOOK (mission control) ════ */
 #view-live { background: var(--bg); }
 .lanes { display: flex; height: 42%; border-bottom: 1px solid var(--line); overflow-x: auto; flex: none; }
-.lane { flex: 1; min-width: 170px; display: flex; flex-direction: column; }
+/* scroll containment: every pane list scrolls inside its own bounds — explicit
+   min-height: 0 keeps the flex chain from inheriting content-height floors, and
+   overscroll-behavior stops a finished list from scrolling an ancestor */
+.lane { flex: 1; min-width: 170px; min-height: 0; display: flex; flex-direction: column; }
 .lane-head {
   display: flex; align-items: center; gap: 8px; padding: 9px 14px;
   border-bottom: 1px solid var(--line); background: var(--surface2); flex: none;
@@ -478,7 +487,7 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 }
 .lane-head .lh-drain:hover { color: #6b8fc7; border-color: #6b8fc7; }
 .lane-head .lh-drain:disabled { opacity: .5; cursor: default; }
-.lane-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: none; }
+.lane-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; }
 .lcard { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; cursor: pointer; }
 .lcard:hover { border-color: var(--line2); }
 .lcard.working { border-color: var(--accent-line); }
@@ -541,8 +550,8 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .pulse.off { background: var(--bad); animation: none; }
 
 /* files panel */
-.fpane { width: 210px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
-.fpane .body { flex: 1; overflow-y: auto; padding: 8px; scrollbar-width: none; }
+.fpane { width: 210px; flex: none; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.fpane .body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px; scrollbar-width: thin; }
 .tn { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
   background: none; border: none; padding: 2px 4px; border-radius: 3px;
   font-family: var(--mono); font-size: .67rem; color: var(--dim); cursor: pointer; }
@@ -563,8 +572,8 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .tkids { padding-left: 13px; }
 
 /* activity panel */
-.apane { width: 300px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
-.apane .body { flex: 1; overflow-y: auto; padding: 10px 12px; scrollbar-width: thin; }
+.apane { width: 300px; flex: none; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.apane .body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px 12px; scrollbar-width: thin; }
 .log-line { display: flex; align-items: baseline; gap: 8px; padding: 1px 0; }
 .log-line.old { opacity: .28; }
 .log-line .t { font-family: var(--mono); font-size: .62rem; color: var(--faint); flex: none; min-width: 50px; }
@@ -574,11 +583,11 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .cursor { color: var(--accent); animation: tl-blink 1.1s step-end infinite; font-family: var(--mono); font-size: .62rem; }
 
 /* file viewer */
-.vpane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.vpane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .vpane .crumb { font-family: var(--mono); font-size: .62rem; color: var(--faint); letter-spacing: 0; text-transform: none; }
 .vpane .crumb b { color: #cfc8ba; font-weight: 400; }
 .vpane .writing { margin-left: auto; display: flex; align-items: center; gap: 5px; color: var(--ok); font-size: .58rem; letter-spacing: 0; }
-.vpane .body { flex: 1; overflow: auto; scrollbar-width: thin; }
+.vpane .body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .code { border-collapse: collapse; width: 100%; }
 .code td { font-family: var(--mono); font-size: .68rem; line-height: 1.6; vertical-align: top; }
 .code .ln { width: 38px; text-align: right; padding: 0 14px 0 10px; color: var(--faint); user-select: none; }
@@ -696,12 +705,12 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 /* ════ EXPERIMENTS (candidate comparison) ════ */
 #view-experiments { background: var(--bg); }
 .exp-deck { display: flex; flex: 1; min-height: 0; }
-.exp-queue { width: 268px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
-.exp-queue .body { flex: 1; overflow-y: auto; padding: 8px; scrollbar-width: thin; }
+.exp-queue { width: 268px; flex: none; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.exp-queue .body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px; scrollbar-width: thin; }
 .exp-new { margin-left: auto; font-family: var(--mono); font-size: .56rem; letter-spacing: .04em; color: var(--accent); background: transparent; border: 1px solid var(--accent-line); border-radius: 3px; padding: 2px 8px; cursor: pointer; text-transform: none; }
 .exp-new:hover { border-color: var(--accent); }
-.exp-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.exp-detail .body { flex: 1; overflow-y: auto; padding: 22px 26px 60px; scrollbar-width: thin; }
+.exp-detail { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.exp-detail .body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 22px 26px 60px; scrollbar-width: thin; }
 .exp-empty { padding: 30px; font-family: var(--mono); font-size: .65rem; color: var(--faint); line-height: 1.6; }
 
 .exp-item { background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 9px 11px; margin-bottom: 7px; cursor: pointer; }
@@ -784,6 +793,12 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .exp-rat { font-family: var(--mono); font-size: .6rem; color: var(--mid); margin-top: 10px; line-height: 1.5; }
 .exp-winner .wln { font-family: var(--mono); font-size: .72rem; color: var(--ink); }
 .exp-winner .wln b { color: var(--ok); }
+/* winner decision trail + history (WINNER.json / _metrics/winner-log.jsonl) */
+.exp-artifact-btn { font-family: var(--mono); font-size: .6rem; color: var(--accent); background: transparent; border: none; padding: 0; cursor: pointer; text-decoration: underline dotted; }
+.exp-artifact-btn:hover { text-decoration: underline; }
+.exp-artifact { margin-top: 6px; font-family: var(--mono); font-size: .56rem; color: var(--mid); background: var(--surface2); border-radius: 3px; padding: 6px 8px; white-space: pre-wrap; max-height: 220px; overflow: auto; overscroll-behavior: contain; }
+.exp-log { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.exp-log-h { font-family: var(--mono); font-size: .56rem; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin-bottom: 5px; }
 .exp-note { font-size: .78rem; color: var(--dim); line-height: 1.5; }
 .exp-note.warn { color: var(--warn); }
 
@@ -2131,7 +2146,7 @@ return { pendingReflectProposals, countAcceptsAfter, DAY };
 // every few seconds while agents work; without this, clicked-open sections snap shut
 // before they can be read. keys: counts/status/scope by workspace name; rows by path.
 // mapView: per-ws {x,y,w,h} so SSE/refresh rebuilds don't snap zoom/pan back to default
-const resumeOpen = { counts: {}, rows: new Set(), status: {}, scope: {}, mapView: {}, reflect: {}, recall: {} };
+const resumeOpen = { counts: {}, rows: new Set(), status: {}, scope: {}, mapView: {}, reflect: {}, recall: {}, hzHideDone: {} };
 // In-flight recall typing must also survive the SSE rebuild: while agents work
 // the paper re-renders every few seconds, which would otherwise wipe the query
 // mid-keystroke and drop focus. ws -> { text, focused }.
@@ -2869,15 +2884,38 @@ function renderResume(wss) {
         if (orphan.length) lanes.push({ label: 'Unattached', pri: '', it: null, specs: orphan });
         const active = lanes.filter(l => l.specs.length);
         if (!active.length) { countsEx.innerHTML = '<div class="hz-empty">no specs to chart yet</div>'; return; }
+        // hide-done: local UI state (resumeOpen pattern) — survives SSE re-renders
+        // within this browser session; never touches workspace data. Default: show.
+        const hideDone = !!resumeOpen.hzHideDone[ws.name];
+        const doneTotal = active.reduce((n, l) => n + l.specs.filter(s => s.stage === 'done').length, 0);
         const wrap = document.createElement('div'); wrap.className = 'horizon';
+        if (doneTotal) {
+          const ctl = document.createElement('div'); ctl.className = 'hz-controls';
+          const btn = document.createElement('button');
+          btn.type = 'button'; btn.className = 'hz-toggle' + (hideDone ? ' on' : '');
+          btn.setAttribute('aria-pressed', String(hideDone));
+          btn.textContent = hideDone ? `show done (${doneTotal})` : `hide done (${doneTotal})`;
+          btn.title = hideDone ? 'completed work is hidden — show it again' : 'hide completed work to focus on what remains';
+          btn.onclick = () => { resumeOpen.hzHideDone[ws.name] = !hideDone; builders.hz(); };
+          ctl.appendChild(btn); wrap.appendChild(ctl);
+        }
         active.forEach(l => {
           const lane = document.createElement('div'); lane.className = 'hz-lane';
           const lab = document.createElement('div'); lab.className = 'hz-label';
           lab.innerHTML = `${esc(l.label)}${l.pri ? ` <span class="pri">${esc(l.pri.toUpperCase())}</span>` : ''}`;
           if (l.it) { lab.style.cursor = 'pointer'; lab.onclick = () => openDrawer({ ...l.it, _ws: ws.name }); }
           const track = document.createElement('div'); track.className = 'hz-track';
-          const sorted = l.specs.slice().sort((a, b) => ord(a) - ord(b) || (PRIO[a.meta.priority] ?? 9) - (PRIO[b.meta.priority] ?? 9));
-          let nowMark = false;
+          // hiding removes only completed specs — ready / in-progress / tests /
+          // review / blocked / shaping all stay (none of those have stage 'done')
+          const shown = hideDone ? l.specs.filter(s => s.stage !== 'done') : l.specs;
+          if (!shown.length) {
+            const doneN = l.specs.length;
+            track.innerHTML = `<div class="hz-alldone">✓ all ${doneN} done · hidden</div>`;
+            lane.appendChild(lab); lane.appendChild(track); wrap.appendChild(lane);
+            return;
+          }
+          const sorted = shown.slice().sort((a, b) => ord(a) - ord(b) || (PRIO[a.meta.priority] ?? 9) - (PRIO[b.meta.priority] ?? 9));
+          let nowMark = hideDone; // done hidden → the done/remaining divider is meaningless
           sorted.forEach(s => {
             if (!nowMark && ord(s) > 0) { const n = document.createElement('div'); n.className = 'hz-now'; track.appendChild(n); nowMark = true; }
             const b = document.createElement('div');
@@ -3160,7 +3198,7 @@ function renderLanes(wss) {
 /* ════ EXPERIMENTS ════ */
 // The dashboard reads experiment artifacts (never executes agents). Data comes from
 // /api/experiments (queue list) and /api/experiment (candidate/trace/judge/winner detail).
-const EXP_ST = ['succeeded','running','queued','awaiting_evaluation','failed','timed_out','over_budget','unavailable','cancelled','invalid_output','selected','applied','rejected','apply-failed','superseded'];
+const EXP_ST = ['succeeded','running','queued','awaiting_evaluation','failed','timed_out','over_budget','unavailable','cancelled','invalid_output','selected','applied','rejected','apply-failed','superseded','sent-to-review'];
 const expStClass = s => 'exp-st st-' + (EXP_ST.includes(s) ? s : 'unknown');
 const fmtCost = v => v == null ? '—' : '$' + Number(v).toFixed(2);
 const fmtDur = v => v == null ? '—' : Number(v) + 'm';
@@ -3214,16 +3252,47 @@ async function renderExperimentList() {
   if (!expActiveId || !list.some(e => e.id === expActiveId && e._ws === expActiveWs)) selectExperiment(list[0]._ws, list[0].id);
 }
 
+// Optional workspace file via /api/file — null when absent (404) or unreadable.
+// The winner panel reads the raw WINNER.json / winner-log this way because
+// /api/experiment still serves the legacy field mapping.
+async function fetchWsFile(wsName, rel) {
+  try {
+    const r = await fetch(`/api/file?ws=${encodeURIComponent(wsName)}&path=${encodeURIComponent(rel)}`);
+    if (!r.ok) return null;
+    const j = await r.json();
+    return typeof j.content === 'string' ? j.content : null;
+  } catch { return null; }
+}
+
+// _metrics/winner-log.jsonl → this experiment's decision history, newest first.
+function parseWinnerLog(text, experimentId) {
+  if (!text) return [];
+  const rows = [];
+  for (const ln of text.split('\n')) {
+    if (!ln.trim()) continue;
+    try { const r = JSON.parse(ln); if (r && r.experiment_id === experimentId) rows.push(r); } catch { /* skip bad row */ }
+  }
+  return rows.reverse();
+}
+
 async function selectExperiment(wsName, id) {
   expActiveId = id;
   expActiveWs = wsName;
   document.querySelectorAll('#expList .exp-item').forEach(el => el.classList.toggle('active', el.dataset.id === id && el.dataset.ws === wsName));
   const det = $('expDetail');
   det.innerHTML = '<div class="exp-empty">loading…</div>';
-  let d;
-  try { d = await (await fetch(`/api/experiment?ws=${encodeURIComponent(wsName)}&id=${encodeURIComponent(id)}`)).json(); }
+  let d, winnerRaw, logRaw;
+  try {
+    [d, winnerRaw, logRaw] = await Promise.all([
+      fetch(`/api/experiment?ws=${encodeURIComponent(wsName)}&id=${encodeURIComponent(id)}`).then(r => r.json()),
+      fetchWsFile(wsName, `_experiments/${id}/WINNER.json`),
+      fetchWsFile(wsName, '_metrics/winner-log.jsonl'),
+    ]);
+  }
   catch { det.innerHTML = '<div class="exp-empty">could not load experiment</div>'; return; }
   if (!d || d.error) { det.innerHTML = `<div class="exp-empty">${esc((d && d.error) || 'not found')}</div>`; return; }
+  try { d.winner_record = winnerRaw ? JSON.parse(winnerRaw) : null; } catch { d.winner_record = null; }
+  d.winner_log = parseWinnerLog(logRaw, id);
   expDetailCache = d;
   renderExperimentDetail(wsName, d);
 }
@@ -3257,6 +3326,74 @@ function candCard(c, winnerId) {
     <button class="exp-trace-btn" data-trace="${traceId}">trace timeline · ${c.trace.length}${c.reasoning ? ' · reasoning' : ''}</button>
     <div class="exp-trace" id="${traceId}">${traceRows}${cap}${reasoning}</div>
   </div>`;
+}
+
+// ── winner panel: real WINNER.json shape, legacy fallback ──
+// One view model for both worlds. `rec` is the raw WINNER.json written by
+// lib/experiment-apply; `legacy` is /api/experiment's winner block (old
+// set_by / apply_state names, judge-pick degrade); `judge` disambiguates
+// whether a human decision overrode the judge's pick.
+function winnerModel(rec, legacy, judge) {
+  if (rec && rec.candidate_id) {
+    return {
+      candidate_id: rec.candidate_id,
+      state: rec.state || 'selected',
+      decided_by: rec.decided_by || '',
+      decision_source: rec.decision_source || '',
+      decided_at: rec.decided_at || '',
+      patch_path: rec.patch_path || '',
+      patch_sha256: rec.patch_sha256 || '',
+      reason: rec.reason || '',
+      error_summary: rec.error_summary || '',
+      review_artifact: rec.review_artifact || '',
+      overrides_judge: !!(judge && judge.winner && judge.winner !== rec.candidate_id),
+      from_record: true,
+    };
+  }
+  const w = legacy || {};
+  if (!w.candidate_id) return null;
+  return {
+    candidate_id: w.candidate_id,
+    state: w.apply_state || 'selected',
+    decided_by: w.set_by || '',
+    decision_source: w.human_override ? 'human' : (w.set_by === 'judge' ? 'judge' : ''),
+    decided_at: '',
+    patch_path: w.patch_path || '',
+    patch_sha256: '',
+    reason: '',
+    error_summary: w.apply_error || '',
+    review_artifact: '',
+    overrides_judge: !!w.human_override,
+    from_record: false,
+  };
+}
+
+const fmtWhen = iso => iso ? String(iso).slice(0, 16).replace('T', ' ') + 'Z' : '';
+
+function winnerPanelHtml(v, log) {
+  if (!v) return '<div class="exp-note">no winner selected yet.</div>';
+  const parts = [`<div class="wln">${v.state === 'selected' ? 'selected' : 'winner'}: <b>${esc(v.candidate_id)}</b> <span class="${expStClass(v.state)}">${esc(v.state)}</span></div>`];
+  // decision trail: who decided, from where, when — and whether it overrode the judge
+  if (v.decided_by || v.decision_source || v.decided_at) {
+    const who = [v.decided_by, v.decision_source && v.decision_source !== v.decided_by ? v.decision_source : '', fmtWhen(v.decided_at)].filter(Boolean).map(esc).join(' · ');
+    const ovr = v.overrides_judge ? ` <span style="color:var(--accent)">— overrides the judge's pick</span>` : '';
+    parts.push(`<div class="exp-rat">decided by ${who}${ovr}</div>`);
+  } else if (v.overrides_judge) {
+    parts.push(`<div class="exp-rat" style="color:var(--accent)">winner set by human override</div>`);
+  }
+  if (v.reason) parts.push(`<div class="exp-rat">reason: ${esc(v.reason)}</div>`);
+  if (v.error_summary) parts.push(`<div class="exp-note warn">apply error: ${esc(v.error_summary)}</div>`);
+  if (v.patch_path) parts.push(`<div class="exp-rat">patch: <code>${esc(v.patch_path)}</code>${v.patch_sha256 ? ` · sha256 <code>${esc(String(v.patch_sha256).slice(0, 12))}…</code>` : ''}</div>`);
+  if (v.review_artifact) parts.push(`<div class="exp-rat">review artifact: <button type="button" class="exp-artifact-btn" data-rel="${esc(v.review_artifact)}">${esc(v.review_artifact)}</button><div class="exp-artifact" hidden></div></div>`);
+  if (v.state === 'selected') parts.push(`<div class="exp-note">not yet applied — applying a winning patch is an explicit later action; TL review still owns acceptance to done/.</div>`);
+  // decision history from _metrics/winner-log.jsonl — selections, supersessions,
+  // apply-failed attempts. WINNER.json is state; the log is history.
+  if (log.length > 1 || (log.length === 1 && !v.from_record)) {
+    const rows = log.slice(0, 12).map(r =>
+      `<div class="exp-tr"><span class="tt">${esc(fmtWhen(r.decided_at))}</span><span class="tk ${r.state === 'applied' ? 'ok' : /fail|reject|supersed/.test(r.state || '') ? 'bad' : ''}">${esc(r.state || '')}</span><span class="tm">${esc(r.candidate_id || '')} · ${esc(r.decided_by || '')}${r.decision_source ? ' (' + esc(r.decision_source) + ')' : ''}${r.reason ? ' — ' + esc(r.reason) : ''}${r.error_summary ? ' — ' + esc(r.error_summary) : ''}</span></div>`).join('');
+    parts.push(`<div class="exp-log"><div class="exp-log-h">decision log</div>${rows}</div>`);
+  }
+  return parts.join('');
 }
 
 function renderExperimentDetail(wsName, d) {
@@ -3297,20 +3434,11 @@ function renderExperimentDetail(wsName, d) {
       <div class="exp-rat"><b>winner:</b> ${esc(j.winner || '—')} · set by ${esc(j.winner_set_by || '—')}${override}<br>${esc(j.rationale || '')}</div>`;
   }
 
-  // winner / application panel
-  const w = d.winner || {};
-  let winnerHtml;
-  if (w.candidate_id) {
-    const state = w.apply_state || 'selected';
-    const parts = [`<div class="wln">selected: <b>${esc(w.candidate_id)}</b> <span class="${expStClass(state)}">${esc(state)}</span></div>`];
-    if (w.patch_path) parts.push(`<div class="exp-rat">patch: <code>${esc(w.patch_path)}</code></div>`);
-    if (w.human_override) parts.push(`<div class="exp-rat" style="color:var(--accent)">winner set by human override</div>`);
-    if (w.apply_error) parts.push(`<div class="exp-note warn">apply error: ${esc(w.apply_error)}</div>`);
-    if (!w.apply_state) parts.push(`<div class="exp-note">not yet applied — applying a winning patch is an explicit later action; TL review still owns acceptance to done/.</div>`);
-    winnerHtml = parts.join('');
-  } else {
-    winnerHtml = '<div class="exp-note">no winner selected yet.</div>';
-  }
+  // winner / application panel — binds the shipped WINNER.json shape
+  // (lib/experiment-apply: state, decided_by / decision_source, decided_at,
+  // patch_path + patch_sha256, reason, error_summary, review_artifact) and
+  // degrades to the legacy server mapping / judge pick when the file is absent.
+  const winnerHtml = winnerPanelHtml(winnerModel(d.winner_record, d.winner, d.judge), d.winner_log || []);
 
   // headless-reality note driven by status/tool
   const status = m.status || '';
@@ -3359,6 +3487,19 @@ function renderExperimentDetail(wsName, d) {
 
   $('expDetail').querySelectorAll('.exp-trace-btn').forEach(b => {
     b.onclick = () => { const t = $(b.dataset.trace); if (t) t.classList.toggle('open'); };
+  });
+  // review artifact (APPLICATION.md) — read-only inline view via /api/file
+  $('expDetail').querySelectorAll('.exp-artifact-btn').forEach(b => {
+    b.onclick = async () => {
+      const box = b.parentElement.querySelector('.exp-artifact');
+      if (!box) return;
+      if (!box.hidden) { box.hidden = true; return; }
+      if (!box.textContent) {
+        const txt = await fetchWsFile(wsName, b.dataset.rel);
+        box.textContent = txt == null ? 'could not read artifact' : txt;
+      }
+      box.hidden = false;
+    };
   });
   // variant ⑂ — open the queue form pre-filled from this experiment so you can
   // instill changes (models, judge, free-text tweaks) before queuing the new run
