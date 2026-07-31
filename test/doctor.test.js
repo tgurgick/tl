@@ -197,3 +197,28 @@ test('doctor never mutates the workspace', () => mkWs(ws => {
   const after = fs.readdirSync(ws, { recursive: true }).sort().join('\n');
   assert.equal(after, before);
 }));
+
+test('lifecycle: awaiting partial does not emit empty-slug legacy-state (trailing-slash path)', () => mkWs(ws => {
+  // Regression for the verify residual: s.path "tests/mine/" → pop() was "".
+  writeSpec(ws, 'tests', 'mine', {
+    fm: { claimed_by: 'claude', awaiting_verifier: true, status: 'tests' },
+    files: { 'outcome/FEEDBACK.md': 'x\n' }, // partial — no BUILDER.diff
+  });
+  // Force the same trailing-slash shape readWorkspaceSpecs uses.
+  const { readWorkspaceSpecs } = require('../lib/worker');
+  const specs = readWorkspaceSpecs(ws).map(s => ({ ...s, path: s.path.endsWith('/') ? s.path : s.path + '/' }));
+  assert.ok(specs.some(s => s.path === 'tests/mine/'));
+  const life = classifyLifecycle(ws, { now: NOW, specs, cfg: null });
+  const emptyLegacy = life.findings.filter(f => f.kind === 'legacy-state' && !f.slug);
+  assert.equal(emptyLegacy.length, 0, JSON.stringify(life.findings, null, 2));
+  // partial awaiting should be uncommitted-handoff (or similar), not phantom legacy "?"
+  assert.ok(!life.findings.some(f => f.kind === 'legacy-state' && f.slug === ''));
+  assert.ok(life.findings.some(f => f.slug === 'mine' && (f.kind === 'uncommitted-handoff' || f.kind === 'legacy-state' || f.kind === 'invalid-handoff')));
+}));
+
+test('slugFromPath strips trailing slashes', () => {
+  const { slugFromPath } = require('../lib/doctor');
+  assert.equal(slugFromPath('tests/mine/'), 'mine');
+  assert.equal(slugFromPath('tests/mine'), 'mine');
+  assert.equal(slugFromPath(''), '');
+});
