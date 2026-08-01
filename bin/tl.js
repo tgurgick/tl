@@ -60,6 +60,9 @@ const { parseFrontmatter, parseYaml } = require('../lib/parse');
 const { safeRead, readFirst, isDir, mtime } = require('../lib/workspace');
 const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch, calmCap, selectContinuations, repoHoldReason, sameLocalRepo } = require('../lib/batch');
 const { stallThresholdMs, detectStalledClaims, reclaimStalled, classifyRecovery, recoverPreparedHandoff } = require('../lib/stall');
+const {
+  recordReflectProposalDecision, pendingReflectProposals, normalizeProposalId, REFLECT_REVIEW_LOG,
+} = require('../lib/reflect-desk');
 const { runFixtureExperiment } = require('../lib/experiment-fixture');
 const { selectWinner, applyWinner, rejectWinner, sendWinnerToReview } = require('../lib/experiment-apply');
 const { queueExperiment, drainQueue, readQueueRows } = require('../lib/experiment-queue');
@@ -1106,6 +1109,73 @@ function cmdRecover(args) {
 
 // ---------- tl review ----------
 
+// ---------- tl reflect-decision ----------
+// Explicit human marker for a /tl reflect proposal. Appends one row to
+// _metrics/reflect-review-log.jsonl — never rewrites history, never applies
+// TRIAGE.yml. Viewing the proposal file alone must not call this.
+
+function cmdReflectDecision(args) {
+  const flags = new Set();
+  const positional = [];
+  let action = null, by = 'human-cli', note = '';
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--action' && args[i + 1]) { action = args[++i]; continue; }
+    if (a.startsWith('--action=')) { action = a.slice(9); continue; }
+    if (a === '--by' && args[i + 1]) { by = args[++i]; continue; }
+    if (a.startsWith('--by=')) { by = a.slice(5); continue; }
+    if (a === '--note' && args[i + 1]) { note = args[++i]; continue; }
+    if (a.startsWith('--note=')) { note = a.slice(7); continue; }
+    if (a === '--reviewed' || a === '--dismissed' || a === '--applied') {
+      action = a.slice(2); continue;
+    }
+    if (a.startsWith('-')) fail('unknown flag for reflect-decision: ' + a);
+    positional.push(a);
+  }
+  // Allow: tl reflect-decision [ws] <id> --action X  OR  tl reflect-decision <id> --action X
+  let wsArg = null, idArg = null;
+  if (positional.length >= 2) { wsArg = positional[0]; idArg = positional[1]; }
+  else if (positional.length === 1) { idArg = positional[0]; }
+  const ws = resolveWorkspace(wsArg);
+  if (!idArg) {
+    // List unread proposals (read-only).
+    const metrics = {};
+    const metricsDir = path.join(ws.dir, '_metrics');
+    if (isDir(metricsDir)) {
+      for (const f of fs.readdirSync(metricsDir)) {
+        if (!f.endsWith('.jsonl')) continue;
+        const lines = (safeRead(path.join(metricsDir, f)) || '').split('\n').filter(Boolean).map(l => {
+          try { return JSON.parse(l); } catch { return null; }
+        }).filter(Boolean);
+        metrics[f.replace(/\.jsonl$/, '')] = lines;
+      }
+    }
+    const pending = pendingReflectProposals({ metrics, now: Date.now() });
+    out('===== REFLECT PROPOSALS: ' + ws.name + ' =====');
+    if (!pending.proposals.length) {
+      out('no unread reflect proposals.');
+      return;
+    }
+    for (const p of pending.proposals) {
+      out(`  ${p.id}  ${p.path}  (${p.proposals} change${p.proposals === 1 ? '' : 's'})`);
+    }
+    out('');
+    out('Mark one: tl reflect-decision ' + ws.name + ' <id> --action reviewed|dismissed|applied [--by <who>] [--note "..."]');
+    return;
+  }
+  if (!action) fail('Usage: tl reflect-decision [ws] <reflect-YYYY-MM-DD|date> --action reviewed|dismissed|applied [--by <who>] [--note "..."]');
+  const id = normalizeProposalId(idArg);
+  if (!id) fail('bad proposal id — use reflect-YYYY-MM-DD or YYYY-MM-DD');
+  try {
+    const got = recordReflectProposalDecision(ws.dir, {
+      proposalId: id, action, actor: by, via: 'cli', note,
+    });
+    out(`recorded ${got.row.action} for ${got.row.proposal_id} → ${got.path} (actor ${got.row.actor})`);
+  } catch (e) {
+    fail(e && e.message ? e.message : String(e));
+  }
+}
+
 function cmdReview(args) {
   const ws = resolveWorkspace(args[0]);
   printSkill('review');
@@ -2091,6 +2161,11 @@ function usage(stream) {
   w('');
   w('review — sign off, unblock, decide on experiment winners');
   w('  tl review [workspace]           Sign off in-review work — criteria + feedback');
+  w('  tl reflect-decision [workspace] [id]');
+  w('                                  List unread reflect proposals, or append a review marker');
+  w('              --action reviewed|dismissed|applied');
+  w('              [--by <who>] [--note "..."]');
+  w('                                  Explicit human clear — viewing alone does not dismiss; never auto-applies TRIAGE.yml');
   w('  tl verify [workspace] [spec]    Independent-verifier queue — status + briefs (non-builder)');
   w('              [--agent <name>]    Prefer / filter this verifier lane; builders are excluded');
   w('              [--execute]         Run one isolated verify tick (drains request or queue)');
@@ -2134,6 +2209,7 @@ function main() {
     case 'reclaim': return cmdReclaim(rest);
     case 'recover': return cmdRecover(rest);
     case 'review': return cmdReview(rest);
+    case 'reflect-decision': return cmdReflectDecision(rest);
     case 'verify': return cmdVerify(rest);
     case 'recall': return cmdRecall(rest);
     case 'sync': return cmdSync(rest);

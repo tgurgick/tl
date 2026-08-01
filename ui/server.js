@@ -44,6 +44,7 @@ const { canAdvanceToReview } = require('../lib/verification-gate');
 const { recallSearch } = require('../lib/recall');
 const { buildBenchmarkRecord, appendBenchmarkRecord, intentGoalIds } = require('../lib/benchmark-log');
 const { detectStalledClaims, reclaimStalled, stallThresholdMs } = require('../lib/stall');
+const { recordReflectProposalDecision } = require('../lib/reflect-desk');
 
 // "did we already discuss this?" is the product — capped and grouped, not a
 // search engine. The cap truncates the ranked list; grouping stays identical
@@ -1329,6 +1330,25 @@ function hVerifyDecision(ws, body, res) {
   }
 }
 
+function hReflectDecision(ws, body, res) {
+  // Explicit human marker for a reflect proposal — viewing alone never writes this.
+  // Never auto-applies TRIAGE.yml; applied only records that the human already applied.
+  const proposalId = body.proposal_id || body.proposalId || body.date || body.id;
+  const action = String(body.action || '').toLowerCase();
+  try {
+    const got = recordReflectProposalDecision(ws.dir, {
+      proposalId,
+      action,
+      actor: 'human-cockpit',
+      via: 'cockpit',
+      note: String(body.note || '').trim(),
+    });
+    return json(res, 200, { ok: true, ...got });
+  } catch (e) {
+    return json(res, 400, { error: e && e.message ? e.message : String(e) });
+  }
+}
+
 // ---------- frontmatter list edits (map repair) ----------
 // lib/frontmatter covers single-line scalar fields; the map-repair handler also
 // edits small YAML lists (an intent's `specs:` / `goals:`). Same rules apply:
@@ -1498,6 +1518,7 @@ const ROUTES = {
   '/api/note': hNote,
   '/api/verify-dispatch': hVerifyDispatch,
   '/api/verify-decision': hVerifyDecision,
+  '/api/reflect-decision': hReflectDecision,
 };
 
 function handlePost(pathname, body, res) {

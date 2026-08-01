@@ -252,6 +252,9 @@ body.m-split .paper { max-width: none; padding: 28px 22px 60px; }
 .reflect-ex { margin-bottom: 16px; }
 .reflect-ex .refl-md { display: none; padding: 12px 15px; margin: 4px 0 8px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; max-height: 340px; overflow-y: auto; }
 .reflect-ex .refl-md.open { display: block; }
+.refl-acts { display: flex; gap: 5px; padding: 4px 0 2px 22px; flex-wrap: wrap; }
+.refl-acts button { font-family: var(--mono); font-size: .58rem; border-radius: 3px; padding: 2px 8px; cursor: pointer; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
+.refl-acts button:hover { color: var(--ink); border-color: var(--ink); }
 .refl-note { font-family: var(--mono); font-size: .58rem; color: var(--faint); padding: 7px 0 2px; }
 
 .bp-goal { font-family: var(--serif); font-size: .98rem; color: var(--ink); line-height: 1.4; margin: 0 0 26px; }
@@ -2065,8 +2068,9 @@ return {
 
 /* === reflect-desk BEGIN (keep in lockstep with lib/reflect-desk.js) === */
 // lib/reflect-desk.js — pending reflect proposals for the Human/Resume desk.
-// Pure functions over the parsed workspace payload (reflect-log.jsonl lines +
-// specs). Discovery rules and full docs live in the lib copy.
+// Pure discovery over the parsed workspace payload. Clear only on an explicit
+// human marker in reflect-review-log.jsonl; unmarked proposals degrade via the
+// 14-day window. Full docs + Node writer live in the lib copy.
 
 (function (root, factory) {
   const api = factory();
@@ -2077,8 +2081,9 @@ return {
 
 const DAY = 86400000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const HANDLED_ACTIONS = Object.freeze(['reviewed', 'dismissed', 'applied']);
+const HANDLED = new Set(HANDLED_ACTIONS);
 
-/** Parse a reflect-log date (YYYY-MM-DD) to a UTC timestamp, or null. */
 function dateTs(d) {
   const s = String(d || '').trim();
   if (!DATE_RE.test(s)) return null;
@@ -2086,9 +2091,45 @@ function dateTs(d) {
   return Number.isFinite(ts) ? ts : null;
 }
 
+function proposalIdFromRecord({ date, path, proposal_id } = {}) {
+  const explicit = String(proposal_id || '').trim();
+  if (/^reflect-\d{4}-\d{2}-\d{2}$/.test(explicit)) return explicit;
+  const d = String(date || '').trim();
+  if (DATE_RE.test(d)) return 'reflect-' + d;
+  const m = String(path || '').match(/reflect-(\d{4}-\d{2}-\d{2})/);
+  return m ? 'reflect-' + m[1] : null;
+}
+
+function proposalDateFromId(id) {
+  const m = String(id || '').match(/^reflect-(\d{4}-\d{2}-\d{2})$/);
+  return m ? m[1] : null;
+}
+
+function normalizeProposalId(input) {
+  const s = String(input || '').trim();
+  if (/^reflect-\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (DATE_RE.test(s)) return 'reflect-' + s;
+  const m = s.match(/reflect-(\d{4}-\d{2}-\d{2})/);
+  return m ? 'reflect-' + m[1] : null;
+}
+
+function latestReviewsById(metrics = {}) {
+  const log = Array.isArray(metrics['reflect-review-log']) ? metrics['reflect-review-log'] : [];
+  const map = new Map();
+  for (const line of log) {
+    if (!line || typeof line !== 'object') continue;
+    const id = proposalIdFromRecord(line);
+    if (!id) continue;
+    const action = String(line.action || '').toLowerCase();
+    if (!HANDLED.has(action)) continue;
+    map.set(id, line);
+  }
+  return map;
+}
+
 function pendingReflectProposals({ metrics = {}, specs = [], now = Date.now(), windowDays = 14 } = {}) {
   const log = Array.isArray(metrics['reflect-log']) ? metrics['reflect-log'] : [];
-  const byDate = new Map(); // date -> entry (last line for a date wins, even a zero-proposal rerun)
+  const byDate = new Map();
   for (const line of log) {
     if (!line || typeof line !== 'object') continue;
     const ts = dateTs(line.date);
@@ -2096,12 +2137,17 @@ function pendingReflectProposals({ metrics = {}, specs = [], now = Date.now(), w
     byDate.set(String(line.date).trim(), { line, ts });
   }
 
+  const reviews = latestReviewsById(metrics);
   const windowMs = windowDays * DAY;
   const proposals = [];
   for (const [date, { line, ts }] of byDate) {
-    if (!(Number(line.proposals) > 0)) continue; // ran, proposed nothing → silent
-    if (now - ts > windowMs) continue; // stale — the moment has passed
+    if (!(Number(line.proposals) > 0)) continue;
+    const id = proposalIdFromRecord({ date });
+    if (!id) continue;
+    if (reviews.get(id)) continue;
+    if (now - ts > windowMs) continue;
     proposals.push({
+      id,
       date,
       ts,
       path: '_metrics/reflect-' + date + '.md',
@@ -2109,6 +2155,7 @@ function pendingReflectProposals({ metrics = {}, specs = [], now = Date.now(), w
       parallelTracks: Number(line.parallel_tracks) || 0,
       overridesRead: Number(line.overrides_read) || 0,
       outcomesRead: Number(line.outcomes_read) || 0,
+      reviewStatus: 'unread',
     });
   }
   proposals.sort((a, b) => b.ts - a.ts);
@@ -2138,7 +2185,16 @@ function countAcceptsAfter({ metrics = {}, specs = [], cutoff = 0 } = {}) {
   return Math.max(fromLog, fromSpecs);
 }
 
-return { pendingReflectProposals, countAcceptsAfter, DAY };
+return {
+  pendingReflectProposals,
+  countAcceptsAfter,
+  proposalIdFromRecord,
+  normalizeProposalId,
+  proposalDateFromId,
+  latestReviewsById,
+  HANDLED_ACTIONS,
+  DAY,
+};
 });
 /* === reflect-desk END === */
 
@@ -2248,18 +2304,19 @@ function renderResume(wss) {
       block.appendChild(autoEl);
     }
 
-    // ── reflect proposals (calm — accepts feed reflect; the desk closes the loop) ──
-    // Silent when none are pending (no empty chrome). Review-only surface:
-    // proposals never auto-write TRIAGE.yml — applying stays with /tl reflect.
+    // ── reflect proposals (calm — clears only on an explicit human marker) ──
+    // Silent when none are pending. Viewing markdown alone does not dismiss;
+    // mark reviewed / dismiss / applied appends reflect-review-log.jsonl.
+    // Nothing auto-applies to TRIAGE.yml.
     const refl = globalThis.ReflectDesk.pendingReflectProposals({ metrics: ws.metrics || {}, specs, now: Date.now() });
     if (refl.proposals.length) {
       const latest = refl.proposals[0];
       const nP = refl.proposals.length;
       const rp = document.createElement('p');
       rp.className = 'bp-reflect';
-      rp.title = 'TRIAGE.yml changes /tl reflect proposed from your accepts and overrides — review here; nothing auto-applies';
+      rp.title = 'TRIAGE.yml changes /tl reflect proposed — mark reviewed or dismiss to clear; viewing alone does not dismiss; nothing auto-applies';
       rp.innerHTML = `<span class="rl">reflect proposals</span>`
-        + `<span class="rt">${nP === 1 ? '1 pending' : nP + ' pending'}`
+        + `<span class="rt">${nP === 1 ? '1 unread' : nP + ' unread'}`
         + ` · ${esc(latest.date)} proposes ${latest.proposals} TRIAGE.yml change${latest.proposals === 1 ? '' : 's'}`
         + (refl.acceptsSinceLatest ? ` · ${refl.acceptsSinceLatest} accept${refl.acceptsSinceLatest === 1 ? '' : 's'} since` : '')
         + `</span> <span class="ar">›</span>`;
@@ -2271,9 +2328,11 @@ function renderResume(wss) {
           const tracks = p.parallelTracks ? ` · ${p.parallelTracks} parallel track${p.parallelTracks === 1 ? '' : 's'}` : '';
           row.innerHTML = `<div class="loop-row"><span class="gly mono" style="font-size:.62rem;color:#6b57c7">◆</span>`
             + `<div class="txt"><div class="t">${esc(p.date)} — ${p.proposals} proposed change${p.proposals === 1 ? '' : 's'}${tracks}</div>`
-            + `<div class="sub">${p.overridesRead} overrides · ${p.outcomesRead} outcomes read · ${esc(p.path)}</div></div></div>`
+            + `<div class="sub">${esc(p.id)} · ${p.overridesRead} overrides · ${p.outcomesRead} outcomes · ${esc(p.path)}</div></div></div>`
+            + `<div class="refl-acts"></div>`
             + `<div class="refl-md"></div>`;
           const mdEl = row.querySelector('.refl-md');
+          const acts = row.querySelector('.refl-acts');
           let loaded = false;
           const toggleMd = async () => {
             const open = mdEl.classList.toggle('open');
@@ -2287,10 +2346,23 @@ function renderResume(wss) {
             }
           };
           row.querySelector('.loop-row').onclick = toggleMd;
+          const decide = (action) => (async () => {
+            try {
+              await postJSON('/api/reflect-decision', { ws: ws.name, proposal_id: p.id, action });
+            } catch (e) { alert(e.message); return; }
+            loadSelected();
+          })();
+          [['mark reviewed', 'reviewed'], ['dismiss', 'dismissed'], ['applied', 'applied']].forEach(([label, action]) => {
+            const b = document.createElement('button');
+            b.textContent = label;
+            b.onclick = e => { e.stopPropagation(); decide(action); };
+            acts.appendChild(b);
+          });
           rpEx.appendChild(row);
-          if (i === 0) toggleMd(); // one click on the line lands on the latest proposal, open
+          if (i === 0) toggleMd();
         });
-        rpEx.insertAdjacentHTML('beforeend', '<div class="refl-note">review-only — nothing auto-applies to TRIAGE.yml · approve via /tl reflect (or edit the goal below)</div>');
+        rpEx.insertAdjacentHTML('beforeend',
+          '<div class="refl-note">explicit mark reviewed / dismiss clears the desk — viewing alone does not · nothing auto-applies to TRIAGE.yml · apply via /tl reflect then mark applied</div>');
       };
       rp.onclick = () => {
         if (!rpEx.children.length) buildReflect();
