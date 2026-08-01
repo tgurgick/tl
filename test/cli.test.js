@@ -591,6 +591,8 @@ test('up --dry-run: enabled profile prints schedule plan without launching agent
     // agent CLI from the lane command must not appear as something that ran
     assert.doesNotMatch(r.stdout, /CLAUDE_SHOULD_NOT_RUN/);
     assert.doesNotMatch(r.stdout, /loaded via launchctl/);
+    assert.match(r.stdout, /## Lane availability/);
+    assert.match(r.stdout, /claude\s+(idle|unreachable)/);
   });
 });
 
@@ -792,6 +794,132 @@ test('generated rules state the universal done/ ceiling — builder and verifier
   });
 });
 
+// ---------- tl sync check (offline sync.jira.map validation) ----------
+
+test('sync check: valid map prints OK summary with provenance and exits 0', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'sync:',
+      '  jira:',
+      '    url: "https://acme.atlassian.net"',
+      '    project: "PROJ"',
+      '    map:',
+      '      bug: spec',
+      '      spike:',
+      '        to: spec',
+      '        type: research',
+      '        tags: [spike]',
+      '      sub-task: ignore',
+      '',
+    ].join('\n'));
+    const r = run('sync', 'check', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /SYNC CHECK: /);
+    assert.match(r.stdout, /jira: url https:\/\/acme\.atlassian\.net · project PROJ/);
+    assert.match(r.stdout, /map: OK — 6 effective entries/);
+    // defaults still in effect, workspace override keeps the default TL type
+    assert.match(r.stdout, /epic → intent\s+\[default\]/);
+    assert.match(r.stdout, /bug → spec \(type: bug\)\s+\[override\]/);
+    // extensions carry their hints and provenance
+    assert.match(r.stdout, /spike → spec \(type: research, tags: \[spike\]\)\s+\[workspace\]/);
+    assert.match(r.stdout, /sub-task → ignore\s+\[workspace\]/);
+    assert.match(r.stdout, /defaults in effect: 3 untouched · 1 overridden · 2 workspace-added/);
+    assert.match(r.stdout, /no JIRA call was made/);
+  });
+});
+
+test('sync check: absent workspace map is valid — exactly the shipped defaults', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'sync:',
+      '  jira:',
+      '    url: ""',
+      '    project: ""',
+      '',
+    ].join('\n'));
+    const r = run('sync', 'check', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /map: OK — 4 effective entries/);
+    assert.match(r.stdout, /defaults in effect: 4 untouched · 0 overridden · 0 workspace-added/);
+    assert.match(r.stdout, /shipped defaults are the whole contract/);
+    // unset url/project is informational, never an error for the offline check
+    assert.match(r.stdout, /url \(unset\) · project \(unset\)/);
+  });
+});
+
+test('sync check: invalid map lists every offending key with its fix hint, exits non-zero', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', [
+      'sync:',
+      '  jira:',
+      '    map:',
+      '      spike:',
+      '        to: spec',
+      '        type: done',
+      '      sub-task: sideways',
+      '      incident:',
+      '        to: ignore',
+      '        tags: [oops]',
+      '',
+    ].join('\n'));
+    const r = run('sync', 'check', name);
+    assert.notEqual(r.status, 0);
+    // every offending key appears, in the bridge's paste-ready hint style
+    assert.match(r.stdout, /map: INVALID — 3 entries rejected/);
+    assert.match(r.stdout, /sync\.jira\.map\.spike: type "done" is not a TL spec type — use one of: feature, bug, tech_debt, research/);
+    assert.match(r.stdout, /sync\.jira\.map\.sub-task: "sideways" is not a valid target — use one of: intent, spec, ignore/);
+    assert.match(r.stdout, /sync\.jira\.map\.incident: "type"\/"tags" hints only apply to "to: spec"/);
+    assert.match(r.stdout, /Fix the entries above/);
+    assert.match(r.stderr, /sync\.jira\.map is invalid \(3 errors\)/);
+  });
+});
+
+test('sync check: missing sync section is a calm not-configured, exit 0', () => {
+  withWorkspace([], name => {
+    writeWorkspaceFile(name, 'TRIAGE.yml', 'goals: []\n');
+    const r = run('sync', 'check', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /sync is not configured — no sync\.jira section/);
+    assert.match(r.stdout, /skills\/sync\/SKILL\.md/);
+  });
+});
+
+test('sync check: no TRIAGE.yml at all is also calm not-configured, exit 0', () => {
+  withWorkspace([], name => {
+    const r = run('sync', 'check', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /sync is not configured/);
+  });
+});
+
+test('sync check: unknown workspace fails with the standard error, non-zero', () => {
+  withWorkspace([], () => {
+    const r = run('sync', 'check', 'no-such-workspace');
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /Unknown workspace "no-such-workspace"/);
+  });
+});
+
+test('sync: missing or unknown subcommand prints usage, non-zero', () => {
+  withWorkspace([], () => {
+    for (const args of [['sync'], ['sync', 'frobnicate']]) {
+      const r = run(...args);
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /Usage: tl sync check \[workspace\]/);
+    }
+  });
+});
+
+test('usage: sync check is listed under steer, four-verb grouping intact', () => {
+  const r = run('help');
+  assert.equal(r.status, 0, r.stderr);
+  const steer = r.stdout.indexOf('steer — shape what to build');
+  const runIdx = r.stdout.indexOf('run — start it');
+  const syncIdx = r.stdout.indexOf('tl sync check [workspace]');
+  assert.ok(steer >= 0 && runIdx > steer && syncIdx > steer && syncIdx < runIdx,
+    'tl sync check must sit inside the steer group');
+});
+
 test('tl verify --dispatch writes verify-request artifact (never spawns)', () => {
   withWorkspace([{
     slug: 'await-me',
@@ -840,5 +968,150 @@ test('tl verify status surfaces queued and human-decision-required', () => {
     assert.match(r.stdout, /human-decision-required|Human decision required/i);
     assert.match(r.stdout, /authorize-fix-forward/);
     assert.match(r.stdout, /kick-back/);
+  });
+});
+
+// bin-tl-same-local-repo: workspaceIsThisRepo uses sameLocalRepo (exact
+// resolved path) — a sibling checkout sharing only the leaf name must not
+// enable the dirty-git conflict set for the CLI run brief.
+test('run brief: same-basename sibling repo never enables dirty-git holds', () => {
+  const { execFileSync } = require('child_process');
+  let dirtyFile = null;
+  try {
+    const out = execFileSync('git', ['status', '--porcelain'], { cwd: REPO_ROOT, encoding: 'utf8' });
+    const line = out.split('\n').find(l => /^.[MA?]|^[MA?]/.test(l) && l.trim().length > 3);
+    if (line) dirtyFile = line.slice(3).trim();
+  } catch { /* no git — the sibling case below still proves the negative */ }
+  // a real directory that shares the checkout's basename but not its parent
+  const scratchSibling = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-sibling-'));
+  const sibling = path.join(scratchSibling, path.basename(REPO_ROOT));
+  fs.mkdirSync(path.join(sibling, '.git'), { recursive: true }); // looks like a checkout to the claim preflight
+  try {
+    const files = dirtyFile ? [dirtyFile] : ['some/file.js'];
+    withWorkspace([{ slug: 'sib-spec', files, repo: sibling }], (name) => {
+      const r = run('run', name);
+      // sibling repo → NOT this checkout → dirtyGitPaths never consulted
+      // anchor to the spec's own hold line — the skill prose echoed in the
+      // brief legitimately contains the phrase "conflicts with dirty git"
+      assert.ok(!/sib-spec[^\n]*dirty git/.test(r.stdout),
+        'same-basename sibling repo must not produce dirty-git holds:\n' + r.stdout);
+    });
+    if (dirtyFile) {
+      // control: exact checkout path → IS this repo → the same spec IS held
+      withWorkspace([{ slug: 'exact-spec', files: [dirtyFile], repo: REPO_ROOT }], (name) => {
+        const r = run('run', name);
+        assert.match(r.stdout, /exact-spec[^\n]*dirty git/,
+          'exact-path repo with a genuinely dirty declared file should hold');
+      });
+    }
+  } finally {
+    fs.rmSync(scratchSibling, { recursive: true, force: true });
+  }
+});
+
+// ---------- tl recover (prepared-handoff recovery; lib/stall.js recovery contract) ----------
+//
+// The CLI surface only — the classification/refusal matrix is covered in
+// test/stall.test.js. Here: usage lists the command, list/inspect are
+// read-only and typed, act finishes the committed hand-off through the
+// finalize path, and a live builder lease is a typed never-steal refusal.
+
+// Turn an in-progress scaffold spec into a committed builder hand-off: stamp
+// the finalize frontmatter (byte-stable re-stamp), write outcome artifacts,
+// commit the terminal manifest, and drop a builder lease in the given state.
+function prepareCommittedHandoff(name, slug, { lease = 'expired', builder = 'claude', runId = 'run-cli-1' } = {}) {
+  const { createHandoff } = require('../lib/handoff');
+  const { setFrontmatterField } = require('../lib/frontmatter');
+  const dir = workspacePath(name, 'in-progress', slug);
+  const specFile = path.join(dir, 'SPEC.md');
+  let t = fs.readFileSync(specFile, 'utf8');
+  t = setFrontmatterField(t, 'claimed_by', builder);
+  t = setFrontmatterField(t, 'claimed_at', '2026-07-10');
+  t = setFrontmatterField(t, 'status', 'tests');
+  t = setFrontmatterField(t, 'awaiting_verifier', true);
+  t = setFrontmatterField(t, 'requested_at', '2026-07-10');
+  fs.writeFileSync(specFile, t);
+  fs.mkdirSync(path.join(dir, 'outcome'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'outcome', 'FEEDBACK.md'), 'built; gates green\n');
+  fs.writeFileSync(path.join(dir, 'outcome', 'BUILDER.diff'), 'diff --git a/x b/x\n');
+  fs.writeFileSync(path.join(dir, 'VERIFY.md'), '---\nawaiting_verifier: true\nbuilder: ' + builder + '\n---\n\nverify\n');
+  const created = createHandoff({
+    specDir: dir, builder, from_stage: 'in-progress', to_stage: 'tests',
+    base_commit: 'abc123', run_id: runId, tests: [{ command: 'npm test', ok: true }],
+    artifacts: ['VERIFY.md'],
+  });
+  assert.equal(created.ok, true, JSON.stringify(created));
+  if (lease !== 'none') {
+    const lf = workspacePath(name, '_metrics', 'builder-leases', slug + '.json');
+    fs.mkdirSync(path.dirname(lf), { recursive: true });
+    const delta = lease === 'live' ? 60 * 60000 : -60 * 60000;
+    fs.writeFileSync(lf, JSON.stringify({
+      slug, actor: builder, run_id: runId, stage: 'in-progress',
+      issued_at: new Date(Date.now() - 2 * 3600000).toISOString(),
+      heartbeat_at: new Date(Date.now() - 3600000).toISOString(),
+      expires_at: new Date(Date.now() + delta).toISOString(),
+      ttl_minutes: 120, pid: 4242,
+    }, null, 2) + '\n');
+  }
+  return dir;
+}
+
+test('usage: tl recover is listed with the never-steal and grace contract', () => {
+  const r = run('help');
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /tl recover \[workspace\] \[spec\]/);
+  assert.match(r.stdout, /the builder stays the builder/);
+  assert.match(r.stdout, /--allow-no-lease/);
+  assert.match(r.stdout, /FEEDBACK\.md alone is never completion/);
+});
+
+test('tl recover: list is read-only and distinguishes recoverable vs active vs plain stalls', () => {
+  withWorkspace([
+    { slug: 'committed-dead', stage: 'in-progress' },
+    { slug: 'committed-live', stage: 'in-progress' },
+    { slug: 'plain-stall', stage: 'in-progress', frontmatter: 'claimed_by: gemini\nclaimed_at: "2026-07-01"' },
+  ], name => {
+    prepareCommittedHandoff(name, 'committed-dead', { lease: 'expired' });
+    prepareCommittedHandoff(name, 'committed-live', { lease: 'live' });
+    const r = run('recover', name);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /RECOVERY CANDIDATES/);
+    assert.match(r.stdout, /committed-dead[^\n]*RECOVERABLE/);
+    assert.match(r.stdout, /committed-live[^\n]*ACTIVE — live builder lease/);
+    assert.match(r.stdout, /1 in-progress claim\(s\) without a committed handoff[^\n]*tl reclaim/);
+    assert.match(r.stdout, /nothing was changed by this listing/);
+    assert.ok(fs.existsSync(workspacePath(name, 'in-progress', 'committed-dead', 'SPEC.md')));
+    assert.ok(fs.existsSync(workspacePath(name, 'in-progress', 'committed-live', 'SPEC.md')));
+  });
+});
+
+test('tl recover <spec> --by --reason: finishes the hand-off; builder attribution and manifest preserved', () => {
+  withWorkspace([{ slug: 'finish-me', stage: 'in-progress' }], name => {
+    const dir = prepareCommittedHandoff(name, 'finish-me');
+    const before = fs.readFileSync(path.join(dir, 'outcome', 'HANDOFF.json'));
+    const r = run('recover', name, 'finish-me', '--by', 'trevor', '--reason', 'session died after committing');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /recovered finish-me: in-progress\/finish-me\/ → tests\/finish-me\/ \(lease-expired\)/);
+    assert.match(r.stdout, /builder attribution preserved \(claude, run run-cli-1\)/);
+    const toDir = workspacePath(name, 'tests', 'finish-me');
+    assert.deepEqual(fs.readFileSync(path.join(toDir, 'outcome', 'HANDOFF.json')), before); // byte-identical
+    const { parseFrontmatter } = require('../lib/parse');
+    const meta = parseFrontmatter(fs.readFileSync(path.join(toDir, 'SPEC.md'), 'utf8')).meta;
+    assert.equal(meta.claimed_by, 'claude'); // the builder, not the recoverer
+    assert.match(fs.readFileSync(path.join(toDir, 'NOTES.md'), 'utf8'), /recovered by: trevor/);
+  });
+});
+
+test('tl recover: live lease refuses non-zero with holder; inspect stays read-only', () => {
+  withWorkspace([{ slug: 'hands-off', stage: 'in-progress' }], name => {
+    prepareCommittedHandoff(name, 'hands-off', { lease: 'live' });
+    const inspect = run('recover', name, 'hands-off');
+    assert.equal(inspect.status, 0, inspect.stderr);
+    assert.match(inspect.stdout, /RECOVERY INSPECT/);
+    assert.match(inspect.stdout, /ACTIVE — live builder lease \(claude/);
+    const act = run('recover', name, 'hands-off', '--by', 'trevor', '--reason', 'now please');
+    assert.notEqual(act.status, 0);
+    assert.match(act.stderr, /recovery never steals live builders/);
+    assert.ok(fs.existsSync(workspacePath(name, 'in-progress', 'hands-off', 'SPEC.md')));
   });
 });

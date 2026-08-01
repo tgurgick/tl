@@ -13,6 +13,8 @@ The argument is a workspace name (a folder under `projects/`) or a path. If no a
 
 ## Steps
 
+**0. Acquire the advisory writer lock.** Run `node bin/tl.js triage-lock acquire <workspace> --lane <agent>` before inventorying. If it exits with `triage already running (age Nm)`, stop without writing — the current pass owns the board. A stale lock (mtime older than 15 minutes) is taken over and reported. Touch the lease with `node bin/tl.js triage-lock touch <workspace>` immediately before steps 4b, 5, 7, and 8; release it with `node bin/tl.js triage-lock release <workspace>` after step 8, including when exiting early after acquisition. This is advisory coordination; the write-discipline guards below remain mandatory.
+
 **1. Read config.** Parse `TRIAGE.yml` (schema: `_templates/SCHEMA.md`). If it's missing or has no goals, stop and tell the user — never invent goals.
 
 **2. Inventory.** Parse frontmatter from every `triage/*/SPEC.md`, `specs/*/SPEC.md`, and `in-progress/*/SPEC.md`. Tolerate missing optional fields; report (don't crash on) malformed frontmatter. If a spec's `status` disagrees with its folder, fix the field to match the folder **it is in at the moment of the write** — re-stat the path first, and derive the status from that current folder, never from this inventory snapshot (`triage/` → `status: triage`, `specs/` → `status: ready` or `blocked`, `in-progress/` → `status: in-progress`). A spec that moved between inventory and write is someone's live work: skip it and report it; never write it back at its old path and never "restore" the snapshot's status or stage.
@@ -77,7 +79,9 @@ List entries as `path — title (pN)` with a one-line reason. `Next up` lists on
 **8. Write outputs.**
 - `_metrics/triage-YYYY-MM-DD.md` — human summary: priority changes, detected overrides, newly unblocked specs, allocation check, stale flags, one line of goal progress.
 - Append to `_metrics/triage-log.jsonl`:
-  `{"date": "...", "total": N, "by_priority": {"p0": N, ...}, "by_type": {...}, "allocation_actual": {...}, "overrides_detected": N, "priorities": {"specs/foo/": "p1", ...}}`
+  `{"date":"...","total":N,"by_priority":{"p0":N,...},"by_type":{...},"allocation_actual":{...},"overrides_detected":N,"routed_to_triage":N,"priorities":{"specs/foo/":"p1",...}}`
+
+Append exactly one compact JSON line per pass with `fs.appendFileSync(file, JSON.stringify(record) + '\n')`; Python writers must use `json.dumps(record, separators=(',', ':'))`. Keep the documented key order (`date`, `total`, `by_priority`, `by_type`, `allocation_actual`, `overrides_detected`, `routed_to_triage`, `priorities`). The file is append-only: never rewrite it and never double-append a pass.
 
 The `priorities` map is what step 3 diffs against next run — it must list every ranked spec in `triage/` and `specs/`.
 

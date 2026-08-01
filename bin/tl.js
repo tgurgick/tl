@@ -58,20 +58,30 @@ const SKILLS = path.join(INSTALL_ROOT, 'skills');
 // separate copies of the parser, the batch rules, or the path guard.
 const { parseFrontmatter, parseYaml } = require('../lib/parse');
 const { safeRead, readFirst, isDir, mtime } = require('../lib/workspace');
-const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch, calmCap, selectContinuations, repoHoldReason } = require('../lib/batch');
+const { section, filesToTouch, isReadOnly, priorityRank, specSlug, activeConflicts, selectBatch, calmCap, selectContinuations, repoHoldReason, sameLocalRepo } = require('../lib/batch');
+const { stallThresholdMs, detectStalledClaims, reclaimStalled, classifyRecovery, recoverPreparedHandoff } = require('../lib/stall');
+const {
+  recordReflectProposalDecision, pendingReflectProposals, normalizeProposalId, REFLECT_REVIEW_LOG,
+} = require('../lib/reflect-desk');
 const { runFixtureExperiment } = require('../lib/experiment-fixture');
 const { selectWinner, applyWinner, rejectWinner, sendWinnerToReview } = require('../lib/experiment-apply');
 const { queueExperiment, drainQueue, readQueueRows } = require('../lib/experiment-queue');
 const { replayExperiment, replayReport, parseCandidate, createSuite, listSuites, selectSuiteExperiments, replaySuite } = require('../lib/experiment-replay');
 const { canAdvanceToReview, verificationPolicy } = require('../lib/verification-gate');
+const { recallSearch, readThreads } = require('../lib/recall');
+const { normalizeTypeMap, normalizeTypeKey, DEFAULT_TYPE_MAP } = require('../lib/sync-map');
+const { checkTriageLock, acquireTriageLock, touchTriageLock, releaseTriageLock } = require('../lib/triage-lock');
 const {
   readAutomation, laneIssues, scheduleArtifacts, installLaunchd, automationStatus,
-  experimentScheduleSummary,
+  experimentScheduleSummary, laneAvailability, formatLaneAvailability,
 } = require('../lib/automation');
+const {
+  diagnoseWorkspace, formatLifecycleFindings, formatCapacityRows, healthOpenLoops,
+} = require('../lib/doctor');
 const {
   verifyTick, applyVerifyHumanDecision, verifierStatusOf, readVerifierLanes,
   verifierLaneIssues, builderOf, writeVerifyRequest, readVerifyRequests,
-  maybeAutoInitiateExperiment, workspaceRepoDir,
+  maybeAutoInitiateExperiment, workspaceRepoDir, appendSpecTraceEvent,
 } = require('../lib/worker');
 const { execFileSync, spawn, spawnSync } = require('child_process');
 
@@ -183,12 +193,9 @@ function dirtyGitPaths() {
 function workspaceIsThisRepo(specs) {
   const repoRef = specs.map(s => s.meta && s.meta.repo).find(Boolean);
   if (!repoRef) return false;
-  let r = String(repoRef).trim().replace(/\/+$/, '');
-  if (r.startsWith('~')) r = path.join(process.env.HOME || '', r.slice(1));
-  try {
-    return path.resolve(r) === path.resolve(INSTALL_ROOT)
-      || path.basename(path.resolve(r)) === path.basename(INSTALL_ROOT);
-  } catch { return false; }
+  // Exact resolved path only (lib/batch sameLocalRepo) — a sibling checkout
+  // that merely shares a leaf name must not enable the dirty-git conflict set.
+  return sameLocalRepo(repoRef, INSTALL_ROOT, process.env.HOME || '');
 }
 
 // The workspace's own repo identity — PROJECT.md `repo:` — the exemption input
@@ -244,17 +251,11 @@ function notesExcerpt(notes, maxLines = 8) {
   return excerpt.join('\n');
 }
 
-function readThreads(dir) {
-  const out = [];
-  const threadsDir = path.join(dir, 'threads');
-  if (!isDir(threadsDir)) return out;
-  for (const f of fs.readdirSync(threadsDir).sort()) {
-    if (!f.endsWith('.md') || f.startsWith('.')) continue;
-    const { meta, body } = parseFrontmatter(safeRead(path.join(threadsDir, f)) || '');
-    out.push({ path: 'threads/' + f, title: meta.title || f, meta, body });
-  }
-  return out;
-}
+// Thread records come from the shared reader in lib/recall.js (readThreads),
+// which stamps `mtime` — the recency signal lib/resume-recommended.js ranks
+// open loops by. The CLI used to keep a private copy here that omitted mtime,
+// so /tl resume saw every thread as infinitely old while the cockpit did not
+// (threads/2026-07-14-cli-readthreads-mtime-drift.md). One reader, no drift.
 
 // ---------- SKILL printing ----------
 
@@ -298,11 +299,28 @@ function cmdResume(args) {
     out(`${done.length} in done/ — latest: ${done[0].title} (${done[0].path})`);
   }
 
-  // in-progress
+  // in-progress — with stalled-claim flags (lib/stall.js: idle past the
+  // TRIAGE.yml `stall.idle_hours` threshold, no healthy hand-off). A stalled
+  // claim is visible here instead of silently parking queue capacity.
   const inProgress = specs.filter(s => s.stage === 'in-progress');
   if (inProgress.length) {
+    let triageCfg = null;
+    try { triageCfg = triage ? parseYaml(triage) : null; } catch { /* best-effort */ }
+    const thresholdMs = stallThresholdMs(triageCfg);
+    const stalled = detectStalledClaims(ws.dir, specs, {
+      thresholdMs, continuations: readContinuations(ws.dir, specs),
+    });
+    const stalledBySlug = new Map(stalled.map(x => [x.slug, x]));
     out('\n## In progress');
-    for (const s of inProgress) out(`- ${s.title} (${s.path})`);
+    for (const s of inProgress) {
+      const st = stalledBySlug.get(specSlug(s.path));
+      out(`- ${s.title} (${s.path})` + (st
+        ? ` — STALLED: claimed_by ${s.meta.claimed_by || '(unstamped)'}, idle ~${st.idleHours}h (> ${Math.round(thresholdMs / 3600000)}h)`
+        : ''));
+    }
+    if (stalled.length) {
+      out(`${stalled.length} stalled claim${stalled.length === 1 ? '' : 's'} — reclaim explicitly (never a sweep): tl reclaim ${ws.name} <spec> --by <you> --reason "<why>"`);
+    }
   }
 
   // goal in focus — top-weighted goal from TRIAGE.yml (best-effort text scan)
@@ -341,6 +359,31 @@ function cmdResume(args) {
   if (parked) loops.push(`${parked} parked thread${parked === 1 ? '' : 's'} (cleanup review)`);
   if (!loops.length) out('none — clean.');
   else loops.forEach(l => out('- ' + l));
+
+  // Shared health classifier — lifecycle findings + blocked verifier capacity.
+  try {
+    const cfg = triage ? parseYaml(triage) : {};
+    const health = diagnoseWorkspace(ws.dir, {
+      cfg,
+      which: bin => {
+        try {
+          const r = spawnSync('which', [bin], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+          return r.status === 0 ? String(r.stdout || '').trim() : '';
+        } catch { return ''; }
+      },
+    });
+    const hLoops = healthOpenLoops(health);
+    out('\n## Health (lifecycle · verifier capacity)');
+    if (!hLoops.length && health.lifecycle.summary.ok) {
+      out('lifecycle ok'
+        + (health.capacity.summary.ok
+          ? ` · verifier available: ${(health.capacity.summary.available || []).join(', ') || '(none)'}`
+          : ` · verifier blocked: ${(health.capacity.verifier_lanes || []).filter(r => !r.ok).map(r => r.state).join(', ')}`));
+    } else {
+      for (const line of formatLifecycleFindings(health.lifecycle.findings)) out(line);
+      for (const line of formatCapacityRows(health.capacity.verifier_lanes)) out(line);
+    }
+  } catch { /* best-effort — snapshot still useful without health */ }
 
   // backlog reference
   out('\n## Backlog · parked (reference)');
@@ -557,9 +600,46 @@ async function cmdUp(args) {
     ? ` · stuck at tests: ${status.stuckAtTests} (awaiting verification — tl verify ${ws.name})`
     : ''));
 
+  out('\n## Lane availability');
+  const whichBin = bin => {
+    try {
+      const r = spawnSync('which', [bin], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      return r.status === 0 ? String(r.stdout || '').trim() : '';
+    } catch { return ''; }
+  };
+  const availability = laneAvailability({
+    wsDir: ws.dir,
+    cfg,
+    which: whichBin,
+  });
+  for (const line of formatLaneAvailability(availability)) out(line);
+
+  // Shared lifecycle + verifier capacity (lib/doctor.js) — same object the
+  // cockpit and automation status consume. Observation only.
+  const health = diagnoseWorkspace(ws.dir, { cfg, which: whichBin });
+  out('\n## Lifecycle integrity');
+  for (const line of formatLifecycleFindings(health.lifecycle.findings)) out(line);
+  out('\n## Verifier capacity');
+  for (const line of formatCapacityRows(health.capacity.verifier_lanes)) out(line);
+
   // ---- (d) one next human action ----
   const specs = readAllSpecs(ws.dir);
   const conts = readContinuations(ws.dir, specs);
+
+  // Stalled claims surface here too — additive, so the next-action ladder
+  // (review gate first) is unchanged; a stalled claim is queue capacity
+  // silently parked, and `tl up` is the operating path that must show it.
+  const stalledClaims = detectStalledClaims(ws.dir, specs, {
+    thresholdMs: stallThresholdMs(cfg), continuations: conts,
+  });
+  if (stalledClaims.length) {
+    out('\n## Stalled claims (idle past threshold — reclaim explicitly)');
+    for (const x of stalledClaims) {
+      out(`- ${x.spec.title} (${x.spec.path}) — claimed_by ${x.spec.meta.claimed_by || '(unstamped)'}, idle ~${x.idleHours}h`);
+    }
+    out(`reclaim: tl reclaim ${ws.name} <spec> --by <you> --reason "<why>"  (one spec at a time; fresh claims refuse)`);
+  }
+
   out('\n## Next human action');
   const next = nextHumanAction(ws.name, specs, conts, automation.enabled && !status.paused && !issues.length);
   out(next.action);
@@ -667,12 +747,35 @@ function cmdRun(args) {
     // a named run is an explicit human choice — surface the pending resume, honor the name.
     out('Note: ' + live.length + ' pending continuation dispatch(es) — kicked-back work is waiting (resume it first unless this named run is intentional).\n');
   }
+  // Interactive dispatch provenance (SCHEMA.md "Activity trace"): a human
+  // typed `tl run`, so events carry initiation: human / source: cli — the
+  // trace distinguishes this from a scheduled pickup even when the same agent
+  // does the work. Skipped when the brief is tick-driven (TL_WORKER_DISPATCH:
+  // the worker owns dispatch provenance on that path — one writer per path)
+  // and on --dry-run (a dry run writes nothing).
+  const traceInteractive = !dryRun && !process.env.TL_WORKER_DISPATCH;
+  const cliRunId = 'cli-' + new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+
   if (live.length && !named) {
     // Several kickbacks can be pending at once — they fan out like a fresh
     // batch: ordered (priority, then oldest kickback), capped at the calm cap,
     // and conflict-checked against each other so two resumed specs never share
     // a file. Held continuations stay pending for the next run, with a reason.
     const resumed = selectContinuations(live, { cap, preflight });
+    if (traceInteractive) {
+      // A continuation resume signs no claim → `dispatched`, correlated by the
+      // dispatch file the kickback left behind.
+      for (const c of resumed.batch) {
+        appendSpecTraceEvent(path.join(ws.dir, c.spec.path), {
+          type: 'dispatched',
+          summary: `resume dispatched via interactive tl run brief (continuation${c.dispatch.reason ? ': ' + String(c.dispatch.reason).slice(0, 120) : ''})`,
+          paths: [c.spec.path],
+          actor_type: 'agent', actor_id: agent || 'unknown',
+          initiation: 'human', source: 'cli',
+          run_id: cliRunId, dispatch_id: c.file,
+        });
+      }
+    }
     out('## Continuation dispatches — resume these before fresh claims (' + resumed.batch.length + ')');
     for (const c of resumed.batch) {
       out(`\n### ${c.spec.title}  (${c.spec.path}) [${c.file}]`);
@@ -750,6 +853,21 @@ function cmdRun(args) {
     for (const s of batch) {
       out(`- ${s.path} → in-progress/${specSlug(s.path)}/  (set status: in-progress, stamp claimed_by + claimed_at)`);
     }
+    if (traceInteractive) {
+      // The brief commits the batch, so the claim event lands now — in the
+      // specs/ folder, where it travels with the folder move the agent makes.
+      // The trace tells the truth if no claim follows: `claimed` here means
+      // "claim directed interactively", and skills/run says don't duplicate it.
+      for (const s of batch) {
+        appendSpecTraceEvent(path.join(ws.dir, s.path), {
+          type: 'claimed',
+          summary: `claim directed via interactive tl run brief${agent ? ' (agent lane: ' + agent + ')' : ''} — human-invoked run`,
+          paths: [s.path],
+          actor_type: 'agent', actor_id: agent || 'unknown',
+          initiation: 'human', source: 'cli', run_id: cliRunId,
+        });
+      }
+    }
   }
 
   // Fresh interactive claims: same auto-initiation as the headless worker
@@ -788,7 +906,275 @@ function cmdRun(args) {
   out('The batch above is conflict-free and claimed-ready. Now follow the run SKILL: claim the WHOLE batch first (every folder move above, before any work begins), then do each spec\'s work in scope and carry it to in-review (never done). Workspace "' + ws.name + '".');
 }
 
+// ---------- tl reclaim ----------
+
+// Explicit reclaim of ONE stalled in-progress claim — never a sweep.
+//
+//   tl reclaim [ws]                          list stalled candidates, act on nothing
+//   tl reclaim [ws] <spec> --by <who> --reason "<why>"   reclaim that one claim
+//
+// The rule and guards live in lib/stall.js: a claim with activity inside the
+// threshold refuses (never force-steal), as do awaiting-verifier hand-offs,
+// recorded blockers, and specs with a pending continuation dispatch. The
+// reclaim itself is logged in the spec's NOTES.md — prior claim, reclaimer,
+// reason — before any frontmatter changes or the folder move, so attribution
+// is never stripped silently (the routing-priors mis-credit lesson).
+function cmdReclaim(args) {
+  let by = null, reason = null;
+  const pos = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--by') by = args[++i];
+    else if (args[i].startsWith('--by=')) by = args[i].slice(5);
+    else if (args[i] === '--reason') reason = args[++i];
+    else if (args[i].startsWith('--reason=')) reason = args[i].slice(9);
+    else pos.push(args[i]);
+  }
+  const ws = resolveWorkspace(pos[0]);
+  const slug = pos[1] || null;
+  const specs = readAllSpecs(ws.dir);
+  const conts = readContinuations(ws.dir, specs);
+  const cfg = parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '') || {};
+  const thresholdMs = stallThresholdMs(cfg);
+  const thresholdHours = Math.round(thresholdMs / 3600000);
+
+  if (!slug) {
+    const stalled = detectStalledClaims(ws.dir, specs, { thresholdMs, continuations: conts });
+    out(`===== RECLAIM CANDIDATES: ${ws.name} (idle > ${thresholdHours}h) =====\n`);
+    if (!stalled.length) {
+      out('none — every in-progress claim shows recent activity or a healthy hand-off (awaiting_verifier / blocked / pending continuation).');
+      return;
+    }
+    for (const x of stalled) {
+      const hasFeedback = !!(x.spec.feedback && x.spec.feedback.trim());
+      out(`- ${x.spec.title} (${x.spec.path}) — claimed_by ${x.spec.meta.claimed_by || '(unstamped)'}, idle ~${x.idleHours}h`);
+      out(`    would ${hasFeedback
+        ? 'ADVANCE to tests/ — builder artifacts (outcome/FEEDBACK.md) present; claimed_by preserved as builder attribution'
+        : 'RELEASE to specs/ — status: ready, claim cleared after the prior claim is recorded in NOTES.md'}`);
+      out(`    run: tl reclaim ${ws.name} ${x.slug} --by <you> --reason "<why>"`);
+    }
+    out('\nreclaim acts on ONE named spec; nothing was changed by this listing.');
+    return;
+  }
+
+  const res = reclaimStalled(ws.dir, slug, { by, reason, thresholdMs, continuations: conts });
+  if (!res.ok) {
+    const why = {
+      'reason-required': 'a recorded --reason "<why>" is mandatory — stamps change only with a reason.',
+      'by-required': 'say who reclaims: --by <agent-or-human>.',
+      'not-found': `no in-progress/${slug}/SPEC.md in "${ws.name}".`,
+      'active-claim': 'the claim shows activity inside the threshold — never force-steal live work.',
+      'awaiting-verifier': `that spec is a verifier hand-off, not a stall — tl verify ${ws.name}.`,
+      'continuation-pending': `a pending continuation dispatch owns the resume — tl run ${ws.name}.`,
+      'blocked': 'the spec records a blocker; unblock or kick it back instead of reclaiming.',
+      'destination-exists': 'the destination folder already exists — resolve the collision by hand.',
+      'no-evidence': 'no dateable activity for the claim — inspect the folder by hand before touching it.',
+    }[res.reason] || res.reason;
+    fail('reclaim refused: ' + why);
+  }
+  // Handoff provenance: an explicit human-attributed reclaim moved the spec —
+  // record who, why, and the stage edge in the trace that travels with it.
+  appendSpecTraceEvent(path.join(ws.dir, res.to), {
+    type: 'handoff',
+    from_stage: res.from.split('/')[0], to_stage: res.to.split('/')[0],
+    summary: `reclaimed by ${by} (${res.mode}): ${String(reason || '').slice(0, 200)} — prior claim ${res.priorClaimedBy || 'unstamped'}`,
+    actor_type: 'human', actor_id: String(by),
+    initiation: 'human', source: 'cli',
+  });
+  out(`reclaimed ${res.slug}: ${res.from} → ${res.to} (${res.mode})`);
+  out(res.mode === 'advance'
+    ? `builder attribution preserved (claimed_by: ${res.priorClaimedBy || 'unknown'}) — awaiting independent verification: tl verify ${ws.name}`
+    : `prior claim (${res.priorClaimedBy || 'unstamped'}) recorded in NOTES.md; spec re-queued as ready.`);
+  out(`idle ~${res.idleHours}h > threshold ${res.thresholdHours}h — the why is logged in ${res.to}NOTES.md`);
+}
+
+// ---------- tl recover ----------
+
+// Finish a COMMITTED builder handoff whose session died before the move —
+// the counterpart to reclaim (which owns pre-manifest stalls). Same CLI
+// discipline: list-then-act, --by/--reason mandatory to act, typed refusals,
+// one spec at a time, never a sweep.
+//
+//   tl recover [ws]                    list recovery candidates, act on nothing
+//   tl recover [ws] <spec>             inspect ONE spec's typed state (read-only)
+//   tl recover [ws] <spec> --by <who> --reason "<why>" [--allow-no-lease]
+//                                      finish that one committed hand-off
+//
+// The contract lives in lib/stall.js classifyRecovery/recoverPreparedHandoff:
+// eligibility needs a valid terminal HANDOFF.json for in-progress → tests and
+// an EXPIRED builder lease; a live lease refuses with holder details (never
+// steal a live builder); partial writes, invalid/changed manifests, and
+// missing manifests refuse (FEEDBACK.md alone is never completion). The
+// recovery delegates to the worker finalize path — byte-identical manifest
+// reuse, stage-CAS move — so the original builder keeps attribution; the
+// recoverer is logged separately in NOTES.md and the spec's TRACE.jsonl.
+function cmdRecover(args) {
+  let by = null, reason = null, allowNoLease = false;
+  const pos = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--by') by = args[++i];
+    else if (args[i].startsWith('--by=')) by = args[i].slice(5);
+    else if (args[i] === '--reason') reason = args[++i];
+    else if (args[i].startsWith('--reason=')) reason = args[i].slice(9);
+    else if (args[i] === '--allow-no-lease') allowNoLease = true;
+    else pos.push(args[i]);
+  }
+  const ws = resolveWorkspace(pos[0]);
+  const slug = pos[1] ? specSlug(pos[1]) : null;
+  const cfg = parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '') || {};
+  const thresholdMs = stallThresholdMs(cfg);
+  const thresholdHours = Math.round(thresholdMs / 3600000);
+
+  const stateLine = (c) => {
+    switch (c.state) {
+      case 'recoverable':
+        return `RECOVERABLE — valid HANDOFF.json (builder ${c.builder}, run ${c.run_id}), lease expired, idle ~${Math.round((c.idleMs || 0) / 3600000)}h`;
+      case 'no-lease':
+        return `NO-LEASE — valid manifest (builder ${c.builder}) but no builder lease on record (legacy). Explicit grace: --allow-no-lease, requires idle > ${thresholdHours}h (now ~${Math.round((c.idleMs || 0) / 3600000)}h)`;
+      case 'active':
+        return `ACTIVE — live builder lease (${(c.holder && c.holder.actor) || 'unknown'}, run ${(c.holder && c.holder.run_id) || '?'}, expires ${(c.holder && c.holder.expires_at) || 'per file age'}) — never steal a live builder`;
+      case 'partial':
+        return `PARTIAL — ${c.detail || c.reason} — not a committed handoff; not recoverable`;
+      case 'invalid':
+        return `INVALID — manifest refused (${c.reason}) — changed bytes / mismatch refuse; inspect by hand`;
+      case 'finalized':
+        return `FINALIZED — already in tests/ with a valid manifest (builder ${c.builder}) — nothing to recover`;
+      case 'conflict':
+        return `CONFLICT — spec observed in ${(c.observed_stages || []).join(' AND ')} — repair the duplicate before recovery`;
+      default:
+        return `${String(c.state || 'unknown').toUpperCase()} — ${c.detail || c.reason || ''}`;
+    }
+  };
+
+  if (!slug) {
+    const specs = readAllSpecs(ws.dir).filter(s => s.stage === 'in-progress' && s.dir);
+    out(`===== RECOVERY CANDIDATES: ${ws.name} (committed handoffs only) =====\n`);
+    let shown = 0, plain = 0;
+    for (const s of specs) {
+      const c = classifyRecovery(ws.dir, specSlug(s.path), {});
+      if (c.state === 'no-manifest') { plain++; continue; }
+      shown++;
+      out(`- ${s.title} (${s.path}) — ${stateLine(c)}`);
+      if (c.state === 'recoverable') out(`    run: tl recover ${ws.name} ${c.slug} --by <you> --reason "<why>"`);
+      if (c.state === 'no-lease') out(`    run: tl recover ${ws.name} ${c.slug} --by <you> --reason "<why>" --allow-no-lease`);
+    }
+    if (!shown) out('none — no in-progress claim holds a committed handoff manifest.');
+    if (plain) out(`\n${plain} in-progress claim(s) without a committed handoff — plain stalls belong to: tl reclaim ${ws.name}`);
+    out('\nrecover acts on ONE named spec; nothing was changed by this listing.');
+    return;
+  }
+
+  if (by == null && reason == null) {
+    // Inspect surface: one spec's typed state, read-only, exit 0.
+    const c = classifyRecovery(ws.dir, slug, {});
+    out(`===== RECOVERY INSPECT: ${ws.name} ${slug} =====\n`);
+    out(stateLine(c));
+    if (c.state === 'recoverable') out(`\nact: tl recover ${ws.name} ${slug} --by <you> --reason "<why>"`);
+    else if (c.state === 'no-lease') out(`\nact (explicit legacy grace): tl recover ${ws.name} ${slug} --by <you> --reason "<why>" --allow-no-lease`);
+    else out('\nnot recoverable in this state; nothing was changed by this inspection.');
+    return;
+  }
+
+  const res = recoverPreparedHandoff(ws.dir, slug, { by, reason, thresholdMs, allowNoLease });
+  if (!res.ok) {
+    const holder = res.holder ? ` (holder ${res.holder.actor || 'unknown'}, run ${res.holder.run_id || '?'}, expires ${res.holder.expires_at || 'per file age'})` : '';
+    const why = {
+      'reason-required': 'a recorded --reason "<why>" is mandatory — recovery always logs why.',
+      'by-required': 'say who recovers: --by <agent-or-human>.',
+      'not-found': `no committed hand-off for "${slug}" — not in in-progress/ and not finalized in tests/.`,
+      'live-lease': `a live builder lease holds this spec${holder} — recovery never steals live builders; wait for expiry or let the builder finalize.`,
+      'partial-handoff': 'the handoff is a partial write / incomplete artifact set — not a committed manifest; tl reclaim owns pre-manifest stalls.',
+      'no-manifest': 'no committed HANDOFF.json — FEEDBACK.md alone is never completion; tl reclaim owns pre-manifest stalls.',
+      'invalid-manifest': `the committed manifest does not validate (${res.cause || 'refused'}) — changed bytes refuse; inspect by hand.`,
+      'no-lease': 'no builder lease on record — the legacy grace path is explicit: add --allow-no-lease (idle past threshold still required).',
+      'recent-activity': `the folder shows activity inside the threshold (${thresholdHours}h) — a builder may be alive without a lease; grace refuses.`,
+      'destination-exists': 'the spec is observed in more than one stage — repair the duplicate before recovery.',
+      'failing-tests': 'the committed manifest records failing tests — a red gate is never handed off; kick it back instead.',
+      'lease-held': `another run holds the builder lease${holder} — a concurrent recovery/retry is live; let it finish.`,
+      'lease-lost': 'lost the lease race to a concurrent recovery/retry — re-run tl recover to see the resulting state.',
+      'stale-stage': 'the spec moved stages mid-recovery — re-run tl recover to see the resulting state.',
+      'manifest-invalidated': 'artifact bytes drifted mid-recovery — reuse_only refused before stamp, overwrite, or move; inspect in-progress/' + slug + '/ by hand: ' + (res.detail || ''),
+      're-prepared': 'artifact bytes drifted mid-recovery and the manifest was re-prepared — inspect provenance by hand: ' + (res.detail || ''),
+      'invariant-breach': 'recovery invariant failed after finalize — inspect provenance by hand: ' + (res.detail || ''),
+    }[res.reason] || (res.detail || res.reason);
+    fail('recover refused: ' + why);
+  }
+  if (res.already_finalized) {
+    out(`already finalized: tests/${slug}/ holds the valid committed manifest (builder ${res.builder || 'unknown'}) — recovery had nothing to do (idempotent).`);
+    return;
+  }
+  out(`recovered ${res.slug}: ${res.from} → ${res.to} (${res.mode})`);
+  out(`builder attribution preserved (${res.builder}, run ${res.run_id}) — the manifest was reused byte-identically${res.byte_identical ? '' : ' (WARNING: manifest bytes could not be confirmed identical)'}; recovery is logged in NOTES.md + TRACE.jsonl as ${res.recovered_by}`);
+  out(`awaiting independent verification: tl verify ${ws.name}`);
+}
+
 // ---------- tl review ----------
+
+// ---------- tl reflect-decision ----------
+// Explicit human marker for a /tl reflect proposal. Appends one row to
+// _metrics/reflect-review-log.jsonl — never rewrites history, never applies
+// TRIAGE.yml. Viewing the proposal file alone must not call this.
+
+function cmdReflectDecision(args) {
+  const flags = new Set();
+  const positional = [];
+  let action = null, by = 'human-cli', note = '';
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--action' && args[i + 1]) { action = args[++i]; continue; }
+    if (a.startsWith('--action=')) { action = a.slice(9); continue; }
+    if (a === '--by' && args[i + 1]) { by = args[++i]; continue; }
+    if (a.startsWith('--by=')) { by = a.slice(5); continue; }
+    if (a === '--note' && args[i + 1]) { note = args[++i]; continue; }
+    if (a.startsWith('--note=')) { note = a.slice(7); continue; }
+    if (a === '--reviewed' || a === '--dismissed' || a === '--applied') {
+      action = a.slice(2); continue;
+    }
+    if (a.startsWith('-')) fail('unknown flag for reflect-decision: ' + a);
+    positional.push(a);
+  }
+  // Allow: tl reflect-decision [ws] <id> --action X  OR  tl reflect-decision <id> --action X
+  let wsArg = null, idArg = null;
+  if (positional.length >= 2) { wsArg = positional[0]; idArg = positional[1]; }
+  else if (positional.length === 1) { idArg = positional[0]; }
+  const ws = resolveWorkspace(wsArg);
+  if (!idArg) {
+    // List unread proposals (read-only).
+    const metrics = {};
+    const metricsDir = path.join(ws.dir, '_metrics');
+    if (isDir(metricsDir)) {
+      for (const f of fs.readdirSync(metricsDir)) {
+        if (!f.endsWith('.jsonl')) continue;
+        const lines = (safeRead(path.join(metricsDir, f)) || '').split('\n').filter(Boolean).map(l => {
+          try { return JSON.parse(l); } catch { return null; }
+        }).filter(Boolean);
+        metrics[f.replace(/\.jsonl$/, '')] = lines;
+      }
+    }
+    const pending = pendingReflectProposals({ metrics, now: Date.now() });
+    out('===== REFLECT PROPOSALS: ' + ws.name + ' =====');
+    if (!pending.proposals.length) {
+      out('no unread reflect proposals.');
+      return;
+    }
+    for (const p of pending.proposals) {
+      out(`  ${p.id}  ${p.path}  (${p.proposals} change${p.proposals === 1 ? '' : 's'})`);
+    }
+    out('');
+    out('Mark one: tl reflect-decision ' + ws.name + ' <id> --action reviewed|dismissed|applied [--by <who>] [--note "..."]');
+    return;
+  }
+  if (!action) fail('Usage: tl reflect-decision [ws] <reflect-YYYY-MM-DD|date> --action reviewed|dismissed|applied [--by <who>] [--note "..."]');
+  const id = normalizeProposalId(idArg);
+  if (!id) fail('bad proposal id — use reflect-YYYY-MM-DD or YYYY-MM-DD');
+  try {
+    const got = recordReflectProposalDecision(ws.dir, {
+      proposalId: id, action, actor: by, via: 'cli', note,
+    });
+    out(`recorded ${got.row.action} for ${got.row.proposal_id} → ${got.path} (actor ${got.row.actor})`);
+  } catch (e) {
+    fail(e && e.message ? e.message : String(e));
+  }
+}
 
 function cmdReview(args) {
   const ws = resolveWorkspace(args[0]);
@@ -867,7 +1253,7 @@ function cmdVerify(args) {
   if (decide) {
     if (!named) fail('Human decision requires a spec slug: tl verify <ws> <spec> --authorize-fix-forward|--kick-back');
     try {
-      const got = applyVerifyHumanDecision(ws.dir, { slug: named, action: decide, note });
+      const got = applyVerifyHumanDecision(ws.dir, { slug: named, action: decide, note, by: 'human-cli', source: 'cli' });
       out(`Human decision recorded: ${decide} → ${got.path}`);
       out('No mutation was auto-applied. A continuation dispatch is pending for the next run.');
     } catch (e) { fail(e && e.message ? e.message : String(e)); }
@@ -894,6 +1280,8 @@ function cmdVerify(args) {
     const result = verifyTick({
       root: INSTALL_ROOT, wsDir: ws.dir, wsName: ws.name,
       preferLane: agent || null, which,
+      // trace provenance: a human typed `tl verify --execute`
+      initiation: 'human', source: 'cli',
     });
     out(`verify tick: code ${result.code}` + (result.picked ? ` · ${result.picked}` : '')
       + (result.outcome ? ` · ${result.outcome}` : '')
@@ -978,94 +1366,10 @@ function cmdVerify(args) {
 
 // ---------- tl recall ----------
 
-// The intents/ corpus — human objectives, searched by recall.
-function readIntents(dir) {
-  const out = [];
-  const intentsDir = path.join(dir, 'intents');
-  if (!isDir(intentsDir)) return out;
-  for (const f of fs.readdirSync(intentsDir).sort()) {
-    if (!f.endsWith('.md') || f.startsWith('.')) continue;
-    const file = path.join(intentsDir, f);
-    const { meta, body } = parseFrontmatter(safeRead(file) || '');
-    out.push({ path: 'intents/' + f, title: meta.title || f, meta, body, mtime: mtime(file) });
-  }
-  return out;
-}
-
-// The done/*/outcome/ corpus — FEEDBACK.md + ALIGNMENT.md, where completed work
-// recorded what actually happened. One record per outcome file found.
-function readOutcomes(dir) {
-  const out = [];
-  const doneDir = path.join(dir, 'done');
-  if (!isDir(doneDir)) return out;
-  for (const slug of fs.readdirSync(doneDir).sort()) {
-    if (slug.startsWith('.')) continue;
-    const outcomeDir = path.join(doneDir, slug, 'outcome');
-    if (!isDir(outcomeDir)) continue;
-    for (const f of fs.readdirSync(outcomeDir).sort()) {
-      if (!f.endsWith('.md') || f.startsWith('.')) continue;
-      const file = path.join(outcomeDir, f);
-      const { meta, body } = parseFrontmatter(safeRead(file) || '');
-      out.push({
-        path: 'done/' + slug + '/outcome/' + f,
-        title: meta.title || (slug + ' — ' + f.replace(/\.md$/, '')),
-        meta, body, mtime: mtime(file),
-      });
-    }
-  }
-  return out;
-}
-
-// Score a corpus item against the query terms. Title/frontmatter hits weigh more
-// than body hits; a query term must appear somewhere or the item is dropped.
-// Returns { score, snippet } or null when nothing matches. Transparent and
-// case-insensitive — no fuzzy matching, no index.
-function scoreMatch(item, terms) {
-  const title = String(item.title || '').toLowerCase();
-  const front = JSON.stringify(item.meta || {}).toLowerCase();
-  const body = String(item.body || '').toLowerCase();
-  const head = title + '\n' + front;
-
-  let score = 0;
-  for (const t of terms) {
-    if (head.includes(t)) score += 3;      // title/frontmatter hit — highest signal
-    else if (body.includes(t)) score += 1; // body hit
-    else return null;                       // a term with no home anywhere → not a match
-  }
-  return { score, snippet: firstMatchSnippet(item.body, terms) };
-}
-
-// The first body line that contains any query term, trimmed to one line of
-// context — enough to answer without re-opening the file.
-function firstMatchSnippet(body, terms) {
-  for (const raw of String(body).split('\n')) {
-    const line = raw.trim();
-    if (!line) continue;
-    const low = line.toLowerCase();
-    if (terms.some(t => low.includes(t))) {
-      return line.length > 160 ? line.slice(0, 157) + '…' : line;
-    }
-  }
-  return '';
-}
-
-// The kind bucket a match belongs to — decision / open thread / active spec /
-// done outcome / recommendation — best-effort from frontmatter + stage.
-function recallKind(item) {
-  const type = String(item.meta.type || '').toLowerCase();
-  const status = String(item.meta.status || '').toLowerCase();
-  if (item.path.startsWith('intents/')) return 'intent';
-  if (item.path.startsWith('done/') && item.path.includes('/outcome/')) return 'done outcome';
-  if (item.path.startsWith('threads/')) {
-    if (type === 'decision') return 'decision';
-    if (status === 'open' || status === 'parked' || type === 'question' || type === 'risk') return 'open thread';
-    return 'thread';
-  }
-  // a spec at some stage
-  if (item.stage === 'done') return type === 'research' ? 'recommendation' : 'done outcome';
-  if (type === 'research') return 'recommendation';
-  return 'ready / active spec';
-}
+// Corpus assembly, scoring, and kind-grouping live in lib/recall.js — the SAME
+// helpers the UI server's read-only GET /api/recall uses, so the CLI and the
+// cockpit cannot drift (the parity the tl-recall-skill outcome carried
+// forward). The CLI prints the full uncapped snapshot; the UI caps.
 
 function cmdRecall(args) {
   const ws = resolveWorkspace(args[0]);
@@ -1079,51 +1383,96 @@ function cmdRecall(args) {
     return;
   }
 
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-
-  // assemble the full corpus: intents, all spec stages, threads, done outcomes
-  const corpus = [];
-  for (const s of readAllSpecs(ws.dir)) corpus.push(s);
-  for (const t of readThreads(ws.dir)) corpus.push(t);
-  for (const i of readIntents(ws.dir)) corpus.push(i);
-  for (const o of readOutcomes(ws.dir)) corpus.push(o);
-
-  const hits = [];
-  for (const item of corpus) {
-    const m = scoreMatch(item, terms);
-    if (m) hits.push({ item, score: m.score, snippet: m.snippet, kind: recallKind(item) });
-  }
-  // rank: score first, then recency (newer wins ties)
-  hits.sort((a, b) => b.score - a.score || (b.item.mtime || 0) - (a.item.mtime || 0));
+  const { total, groups } = recallSearch(ws.dir, query);
 
   out('\n===== RECALL: ' + ws.name + ' — "' + query + '" =====\n');
-  if (!hits.length) {
+  if (!total) {
     out('No prior discussion found across intents, specs, threads, or done outcomes.');
     hr();
     out('recall found no prior art for "' + query + '" in workspace "' + ws.name + '". Answer: no — proceed, this looks new.');
     return;
   }
 
-  // group by kind, preserving the ranked order within each group
-  const order = ['decision', 'recommendation', 'done outcome', 'ready / active spec', 'open thread', 'intent', 'thread'];
-  const byKind = {};
-  for (const h of hits) (byKind[h.kind] = byKind[h.kind] || []).push(h);
-  const kinds = Object.keys(byKind).sort((a, b) => {
-    const ia = order.indexOf(a), ib = order.indexOf(b);
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
-  });
-
-  out('## Matches (' + hits.length + ', grouped by kind)');
-  for (const kind of kinds) {
-    out('\n### ' + kind);
-    for (const h of byKind[kind]) {
-      out('- ' + h.item.title + ' (' + h.item.path + ') [score ' + h.score + ']');
+  out('## Matches (' + total + ', grouped by kind)');
+  for (const g of groups) {
+    out('\n### ' + g.kind);
+    for (const h of g.hits) {
+      out('- ' + h.title + ' (' + h.path + ') [score ' + h.score + ']');
       if (h.snippet) out('    ↳ ' + h.snippet);
     }
   }
 
   hr();
   out('The matches above are the deterministic read across the workspace corpus. Now follow the recall SKILL: lead with have-we-discussed-this (yes / partially / no), summarize the prior discussion grouped by kind, and recommend the next action. Workspace "' + ws.name + '".');
+}
+
+// ---------- tl sync ----------
+
+// Offline validation of a workspace's JIRA sync config — the CLI surface for
+// lib/sync-map.js `normalizeTypeMap` (the canonical type-map contract the sync
+// skill stops-before-import on). Reads TRIAGE.yml only: never touches JIRA,
+// never reads credentials, safe to run anywhere. Full bidirectional sync stays
+// skill-driven (skills/sync/SKILL.md); this is its deterministic precondition
+// check as a command.
+function cmdSync(args) {
+  const [sub, ...rest] = args;
+  if (sub !== 'check' || rest.length > 1) {
+    fail('Usage: tl sync check [workspace] — validate TRIAGE.yml sync.jira.map offline (full sync stays skill-driven: skills/sync/SKILL.md)');
+  }
+  const ws = resolveWorkspace(rest[0]);
+  const raw = safeRead(path.join(ws.dir, 'TRIAGE.yml'));
+  let cfg = {};
+  try { cfg = (raw ? parseYaml(raw) : {}) || {}; } catch { cfg = {}; }
+  const sync = cfg.sync && typeof cfg.sync === 'object' && !Array.isArray(cfg.sync) ? cfg.sync : null;
+  const jira = sync && sync.jira && typeof sync.jira === 'object' && !Array.isArray(sync.jira) ? sync.jira : null;
+
+  out('===== SYNC CHECK: ' + ws.name + ' =====\n');
+
+  // Absent config is a calm no, not an error — local-only tl is a complete
+  // product, and this check must be safe to run on any workspace.
+  if (!jira) {
+    out('sync is not configured — no sync.jira section in TRIAGE.yml. Nothing to validate.');
+    out('To set it up, add the sync: block from skills/sync/SKILL.md (url, project, import_filter, map).');
+    return;
+  }
+
+  const url = typeof jira.url === 'string' && jira.url.trim() ? jira.url.trim() : '(unset)';
+  const project = typeof jira.project === 'string' && jira.project.trim() ? jira.project.trim() : '(unset)';
+  out(`jira: url ${url} · project ${project}`
+    + (url === '(unset)' || project === '(unset)' ? '  (needed for a real sync run; map validation is offline either way)' : ''));
+
+  const { map, errors } = normalizeTypeMap(jira.map);
+
+  // Invalid entries are the bridge's stop-before-import condition: list every
+  // offending key with its paste-ready fix hint (the exact lines the sync
+  // skill would print), then exit non-zero.
+  if (errors.length) {
+    out(`\nmap: INVALID — ${errors.length} entr${errors.length === 1 ? 'y' : 'ies'} rejected; sync stops before import on an invalid map:`);
+    for (const e of errors) out('  - ' + e);
+    out(`\nFix the entries above in projects/${ws.name}/TRIAGE.yml, then re-run: tl sync check ${ws.name}`);
+    fail(`sync.jira.map is invalid (${errors.length} error${errors.length === 1 ? '' : 's'}) — see the fix hints above.`);
+  }
+
+  // Valid: the effective map is defaults merged with the workspace entries
+  // (workspace wins on key collision). Show each entry with its provenance so
+  // "defaults in effect" is visible, not implied.
+  const rawMap = jira.map && typeof jira.map === 'object' && !Array.isArray(jira.map) ? jira.map : {};
+  const wsKeys = new Set(Object.keys(rawMap).map(normalizeTypeKey));
+  const entries = Object.entries(map);
+  const counts = { default: 0, override: 0, workspace: 0 };
+  out(`\nmap: OK — ${entries.length} effective entr${entries.length === 1 ? 'y' : 'ies'}:`);
+  for (const [key, e] of entries) {
+    const src = !wsKeys.has(key) ? 'default' : (DEFAULT_TYPE_MAP[key] ? 'override' : 'workspace');
+    counts[src]++;
+    const target = e.to === 'spec'
+      ? `spec (type: ${e.type}${e.tags && e.tags.length ? ', tags: [' + e.tags.join(', ') + ']' : ''})`
+      : e.to;
+    out(`  - ${key} → ${target}  [${src}]`);
+  }
+  out(`defaults in effect: ${counts.default} untouched · ${counts.override} overridden · ${counts.workspace} workspace-added`
+    + (wsKeys.size ? '' : '  (no workspace map — the shipped defaults are the whole contract)'));
+  hr();
+  out('Offline check only — no JIRA call was made and no credentials were read. A clean map is sync\'s stop-before-import precondition (lib/sync-map.js normalizeTypeMap).');
 }
 
 // ---------- tl sync-rules ----------
@@ -1168,6 +1517,7 @@ const CORE_RULES = [
   ['Honor scope and NOTES', 'Do the work only within the spec\'s Files to touch; treat Do not touch as a hard boundary. If a spec has NOTES.md, it is as binding as the acceptance criteria.'],
   ['Capture threads', 'Anything worth not losing but out of scope — a decision, follow-up, risk, or discovery — becomes a file in threads/ (see the capture verb). An undocumented discovery is a leak; it does not justify widening the current spec.'],
   ['Files only', 'Every change is a markdown/JSONL edit plus a folder move. No hidden state; specs/ is the only queue for *new* work, but a pending `_dispatch/` continuation outranks fresh claims — the folders are the status.'],
+  ['Ranking passes coordinate and write narrowly', 'Before ranking, acquire `_metrics/locks/triage.lock`; a fresh lock means triage is already running, so exit instead of racing. Triage writes only its allowed priority/hold/status fields with targeted edits, re-stats before every write, and skips a spec that moved since inventory.'],
 ];
 
 const GEN_MARKER = '<!-- generated by `tl sync-rules` from skills/*/SKILL.md — do not edit by hand -->';
@@ -1377,6 +1727,31 @@ function cmdSyncRules(args = []) {
   out('SKILL.md frontmatter is the single source of truth — re-run `tl sync-rules` after editing skills to refresh these.');
 }
 
+// ---------- tl triage-lock ----------
+
+function cmdTriageLock(args = []) {
+  const action = args[0];
+  const positional = [];
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--lane') { i++; continue; }
+    if (args[i].startsWith('--lane=')) continue;
+    positional.push(args[i]);
+  }
+  if (positional.length > 1) fail('Usage: tl triage-lock <acquire|touch|release|check> [workspace] [--lane <name>]');
+  const ws = resolveWorkspace(positional[0]);
+  const lane = flagValue(args, 'lane') || process.env.TL_AGENT || 'interactive';
+  let result;
+  if (action === 'acquire') result = acquireTriageLock(ws.dir, { lane });
+  else if (action === 'touch') result = touchTriageLock(ws.dir);
+  else if (action === 'release') result = releaseTriageLock(ws.dir);
+  else if (action === 'check') result = checkTriageLock(ws.dir);
+  else fail('Usage: tl triage-lock <acquire|touch|release|check> [workspace] [--lane <name>]');
+
+  if (result.state === 'held') fail(`triage already running (age ${result.ageMinutes}m)`);
+  if (result.state === 'taken-over') out(`stale triage lock taken over by ${lane} (older than 15m)`);
+  else out(`triage lock ${result.state}${action === 'acquire' ? ` by ${lane}` : ''}`);
+}
+
 // ---------- tl experiment ----------
 
 // Winner-application subcommands share an argument shape:
@@ -1464,7 +1839,7 @@ function cmdExperiment(args) {
   // verdict is a nomination; apply/reject stays an explicit human action.
   if (subcmd === 'drain') {
     const positional = [];
-    const flags = { agent: '', max: '', evaluatePartial: [], skipJudges: false, repo: '', testCommand: '' };
+    const flags = { agent: '', max: '', evaluatePartial: [], skipJudges: false, repo: '', testCommand: '', unsafeHostExec: false };
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i];
       if (a === '--agent') flags.agent = rest[++i] || '';
@@ -1474,9 +1849,10 @@ function cmdExperiment(args) {
       else if (a === '--skip-judges') flags.skipJudges = true;
       else if (a === '--repo') flags.repo = rest[++i] || '';
       else if (a === '--test-command') flags.testCommand = rest[++i] || '';
+      else if (a === '--unsafe-host-exec') flags.unsafeHostExec = true;
       else positional.push(a);
     }
-    if (!flags.agent) fail('Usage: tl experiment drain --agent <name> [workspace] [--max <n>] [--evaluate-partial <experiment-id>] [--skip-judges] [--repo <path>] [--test-command <cmd>]');
+    if (!flags.agent) fail('Usage: tl experiment drain --agent <name> [workspace] [--max <n>] [--evaluate-partial <experiment-id>] [--skip-judges] [--repo <path>] [--test-command <cmd>] [--unsafe-host-exec]');
     const ws = resolveWorkspace(positional[0]);
     try {
       const result = drainQueue(ws.dir, {
@@ -1486,6 +1862,10 @@ function cmdExperiment(args) {
         judges: !flags.skipJudges,
         repoDir: path.resolve(flags.repo || INSTALL_ROOT),
         testCommand: flags.testCommand || undefined,
+        // Explicit trust decision for unsandboxed shell rows in this drain —
+        // without it (or a row-level config.unsafe_host_exec) the shell
+        // runner fails closed. See lib/env-policy.js.
+        allowUnsafeHostExec: flags.unsafeHostExec || undefined,
       });
       out('===== tl experiment drain =====');
       out(`workspace: ${ws.name} · lane: ${flags.agent}`);
@@ -1724,6 +2104,8 @@ function usage(stream) {
   w('Four verbs. Underlying skills keep working; this is how you reach for them.');
   w('');
   w('steer — shape what to build');
+  w('  tl sync check [workspace]       Validate TRIAGE.yml sync.jira.map offline via lib/sync-map — no JIRA calls,');
+  w('                                  no credentials; the bridge\'s stop-before-import precondition as a command');
   w('  (skills / agent verbs: new, decompose, goal, promote, groom, capture, sync)');
   w('');
   w('run — start it, or leave automation to it');
@@ -1733,6 +2115,16 @@ function usage(stream) {
   w('              (alias: open)');
   w('  tl run    [workspace] [spec]    Work the ready queue — pick the conflict-free batch (or a named spec)');
   w('              [--agent <name>]    Only claim specs in this agent\'s lane (agent: <name> or any) — heterogeneous fan-out');
+  w('  tl reclaim [workspace] [spec]   List stalled in-progress claims (idle past TRIAGE.yml stall.idle_hours, default 24h);');
+  w('                                  with a spec: return it to specs/ (or advance to tests/ when builder artifacts exist)');
+  w('              --by <who>          Who reclaims — recorded in the spec\'s NOTES.md log');
+  w('              --reason "<why>"    Mandatory — a reclaim always logs why; fresh claims always refuse');
+  w('  tl recover [workspace] [spec]   Finish a committed builder hand-off whose session died before the move:');
+  w('                                  no spec lists candidates; a spec alone inspects its typed state (read-only)');
+  w('              --by <who>          Who recovers — logged in NOTES.md + TRACE.jsonl; the builder stays the builder');
+  w('              --reason "<why>"    Mandatory to act — recovery always logs why; live builder leases always refuse');
+  w('              [--allow-no-lease]  Explicit legacy grace (pre-lease work): idle past threshold AND a valid');
+  w('                                  committed HANDOFF.json still required — FEEDBACK.md alone is never completion');
   w('  tl experiment queue [workspace] <spec>');
   w('                                  (advanced) Initiate an experiment: hash the spec, record base_commit, write candidate queue rows');
   w('              [--config <file>]   Explicit candidates/judge JSON (default: deterministic fixture pair)');
@@ -1746,7 +2138,12 @@ function usage(stream) {
   w('              [--skip-judges]     Leave judge rows queued for the interactive skill path');
   w('              [--repo <path>]     Repo for the judge\'s patch-apply check (default: this repo)');
   w('              [--test-command <cmd>]');
-  w('                                  Judge gate: run tests in the isolated patched workdir');
+  w('                                  Judge gate: run tests in the isolated patched workdir (runs candidate');
+  w('                                  code on this host with a scrubbed env — an explicit trust decision)');
+  w('              [--unsafe-host-exec]');
+  w('                                  Trust opt-in for shell rows: config.command runs unsandboxed on this');
+  w('                                  host (a worktree isolates the checkout, not the machine). Without this');
+  w('                                  flag or row-level config.unsafe_host_exec, shell rows fail closed');
   w('  tl experiment fixture [workspace]');
   w('                                  (advanced) Create a deterministic fixture experiment proof');
   w('  tl experiment replay [workspace] <experiment-id> --candidate <tool>[:<model>]');
@@ -1764,6 +2161,11 @@ function usage(stream) {
   w('');
   w('review — sign off, unblock, decide on experiment winners');
   w('  tl review [workspace]           Sign off in-review work — criteria + feedback');
+  w('  tl reflect-decision [workspace] [id]');
+  w('                                  List unread reflect proposals, or append a review marker');
+  w('              --action reviewed|dismissed|applied');
+  w('              [--by <who>] [--note "..."]');
+  w('                                  Explicit human clear — viewing alone does not dismiss; never auto-applies TRIAGE.yml');
   w('  tl verify [workspace] [spec]    Independent-verifier queue — status + briefs (non-builder)');
   w('              [--agent <name>]    Prefer / filter this verifier lane; builders are excluded');
   w('              [--execute]         Run one isolated verify tick (drains request or queue)');
@@ -1783,6 +2185,7 @@ function usage(stream) {
   w('  (skills / agent verbs: map, reflect, insights)');
   w('');
   w('  tl sync-rules [--check]         Regenerate per-agent rules, or check for generated-rule drift');
+  w('  tl triage-lock <acquire|touch|release|check> [workspace] [--lane <name>]');
   w('');
   w('Workspace: an argument names a workspace under projects/; if exactly one exists it is used;');
   w('otherwise the available workspaces are listed.');
@@ -1803,11 +2206,16 @@ function main() {
     case 'up':
     case 'open': return void cmdUp(rest).catch(e => fail(e && e.message ? e.message : String(e)));
     case 'run': return cmdRun(rest);
+    case 'reclaim': return cmdReclaim(rest);
+    case 'recover': return cmdRecover(rest);
     case 'review': return cmdReview(rest);
+    case 'reflect-decision': return cmdReflectDecision(rest);
     case 'verify': return cmdVerify(rest);
     case 'recall': return cmdRecall(rest);
+    case 'sync': return cmdSync(rest);
     case 'experiment': return cmdExperiment(rest);
     case 'sync-rules': return cmdSyncRules(rest);
+    case 'triage-lock': return cmdTriageLock(rest);
     case undefined:
     case 'help':
     case '-h':

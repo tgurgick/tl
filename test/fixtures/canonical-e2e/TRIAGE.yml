@@ -1,0 +1,27 @@
+# Canonical E2E fixture — fake lanes only; tests inject which/runVerify/spawn.
+goals: []
+verification:
+  require_independent_verifier: true
+  allow_self_check_for: []
+  verifier_lanes:
+    gemini:
+      agent: gemini
+      mode: verify
+      isolated: true
+      sandbox: required
+      allow_network: false
+      allow_commands: ["npm test"]
+      command: [node, test/fixtures/canonical-e2e/fake-bins/fake-verifier.js]
+    codex:
+      agent: codex
+      mode: verify
+      isolated: true
+      sandbox: required
+      allow_network: false
+      allow_commands: ["npm test"]
+      command: [node, test/fixtures/canonical-e2e/fake-bins/fake-verifier.js]
+lanes:
+  claude:
+    command: [node, test/fixtures/canonical-e2e/fake-bins/fake-builder.js]
+  codex:
+    command: [node, test/fixtures/canonical-e2e/fake-bins/fake-builder.js]

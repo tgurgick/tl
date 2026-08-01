@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const {
   filesToTouch, isReadOnly, specSlug, dependencySatisfied, activeConflicts, selectBatch,
   calmCap, selectContinuations,
-  isRepoUrl, localRepoPath, repoHoldReason,
+  isRepoUrl, localRepoPath, repoHoldReason, sameResolvedPath, sameLocalRepo,
 } = require('../lib/batch');
 
 // build a spec object shaped like readStage produces
@@ -298,6 +298,36 @@ test('repoHoldReason: the tl-developing-tl workspace is exempt from containment'
   // the exemption never waives the existence check
   const missing = pre({ workspaceRepo: '/tl/checkout' });
   assert.match(repoHoldReason(mk('c', { files: ['a.js'], repo: '/repos/missing' }), missing), /^repo not found: /);
+});
+
+test('sameResolvedPath / sameLocalRepo: exact path only — no basename fallback', () => {
+  // same basename, different parent → NOT the same repo
+  assert.equal(sameResolvedPath('/a/throughline', '/b/throughline'), false);
+  assert.equal(sameLocalRepo('/a/throughline', '/b/throughline', '/home/u'), false);
+  // exact match
+  assert.equal(sameResolvedPath('/tl/checkout', '/tl/checkout'), true);
+  assert.equal(sameLocalRepo('/tl/checkout', '/tl/checkout', '/home/u'), true);
+  // ~ vs absolute — same after expand
+  assert.equal(sameLocalRepo('~/Documents/GitHub/throughline', '/home/u/Documents/GitHub/throughline', '/home/u'), true);
+  // sibling sharing only the leaf name must not get the tl-developing-tl exemption
+  const siblingWs = pre({
+    isRepo: () => true,
+    tlRoot: '/tl/checkout',
+    workspaceRepo: '/other/checkout', // same basename, different parent
+  });
+  assert.equal(
+    repoHoldReason(mk('c', { files: ['a.js'] }), siblingWs),
+    'no project repo — refusing to work in the tl checkout'
+  );
+});
+
+test('sameResolvedPath: optional resolvePath covers symlink-canonical identity', () => {
+  const real = '/real/throughline';
+  const link = '/link/throughline';
+  const resolvePath = (p) => (String(p) === link || String(p) === real ? real : require('path').resolve(p));
+  assert.equal(sameResolvedPath(link, real), false); // default resolve keeps them distinct
+  assert.equal(sameResolvedPath(link, real, { resolvePath }), true);
+  assert.equal(sameLocalRepo(link, real, '/home/u', { resolvePath }), true);
 });
 
 test('repoHoldReason: no preflight wired → no holds (back-compat)', () => {

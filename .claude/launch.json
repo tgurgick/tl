@@ -22,9 +22,22 @@
       "port": 4401
     },
     {
+      "name": "bench-scratch",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "/Users/trevorgurgick/Documents/GitHub/bench/server.js",
+        "--port",
+        "4471",
+        "--root",
+        "/private/tmp/claude-501/-Users-trevorgurgick-Documents-GitHub-throughline/3c6b1147-41b1-4516-b12d-479eef21f74e/scratchpad/bench-ws"
+      ],
+      "port": 4471
+    },
+    {
       "name": "bench",
       "runtimeExecutable": "node",
       "runtimeArgs": [
+        "--env-file-if-exists=/Users/trevorgurgick/Documents/GitHub/bench/.env",
         "/Users/trevorgurgick/Documents/GitHub/bench/bin/bench.js",
         "serve",
         "--port",

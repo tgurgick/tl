@@ -5,6 +5,28 @@
   "bin": {
     "tl": "bin/tl.js"
   },
+  "files": [
+    "bin/",
+    "lib/",
+    "ui/",
+    "skills/",
+    "_templates/",
+    "_patterns/",
+    "assets/",
+    ".claude-plugin/",
+    ".codex-plugin/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tgurgick/tl.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tgurgick/tl/issues"
+  },
   "scripts": {
     "test": "node --test test/*.test.js"
   }

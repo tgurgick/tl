@@ -53,9 +53,18 @@ function startServer(root, port) {
   return { child, ready };
 }
 
+// same-session write token — POSTs need the token the server injects at GET /
+async function fetchToken(port) {
+  const html = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+  return (html.match(/window\.TL_WRITE_TOKEN="([0-9a-f]+)"/) || [])[1] || '';
+}
+
+let TOKEN = '';
 async function post(port, body) {
   const r = await fetch(`http://127.0.0.1:${port}/api/map-repair`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ws: WS, ...body }),
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-tl-token': TOKEN },
+    body: JSON.stringify({ ws: WS, ...body }),
   });
   return { status: r.status, body: await r.json() };
 }
@@ -66,6 +75,7 @@ test('map-repair endpoint', async t => {
   const { child, ready } = startServer(root, port);
   try {
     await ready;
+    TOKEN = await fetchToken(port);
 
     await t.test('attach: writes the spec intent field and appends to the intent specs list', async () => {
       const r = await post(port, { action: 'attach', spec: 'specs/orphan-a/', intent: 'intents/2026-01-01-existing.md' });

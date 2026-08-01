@@ -53,7 +53,7 @@ Each verb is one `skills/<name>/SKILL.md` — the algorithm. Don't re-derive the
 - `tl sync` — Sync a tl workspace with JIRA — import assigned issues as specs and epics as intents, push TL status and human priority changes back.
 - `tl triage` — Rank a tl workspace's backlog — score specs against the goals, allocation targets, and rules in its TRIAGE.yml, detect human priority overrides, and rewrite PRIORITIES.md via targeted priority-field edits — never whole-frontmatter rewrites, never stage folders or claim fields, and re-stat before every write (a spec that moved since inventory is skipped, not restored).
 - `tl ui` — Start the Throughline web UI and pop it open in the browser — live board (Learn / Run / Review surfaces), ranked backlog, activity feed, and file changes for watching agents work.
-- `tl verify` — Independently verify specs waiting at the TESTS gate — a non-builder agent reviews the diff against the acceptance criteria and review gates, remediates with the builder (bounded), writes the ALIGNMENT record, and advances the spec to in-review.
+- `tl verify` — Independently verify specs waiting at the TESTS gate — a non-builder agent leases the spec, reviews the diff against the acceptance criteria and review gates read-only, records the ALIGNMENT record and an immutable result, and advances a clean pass to in-review; any desired change is a proposal for a human, never an edit.
 
 ## Critical rules — do not get these wrong
 
@@ -63,6 +63,7 @@ Each verb is one `skills/<name>/SKILL.md` — the algorithm. Don't re-derive the
 4. **Honor scope and NOTES.** Do the work only within the spec's Files to touch; treat Do not touch as a hard boundary. If a spec has NOTES.md, it is as binding as the acceptance criteria.
 5. **Capture threads.** Anything worth not losing but out of scope — a decision, follow-up, risk, or discovery — becomes a file in threads/ (see the capture verb). An undocumented discovery is a leak; it does not justify widening the current spec.
 6. **Files only.** Every change is a markdown/JSONL edit plus a folder move. No hidden state; specs/ is the only queue for *new* work, but a pending `_dispatch/` continuation outranks fresh claims — the folders are the status.
+7. **Ranking passes coordinate and write narrowly.** Before ranking, acquire `_metrics/locks/triage.lock`; a fresh lock means triage is already running, so exit instead of racing. Triage writes only its allowed priority/hold/status fields with targeted edits, re-stats before every write, and skips a spec that moved since inventory.
 
 ## Quickstart: work one spec
 

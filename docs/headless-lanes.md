@@ -23,12 +23,14 @@ worker's alarm clock, not its brain. The prompt is exactly the stdout of
 `node bin/tl.js run <ws> --agent <lane>`, so the driver can never drift from
 what an interactive run would say.
 
-## The happy path: `tl open`
+## The happy path: `tl up`
 
 You normally don't write the cron/launchd units below by hand anymore. Declare
 one `automation:` profile in the workspace's TRIAGE.yml and let
-`tl open <workspace>` install or refresh the schedule (plus start the cockpit
-and print the next human action):
+`tl up <workspace>` install or refresh the schedule (plus start the cockpit
+and print the next human action). (`tl open` is an alias of `tl up` — same
+command, not a second product.) Canonical operator story:
+`docs/canonical-e2e-path.md`.
 
 ```yaml
 automation:
@@ -51,28 +53,33 @@ verification:
       command: [agy]
 ```
 
-`tl open` generates a **single per-workspace schedule** — one launchd plist
+`tl up` generates a **single per-workspace schedule** — one launchd plist
 (`~/Library/LaunchAgents/com.tl.open.<ws>.plist`) on macOS, one cron line
 elsewhere — whose body ticks each listed lane sequentially with
 `bin/tl-worker.js <ws> --agent <lane>` (sequential is deliberate: calm over
-swarm, and the per-lane locks prevent overlap anyway). **v1 platform gap:**
-macOS gets write+`launchctl load`; Linux/other get a paste-able cron line only
-— `tl open` never runs `crontab` for you (use `--print-schedule` or paste from
-the open output). Try `tl open <ws> --dry-run` first; `tl open <ws>
---print-schedule` emits the complete paste-able cron line **and** plist — the
-right path when an agent is driving, because `launchctl load` can hang a
-headless session on a macOS permission prompt. A listed lane with no
-`lanes.<name>.command` fails loudly before anything is generated. `PAUSE`
-still stops every tick; full contract in `_templates/SCHEMA.md`.
+swarm, and the per-lane locks prevent overlap anyway). When
+`automation.verify: true`, the same schedule appends **one** isolated verify
+tick (`tl-worker --mode verify`) as the primary verify drain — cockpit
+verify-request files are routing hints only, not execution or queue truth.
+**v1 platform gap:** macOS gets write+`launchctl load`; Linux/other get a
+paste-able cron line only — `tl up` never runs `crontab` for you (use
+`--print-schedule` or paste from the up output). Try `tl up <ws> --dry-run`
+first; `tl up <ws> --print-schedule` emits the complete paste-able cron line
+**and** plist — the right path when an agent is driving, because
+`launchctl load` can hang a headless session on a macOS permission prompt. A
+listed lane with no `lanes.<name>.command` fails loudly before anything is
+generated. `PAUSE` still stops every tick; full contract in
+`_templates/SCHEMA.md`.
 
 Everything below — per-lane commands, quirks, and the hand-rolled cron/launchd
 recipes — still applies and remains the **advanced escape hatch** (offset
-schedules, per-lane intervals, non-standard layouts). `tl open` just writes
-the common case for you.
+schedules, per-lane intervals, non-standard layouts). `tl up` just writes the
+common case for you. Interactive `tl run` / `tl verify` keep identical
+contracts as manual recovery launchers.
 
 ## Configure the lanes (`TRIAGE.yml`)
 
-A lane is any shell command; tl ships no provider integrations. See
+A lane is an agent CLI invocation; tl ships no provider integrations. See
 `_templates/SCHEMA.md` ("Headless lanes") for the full contract. Lane names
 must be path-safe lowercase keys: letters, numbers, dots, underscores, and
 hyphens only.
@@ -86,15 +93,42 @@ lanes:
     lock_timeout_minutes: 90    # optional; default 120
 ```
 
+**Spawns are argv-first — there is no shell by default.** A string `command`
+is split on whitespace into an argv array and executed directly
+(`spawnSync(argv[0], argv.slice(1))`), the same argv-array shape the
+experiment PROVIDERS table (`lib/experiment-runner.js`) and
+`verification.verifier_lanes` already use. Nothing between the worker and
+`execve` parses quotes, expands variables, or interprets operators — the
+quoting-injection surface simply does not exist on this path. Two other
+command shapes:
+
+- **YAML list form** — `command: [codex, exec, -c, sandbox_workspace_write.writable_roots=["/x"], -]`
+  passes each element verbatim as one argument. Use it when an argument
+  contains spaces or shell-looking characters; under argv those bytes are
+  plain data. (The hand-rolled parser splits inline lists on commas, so a
+  token containing a comma still needs the agent's profile file instead.)
+- **`shell: true`** — the explicit opt-in for a lane that genuinely needs
+  pipes or redirection. Only then does the worker run the command string
+  through the shell (old behavior), with the escape helpers guarding
+  placeholder substitution.
+
+A string command containing shell syntax (quotes, `|`, `&`, `;`, `<`, `>`,
+`(`, `)`, `$`, backticks, `\`, globs) **without** `shell: true` is a loud
+misconfiguration: the tick exits `1` with reason `shell_required` and
+executes nothing — never a silent wrong-argv split. Leading `~` is also
+rejected (no shell to expand it); use an absolute path.
+
 Prompt delivery: **stdin is canonical** — a command with no `{prompt_file}` or
 `{prompt}` placeholder receives the brief bytes on stdin (the shape every
-working lane uses). `{prompt}` substitutes a shell-escaped single-line brief
-(lossy — avoid for multiline run briefs). **`{prompt_file}` is wrong for
-CLIs that treat `-p <arg>` as literal prompt text** (notably `claude -p`): the
-worker substitutes the *path* to `_metrics/worker-prompts/<lane>-<timestamp>.txt`,
-so the session receives a filename string, not the brief — only works if the
-agent happens to open the path itself. Do not use `{prompt_file}` in claude
-lanes; pipe on stdin instead. Try it without side effects first:
+working lane uses). `{prompt}` substitutes the single-line brief (lossy —
+avoid for multiline run briefs); on the argv path it becomes exactly one
+argument with no escaping needed, on a `shell: true` lane it is
+shell-escaped. **`{prompt_file}` is wrong for CLIs that treat `-p <arg>` as
+literal prompt text** (notably `claude -p`): the worker substitutes the
+*path* to `_metrics/worker-prompts/<lane>-<timestamp>.txt`, so the session
+receives a filename string, not the brief — only works if the agent happens
+to open the path itself. Do not use `{prompt_file}` in claude lanes; pipe on
+stdin instead. Try it without side effects first:
 
 ```
 node bin/tl-worker.js throughline --agent claude --dry-run
@@ -208,21 +242,25 @@ lanes:
 
 ## No nested quoting in `lanes:` commands
 
-Hard rule: **a lane command must never contain nested quoting or escape
-sequences.** The TRIAGE.yml parser is hand-rolled and keeps backslash
-escapes literal — it does not unescape them the way a full YAML parser
-would. The failure that taught us this was an attempt to pass inline TOML
-to codex:
+Hard rule, now **enforced by the argv-first guard** rather than merely
+documented: a string lane command must never contain nested quoting or
+escape sequences — the tick refuses to run it (`shell_required`, exit `1`)
+instead of letting a wrong parse fail silently green. The failure that
+taught us this was an attempt to pass inline TOML to codex:
 
 ```
 codex exec ... -c 'sandbox_workspace_write.writable_roots=["…"]'
 ```
 
-The escapes survive into the argument as literal characters, producing
-invalid TOML — which codex silently treats as a raw string. No error
-anywhere; the setting just doesn't apply. Anything structured — arrays,
-TOML, JSON, quoted paths — goes in the agent's own config/profile file, and
-the lane command only names the profile.
+The TRIAGE.yml parser is hand-rolled and keeps backslash escapes literal, so
+the escapes survived into the argument as literal characters, producing
+invalid TOML — which codex silently treated as a raw string. No error
+anywhere; the setting just didn't apply. Anything structured — arrays, TOML,
+JSON, quoted paths — goes in the agent's own config/profile file (the lane
+command only names the profile), or in the YAML **list form**, where each
+element reaches the CLI verbatim without any shell in the way. `shell: true`
+lanes are the one exception: there the string is genuinely shell input, and
+the no-nested-quoting rule stays a hard manual rule.
 
 ## Sandboxed lanes and external repos: per-workspace writable roots
 
@@ -253,7 +291,7 @@ When you add a workspace whose `repo` lives outside the tl checkout, create
 the profile before the lane's first tick — otherwise the first tick burns on
 the permission block.
 
-## cron recipes (advanced escape hatch — `tl open` writes the common case)
+## cron recipes (advanced escape hatch — `tl up` writes the common case)
 
 One line per lane. Ticks are cheap when there's no work (exit 0, one log
 line), so a short interval is fine — the per-lane lock prevents overlap even
@@ -271,7 +309,7 @@ if a session runs longer than the interval.
 same auth as your shell, or wrap the command in a login shell:
 `bash -lc '... tl-worker ...'`.)
 
-## launchd recipe (macOS — advanced escape hatch; `tl open` generates `com.tl.open.<ws>.plist`)
+## launchd recipe (macOS — advanced escape hatch; `tl up` generates `com.tl.open.<ws>.plist`)
 
 `~/Library/LaunchAgents/com.tl.worker.claude.plist`, one plist per lane:
 
@@ -361,7 +399,7 @@ time. Cockpit **Dispatch verify** (and `tl verify --dispatch`) only write
 tick or `tl verify --execute`.
 
 ```cron
-# optional hand-rolled verify tick (tl open already chains this when verify: true)
+# optional hand-rolled verify tick (tl up already chains this when verify: true)
 */15 * * * * cd $HOME/Documents/GitHub/throughline && /usr/local/bin/node bin/tl-worker.js throughline --mode verify >> /tmp/tl-worker-verify.log 2>&1
 ```
 
@@ -374,10 +412,10 @@ tick or `tl verify --execute`.
 | `off` | Inert — no experiment ticks in the schedule. |
 | `drain` | After lane (+ optional verify) ticks, run `node bin/tl.js experiment drain --agent <lane> <ws>` once per `automation.lanes` entry. |
 
-`drain` folds pending `_experiments/queue/*.json` request configs and drains queued candidate/judge rows for that agent lane — the same path as a manual drain. It does **not** queue new cohorts by itself (use `tl experiment queue`, the UI request form, or `experiments.auto_initiate`), and it never calls select/apply. Unsupported values fail loudly at `tl open` time (same as a missing lane command); `drain` with an empty `lanes` list is also a hard error. `tl open` status prints exactly which drain commands will run.
+`drain` folds pending `_experiments/queue/*.json` request configs and drains queued candidate/judge rows for that agent lane — the same path as a manual drain. It does **not** queue new cohorts by itself (use `tl experiment queue`, the UI request form, or `experiments.auto_initiate`), and it never calls select/apply. Unsupported values fail loudly at `tl up` time (same as a missing lane command); `drain` with an empty `lanes` list is also a hard error. `tl up` status prints exactly which drain commands will run. Experiment drain is **experiment fixture proof**, not the canonical operating path.
 
 ```cron
-# optional hand-rolled experiment drain (tl open chains these when experiment: drain)
+# optional hand-rolled experiment drain (tl up chains these when experiment: drain)
 */15 * * * * cd $HOME/Documents/GitHub/throughline && /usr/local/bin/node bin/tl.js experiment drain --agent claude throughline >> /tmp/tl-experiment-drain.log 2>&1
 ```
 
@@ -401,9 +439,10 @@ Watch for the signature in `worker-log.jsonl`: every lane logging
 `no_continuation` for days while a spec sits in `in-progress/` is a stranded
 claim.
 
-## End-to-end validation
+## End-to-end validation (headless lifecycle proof)
 
-The milestone that proves the loop — two lanes on cron draining a small
-project unattended, humans only reviewing — is parked as
-`threads/2026-07-04-headless-e2e-milestone-on-todo-app.md` in the throughline
-workspace.
+The milestone that proves the **canonical operating path** — two lanes on
+cron draining a small project unattended, humans only reviewing — shipped as
+`projects/throughline/done/headless-e2e-todo-app/`. That is headless lifecycle
+proof, not an experiment fixture and not a browser/CI E2E suite. See
+`docs/canonical-e2e-path.md`.

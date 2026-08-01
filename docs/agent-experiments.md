@@ -99,7 +99,7 @@ After each candidate run, the runner appends one `_metrics/trace-features.jsonl`
 
 ### Cursor auto model handling
 
-For Claude/Codex, the model may be declared by the CLI/API (`agent_model_requested` + `agent_model_source: requested|reported`). For Cursor auto:
+For Claude/Codex, a cohort may *request* a model (`agent_model_requested`) — but `agent_model_source: requested` is recorded only when that model was actually transmitted to the CLI. Today's adapters pass no model flag, so an unpassed request records `agent_model_source: unfulfilled-request` with `agent_model: unknown` / `agent_model_auto: true` — the fingerprint never claims an identity the run didn't use (`reported` remains the value for models the CLI itself declares). For Cursor auto:
 
 1. Display requested model as `auto` (`agent_model_requested: "auto"`, `agent_model_auto: true`).
 2. Capture the resolved model when an SDK, hook, or session report exposes it.
@@ -115,12 +115,13 @@ Winner application states are separate from run statuses and human-owned: `selec
 
 ## Initiation and Headless Workers (queue / drain)
 
-Experiments are initiated in one of two ways, both file-native:
+Experiments are initiated in one of three ways, all file-native:
 
 - **Manual command** — `tl experiment queue [ws] <spec>` creates the experiment folder for a TL spec: it hashes the spec at queue time (`spec_hash`), records the source tree (`base_commit`, from `--repo`, default this checkout), selects candidates from explicit config (`--config <file>`) or the deterministic fixture defaults (`fixture-a` primary, `fixture-b` shadow, `fixture-judge` judge), and writes one **queued candidate row** per candidate. The spec itself is never moved — an experiment is a shadow attempt against a snapshot, not a claim.
 - **UI request** — the dashboard's queue form drops a request config at `_experiments/queue/<stamp>-<slug>.json`. A drain pass folds pending requests into real experiments (the request file is rewritten `status: "accepted"` with the `experiment_id` — an audit trail, never deleted). Two runtimes bridge:
   - `runtime: "fixture"` — the deterministic proof cohort, no extra fields needed.
   - `runtime: "local"` — a real local adapter run. The request must carry the two bridge fields: `runner` (a registered adapter lane: `codex` | `gemini` | `claude` | `cursor` | `shell`) and `repo` (the repo candidates run against, isolated per run). All named candidates (primary + shadows) land in that runner's lane; per-candidate models ride in `models`; `command` is required for (and only used by) the `shell` runner; optional `prompt`/`profile` pass through as structured config. A **malformed** local request (missing/unknown runner, missing/nonexistent repo, shell without a command) is rewritten `status: "invalid"` with the exact error — **never silently dropped**. Unknown future runtimes (e.g. a cloud slice) are reported `left-queued` and left untouched; an unparseable request file is reported invalid without rewriting it (it may be a corrupted audit record).
+- **Auto-initiation (policy)** — with `experiments.auto_initiate: true` on top of `enabled: true`, the headless worker tick queues a routed cohort automatically when it commits a fresh canonical claim, sampled by `auto_initiate_rate` (see "Unattended shadows" below). Auto experiments carry `initiated_by: "policy"` in `EXPERIMENT.md` frontmatter (written atomically at creation; absent = human) — provenance that downstream safety refusals key off.
 
 The `--config` JSON for explicit cohorts:
 
@@ -140,7 +141,7 @@ The `--config` JSON for explicit cohorts:
 
 ### Queue rows and lanes
 
-Queue rows live in `_experiments/queue/<experiment_id>.jsonl` (workspace-relative), **append-only and event-sourced**: every transition appends a full row; the newest row per candidate is the current state. Every row carries at least `experiment_id`, `candidate_id`, `role` (`primary` / `shadow` / `judge`), `agent_tool`, `agent_model_requested`, `status`, `attempt`, `budget_usd`, `timeout_minutes`, and `created` — one row is self-describing without replaying the file. A `config` object (command, repo, env, `estimated_cost_usd`) rides along so a drain is self-contained.
+Queue rows live in `_experiments/queue/<experiment_id>.jsonl` (workspace-relative), **append-only and event-sourced**: every transition appends a full row; the newest row per candidate is the current state. Every row carries at least `experiment_id`, `candidate_id`, `role` (`primary` / `shadow` / `judge`), `agent_tool`, `agent_model_requested`, `status`, `attempt`, `budget_usd`, `timeout_minutes`, and `created` — one row is self-describing without replaying the file. A `config` object (command, repo, env, `pass_env`, `unsafe_host_exec`, `estimated_cost_usd`) rides along so a drain is self-contained — the trust-boundary fields living on the row is what makes the trust decision auditable (see "Execution trust boundary").
 
 Each worker drains **only its own lane**: `tl experiment drain --agent <tool> [ws]` claims queued candidate rows whose `agent_tool` matches, runs them, and appends terminal transitions. Rows in other lanes are simply left `queued` — that *is* the fault posture for a worker that isn't running. This is what makes shadow runs safe to queue while a different tool or session is active: a Codex row waits for a Codex worker; a Cursor row waits for a Cursor SDK/cloud worker (Cursor's IDE chat cannot drain headlessly — capability data, see below).
 
@@ -157,6 +158,8 @@ Every terminal path — fault or not — leaves the same artifact set (`PATCH.di
 | Estimated cost exceeds `budget_usd` | `over_budget` (stopped **before** execution) |
 | Command outlives `timeout_minutes` | `timed_out` |
 | Command exits non-zero / runner crashes | `failed` |
+| Shell row without the explicit trust opt-in | `failed` (fails closed **before** the command runs — see "Execution trust boundary") |
+| Shell row on an **auto-initiated** experiment (`initiated_by: "policy"`) | `failed` (refused unconditionally before execution — row flags and drain `--unsafe-host-exec` are ignored on the auto path) |
 | Run "succeeds" but produces no usable patch | `invalid_output` |
 
 A primary failure **never cancels shadows** — `failed` is terminal like any other status, the shadow lanes keep draining, and a shadow can still win at evaluation.
@@ -178,7 +181,40 @@ The judge row (role `judge`, lane from the experiment's `judge_tool`) is queued 
 
 Local shell candidates never touch the canonical working tree. The runner creates a **detached git worktree** at the experiment's `base_commit` (`git worktree add --detach`, cheap — shares the object store), falls back to a **sibling clone** when worktrees are unavailable, runs the command inside it, collects `git diff` (intent-to-add first, so new files show) as `PATCH.diff`, and tears the workdir down. Fixture candidates are side-effect-free and need no isolation.
 
+Be precise about what this buys: a worktree/clone is an **isolated checkout, not a security sandbox**. It protects the canonical repo from edits — nothing more. A command running inside it keeps full **filesystem read, network, and host authority** (it can read `~/.ssh`, call the network, touch anything your user can). The boundaries tl actually enforces are the environment policy and the explicit trust gate in the next section.
+
 This is also the documented **seam for later orchestration**: `lib/experiment-runner.js` exports `createIsolatedWorkdir` / `removeIsolatedWorkdir` (the isolation strategy) and the `RUNNERS` registry (one entry per `agent_tool`: `fixture`, `shell`, and the provider adapters below). A remote/cloud worker replaces the workdir pair with its own sandbox provisioning — keeping the same promise: **the canonical repo is never mutated by a candidate run**.
+
+### Execution trust boundary (environment policy + host-exec opt-in)
+
+`lib/env-policy.js` is the shared trust boundary for **every** candidate and judge command execution. It follows the verifier worker's scrubbing discipline and closes the 2026-07-17 audit finding that spawned commands inherited the full parent environment (ambient `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_*`, `JIRA_API_TOKEN`, `GITHUB_*`, `AWS_*`, …).
+
+**Default deny for secrets.** Every spawn starts from a **scrubbed** copy of the parent environment: variables with credential-scoped vendor prefixes (`ANTHROPIC_`, `CLAUDE_`, `OPENAI_`, `CODEX_`, `GOOGLE_`, `GEMINI_`, `CURSOR_`, `AWS_`, `GITHUB_`, `JIRA_`, `NPM_`, …) or secret name segments (`TOKEN`, `SECRET`, `KEY`, `AUTH`, `PASSWORD`, …) are dropped; runtime plumbing (`PATH`, `HOME`, `LANG`, …) passes through. `SSH_AUTH_SOCK` is scrubbed deliberately — an agent socket is an ambient credential channel.
+
+**Per-lane allowlist.** A provider CLI legitimately needs its **own** auth, so each lane receives back exactly the ambient variables it needs and nothing else (`LANE_ENV_ALLOWLIST`):
+
+| Lane | Ambient variables passed back |
+|------|-------------------------------|
+| `claude` | `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` |
+| `codex` | `OPENAI_API_KEY`, `CODEX_HOME` |
+| `gemini` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_GENAI_USE_VERTEXAI` |
+| `cursor` | `CURSOR_API_KEY` |
+| `shell` | *(none)* |
+
+A claude candidate never sees `OPENAI_API_KEY`; no lane ever sees `JIRA_API_TOKEN`. A row widens the boundary only through **explicit scoped configuration**: `config.pass_env: [names]` passes additional named ambient variables through, and `config.env: {NAME: value}` sets explicit values over the scrubbed base (never over raw `process.env`). Both ride the append-only queue row, so the decision is auditable.
+
+**Values never land in logs or artifacts.** The trace already redacts secret patterns before write; on top of that, every value that crosses the boundary (lane allowlist, `pass_env`, secret-named `config.env` entries) is redacted by exact value from `FEEDBACK.md` output tails **and** `PATCH.diff` before anything hits disk. The *names* of passed-through variables are logged in the trace (`Environment policy: … passed through by name: …`); the values never are.
+
+**Unsandboxed shell is an explicit trust decision.** The `shell` runner executes an arbitrary `config.command` directly on the host — that is trusted-code execution, not isolation, so it **fails closed by default** with a concrete message and never runs the command. Opt in explicitly, having reviewed the command as trusted code:
+
+- per row: `unsafe_host_exec: true` on the candidate config (recorded on the queue row — auditable), or
+- per drain: `tl experiment drain --agent shell --unsafe-host-exec` (library: `opts.allowUnsafeHostExec`).
+
+Neither opt-in works on an **auto-initiated** experiment (`initiated_by: "policy"`): an unattended queue path means nobody reviewed the specific command as trusted code, so the boundary refuses unconditionally — there is deliberately no dial for it (see "Unattended shadows" above).
+
+The budget stop still precedes even the trust gate (`over_budget` is cheaper than any decision). Provider lanes are not gated this way — each CLI brings its own permission model (codex `--sandbox <mode>`, gemini's skip-permissions trust tier, cursor `-f`), which the adapter tables above encode honestly.
+
+**The judge's test command is trusted-code execution too.** `--test-command` runs the candidate's **patched code** in the throwaway workdir on this host; configuring it *is* the explicit trust decision, and it always runs with the scrubbed environment so ambient credentials never reach candidate-authored code. No test command configured = nothing executes (`tests_pass: null`, declared unavailable — fails closed). On **auto-initiated** experiments a drain-wide test command is refused by default for the same unattended-path reason — it runs only when the workspace sets the literal `experiments.auto_initiate_allow_test_command: true`.
 
 ### Provider adapters (codex / gemini / claude / cursor)
 
@@ -191,15 +227,43 @@ The `RUNNERS` registry ships turnkey adapters for the four provider CLIs, so a c
 | `claude` | `claude [extra…] -p` | stdin (the `cat brief \| claude -p` shape) |
 | `cursor` | `cursor-agent -f [extra…] -p <prompt>` | final argv element; `-f` (trust the directory) is baked in |
 
-**No shell, no quoting.** Adapters spawn the CLI with an **argv array** — the prompt travels on stdin or as one argv element, so the no-nested-quoting rule from `docs/headless-lanes.md` holds by construction. Overrides are **structured config fields** on the candidate (never string concatenation): `repo` (required — the isolation source), `prompt` (default: the tl spec the experiment was queued from — the turnkey path), `profile` and `sandbox` (codex), `extra_flags` (an array of argv elements, inserted in the one slot per adapter where they cannot displace the load-bearing flags), and `env`. Anything structured beyond that (writable roots, TOML/JSON settings) belongs in the provider's own profile file, per the headless-lanes rule — the config field only names the profile.
+**No shell, no quoting.** Adapters spawn the CLI with an **argv array** — the prompt travels on stdin or as one argv element, so the no-nested-quoting rule from `docs/headless-lanes.md` holds by construction. Overrides are **structured config fields** on the candidate (never string concatenation): `repo` (required — the isolation source), `prompt` (default: the tl spec the experiment was queued from — the turnkey path), `profile` and `sandbox` (codex), `extra_flags` (an array of argv elements, inserted in the one slot per adapter where they cannot displace the load-bearing flags), `env` (explicit values over the **scrubbed** base environment — see "Execution trust boundary"), and `pass_env` (ambient variable names to pass through the credential scrub). Anything structured beyond that (writable roots, TOML/JSON settings) belongs in the provider's own profile file, per the headless-lanes rule — the config field only names the profile.
 
 Budget (`over_budget`, stopped before execution) and `timeout_minutes` behave exactly like `shell`. A provider CLI missing from PATH is `unavailable` — with the full artifact set and log row, so an unequipped machine draining the lane is recorded learning data, not a crash. Note the lane semantics stay unchanged: a `codex` row waits for a worker that drains `--agent codex` on a machine where the CLI exists.
 
+### Unattended shadows: the sample-rate + drain recipe
+
+A workspace can turn unused lane capacity into measurement — shadow-compare a fraction of freshly claimed specs with **no human clicking between steps** — while canonical folders and winner application stay exactly as human-gated as before. Two dials must both be on, because queue-on-claim and drain-on-schedule are deliberately split:
+
+1. **Queue on claim** — `experiments.enabled: true` + `experiments.auto_initiate: true`, and set `auto_initiate_rate` to the fraction of eligible fresh claims that should initiate (a Bernoulli trial per claim, drawn before routing; absent = `1.0`, every eligible claim). Sample misses are logged `skipped` / `sample_rate` and never touch the daily/concurrent budgets.
+2. **Drain on schedule** — `automation.enabled: true` with `automation.experiment: drain` (plus `automation.lanes`), so the scheduled ticks fold requests and drain candidate/judge rows headlessly.
+
+**Queue alone is not enough**: with only `auto_initiate` on, cohorts pile up `queued` until someone runs `tl experiment drain` by hand. With only `drain` on, nothing new is ever queued. Together they close the loop — claim → sampled cohort → drained candidates → headless judge verdict — and everything still pools at the human review gate.
+
+```yaml
+# TRIAGE.yml — shadow-compare ~20% of fresh claims, fully unattended
+experiments:
+  enabled: true
+  candidates: [claude, codex]
+  judge: gemini
+  auto_initiate: true
+  auto_initiate_rate: 0.2        # 1 in 5 eligible claims; budgets below still cap the burn
+  auto_initiate_max_concurrent: 1
+  auto_initiate_daily_max: 3
+automation:
+  enabled: true
+  lanes: [claude]
+  experiment: drain
+```
+
+**Safety defaults on the auto path (fail closed, no dial-off).** Auto-initiated experiments are stamped `initiated_by: "policy"` and the shared trust boundary (`lib/env-policy.js`) refuses host execution for them: `unsafe_host_exec` is **ignored on auto rows** — row flag or drain-wide `--unsafe-host-exec`, the shell attempt terminates `failed` with a concrete reason before the command runs — and an auto-initiated judge **skips a drain-wide `--test-command`** (`tests_pass: null`, declared unavailable) unless the workspace sets the literal `experiments.auto_initiate_allow_test_command: true`. Provider lanes (claude/codex/gemini/cursor) drain normally — each CLI brings its own permission model. Auto shadows write only under `_experiments/` and `_metrics/`; they never edit canonical stage folders, and applying a winner remains an explicit human action (full contract text: `_templates/SCHEMA.md`, "Auto-shadow safety contract").
+
 ### Worker safety invariants
 
-- Workers **never apply winners**. The queue and runner modules do not import the winner-application library (a test enforces it); `tl experiment apply` remains the explicit human action.
+- Workers **never apply winners**. The queue, runner, judge, worker-tick, and automation modules do not import the winner-application library (tests enforce it); `tl experiment apply` remains the explicit human action — including for auto-initiated experiments.
 - Workers **never move canonical spec folders**. Queueing reads `SPEC.md`; it does not claim, stage, or advance the spec.
 - Queue history is **append-only**; corrections and retries are new rows/attempts, never edits.
+- **Auto-initiated rows never execute host commands**: `unsafe_host_exec` and live judge test commands fail closed on `initiated_by: "policy"` experiments (see the recipe above).
 
 ## Safety Boundary
 

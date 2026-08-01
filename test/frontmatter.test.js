@@ -4,7 +4,10 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { fmValue, setFrontmatterField, stampSpecFields, PROTECTED_FIELDS } = require('../lib/frontmatter');
+const {
+  fmValue, setFrontmatterField, appendToFrontmatterList, setFrontmatterList,
+  stampSpecFields, PROTECTED_FIELDS, BOOLEAN_FIELDS,
+} = require('../lib/frontmatter');
 const { parseFrontmatter } = require('../lib/parse');
 
 test('fmValue: newlines and quotes are neutralized to one safe line', () => {
@@ -30,6 +33,61 @@ test('setFrontmatterField: inserts when the field is absent', () => {
 
 test('setFrontmatterField: no frontmatter block → returned unchanged', () => {
   assert.equal(setFrontmatterField('just text', 'status', 'done'), 'just text');
+});
+
+test('setFrontmatterField: schema booleans round-trip as booleans', () => {
+  assert.ok(BOOLEAN_FIELDS.includes('awaiting_verifier'));
+  assert.ok(BOOLEAN_FIELDS.includes('auto_reviewed'));
+  const initial = '---\ntitle: "x"\n---\nbody';
+  for (const value of [true, false]) {
+    const out = setFrontmatterField(initial, 'awaiting_verifier', value);
+    const { meta } = parseFrontmatter(out);
+    assert.equal(typeof meta.awaiting_verifier, 'boolean');
+    assert.equal(meta.awaiting_verifier, value);
+    assert.match(out, new RegExp(`^awaiting_verifier: ${value}$`, 'm'));
+  }
+});
+
+test('setFrontmatterField: boolean-looking non-boolean fields stay strings', () => {
+  const initial = '---\ntitle: "x"\n---\nbody';
+  const out = setFrontmatterField(initial, 'title', 'true');
+  const { meta } = parseFrontmatter(out);
+  assert.equal(meta.title, 'true');
+  assert.equal(typeof meta.title, 'string');
+  assert.match(out, /^title: "true"$/m);
+});
+
+test('legacy quoted lifecycle booleans remain strings until rewritten', () => {
+  const { meta } = parseFrontmatter('---\nawaiting_verifier: "true"\n---\n');
+  assert.equal(meta.awaiting_verifier, 'true');
+  assert.equal(typeof meta.awaiting_verifier, 'string');
+});
+
+test('appendToFrontmatterList: handles missing, empty, inline and block lists', () => {
+  const missing = appendToFrontmatterList('---\ntitle: "x"\n---\nbody', 'goals', 'g1');
+  assert.match(missing, /^goals:\n  - "g1"$/m);
+  const empty = appendToFrontmatterList('---\ngoals: []\n---\n', 'goals', 'g1');
+  assert.match(empty, /^goals:\n  - "g1"$/m);
+  const inline = appendToFrontmatterList('---\ngoals: ["g1"]\n---\n', 'goals', 'g2');
+  assert.match(inline, /^goals: \["g1", "g2"\]$/m);
+  const block = appendToFrontmatterList('---\ngoals:\n  - "g1"\n---\n', 'goals', 'g2');
+  assert.match(block, /^goals:\n  - "g1"\n  - "g2"$/m);
+});
+
+test('appendToFrontmatterList: suppresses duplicates, sanitizes, refuses scalars and ignores body decoys', () => {
+  const src = '---\ngoals: ["g1"]\nkind: scalar\n---\nbody says goals: [decoy]';
+  assert.equal(appendToFrontmatterList(src, 'goals', 'g1'), src);
+  assert.equal(appendToFrontmatterList(src, 'kind', 'x'), src);
+  const out = appendToFrontmatterList(src, 'goals', 'bad"\nvalue');
+  assert.match(out, /"bad' value"/);
+  assert.match(out, /body says goals: \[decoy\]/);
+});
+
+test('setFrontmatterList: replaces block items and preserves body decoys', () => {
+  const src = '---\ngoals:\n  - "old"\nother: "x"\n---\nbody says goals:\n  - decoy';
+  const out = setFrontmatterList(src, 'goals', ['new']);
+  assert.match(out, /^goals: \[new\]\nother: "x"$/m);
+  assert.match(out, /body says goals:\n  - decoy/);
 });
 
 // ---- release contract: status → ready strips hold_reason --------------------

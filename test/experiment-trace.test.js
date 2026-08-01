@@ -267,6 +267,7 @@ test('runCandidate emits TRACE events with model fields, METRICS model visibilit
       repo,
       command: 'printf "ok\\n" > out.txt',
       estimated_cost_usd: 0,
+      unsafe_host_exec: true, // shell rows require the explicit trust opt-in
     },
   };
 

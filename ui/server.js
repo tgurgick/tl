@@ -4,7 +4,10 @@
 // GET serves the cockpit read-only. A small set of localhost POST actions
 // (capture, priority override, thread status, research, review accept/kick,
 // notes) mutate the markdown workspace. Trust model: the server binds to
-// 127.0.0.1 for a single local user — there is no auth. Every write resolves
+// 127.0.0.1 for a single local user — there is no auth, but every mutating
+// POST must carry a per-process write token injected into the served HTML
+// (see "write guard" below), so an arbitrary web page open in the same
+// browser cannot fire cross-origin POSTs at the cockpit. Every write resolves
 // through safePath (can't escape the workspace) and mutates records via
 // lib/frontmatter (scoped, sanitized — no whole-file string surgery).
 // Usage: node ui/server.js [--port 4400] [--root <repo root>]
@@ -12,6 +15,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const args = process.argv.slice(2);
 function arg(name, fallback) {
@@ -25,14 +29,27 @@ const ROOT = path.resolve(arg('root', process.cwd()));
 // modules the CLI (bin/tl.js) uses, so parsing and mutation rules can't drift.
 const { parseYaml, parseFrontmatter } = require('../lib/parse');
 const { safeRead, readFirst, isDir, mtime, safePath: libSafePath } = require('../lib/workspace');
-const { fmValue, setFrontmatterField } = require('../lib/frontmatter');
+const {
+  fmValue, setFrontmatterField, appendToFrontmatterList, setFrontmatterList,
+} = require('../lib/frontmatter');
 const { buildProjectInsights, taskTitleFromBody, firstParagraph } = require('../lib/project-insights');
+const { localRepoPath, specSlug } = require('../lib/batch');
 const { automationStatus } = require('../lib/automation');
 const {
   writeVerifyRequest, applyVerifyHumanDecision, readVerifierLanes,
-  verifierStatusOf, readVerifyRequests,
+  verifierStatusOf, readVerifyRequests, loadSpecTracePayload,
+  readPendingContinuations, appendSpecTraceEvent,
 } = require('../lib/worker');
 const { canAdvanceToReview } = require('../lib/verification-gate');
+const { recallSearch } = require('../lib/recall');
+const { buildBenchmarkRecord, appendBenchmarkRecord, intentGoalIds } = require('../lib/benchmark-log');
+const { detectStalledClaims, reclaimStalled, stallThresholdMs } = require('../lib/stall');
+const { recordReflectProposalDecision } = require('../lib/reflect-desk');
+
+// "did we already discuss this?" is the product — capped and grouped, not a
+// search engine. The cap truncates the ranked list; grouping stays identical
+// to `tl recall` (both call lib/recall.js recallSearch).
+const RECALL_CAP = 30;
 
 // ---------- workspace reading ----------
 
@@ -89,6 +106,11 @@ function readStage(dir, stage, folder) {
       if (notes) item.notes = notes;
       if (stage === 'tests' || stage === 'in-progress' || stage === 'in-review') {
         item.verifier = verifierStatusOf(item, { wsDir: dir });
+        // Spec-scoped activity trace (TRACE.jsonl) — omit key when absent so
+        // the drawer falls back to body/notes. Rides the existing workspace
+        // payload + file-watch/SSE; no new endpoint or server-side execution.
+        const trace = loadSpecTracePayload(p);
+        if (trace) item.trace = trace;
       }
     }
     out.push(item);
@@ -120,6 +142,34 @@ function readWorkspace(ws) {
     ...readStage(dir, 'in-review', 'in-review'),
     ...readStage(dir, 'done', 'done'),
   ];
+
+  // Stall assessment for in-progress cards — eligibility comes from lib/stall.js
+  // (threshold + guards), never duplicated thresholds in the UI. Annotate only
+  // stalled claims so the cockpit can badge + offer an explicit per-spec reclaim.
+  try {
+    const thresholdMs = stallThresholdMs(config);
+    const forDetect = specs.filter(s => s.stage === 'in-progress' && String(s.path || '').endsWith('/')).map(s => ({
+      ...s,
+      dir: path.join(dir, s.path.replace(/\/$/, '')),
+    }));
+    const continuations = { live: readPendingContinuations(dir, specs) };
+    const stalled = detectStalledClaims(dir, forDetect, { thresholdMs, continuations });
+    const bySlug = new Map(stalled.map(x => [x.slug, x]));
+    for (const s of specs) {
+      if (s.stage !== 'in-progress') continue;
+      const hit = bySlug.get(specSlug(s.path));
+      if (!hit) continue;
+      s.stall = {
+        stalled: true,
+        idle_hours: hit.idleHours,
+        idle_ms: hit.idleMs,
+        last_seen_ms: hit.lastSeenMs,
+        reason: hit.reason,
+        owner: (s.meta && s.meta.claimed_by) || null,
+        threshold_hours: Math.round(thresholdMs / 3600000),
+      };
+    }
+  } catch { /* stall annotation is advisory — never break the board payload */ }
 
   const threads = [];
   const threadsDir = path.join(dir, 'threads');
@@ -159,6 +209,26 @@ function readWorkspace(ws) {
       lanes: st.lanes,
       issues: st.issues.map(i => ({ lane: i.lane, problem: i.problem })),
       experiment: st.automation.experiment,
+      // Shared doctor payload (lib/doctor.js) — observe only.
+      health: st.health ? {
+        ok: st.health.ok,
+        stuck_at_tests: st.health.stuck_at_tests,
+        lifecycle: {
+          ok: st.health.lifecycle.summary.ok,
+          total: st.health.lifecycle.summary.total,
+          findings: (st.health.lifecycle.findings || []).slice(0, 20).map(f => ({
+            kind: f.kind, slug: f.slug, stage: f.stage || null, detail: f.detail || null, fix: f.fix || null,
+          })),
+        },
+        capacity: {
+          ok: st.health.capacity.summary.ok,
+          available: st.health.capacity.summary.available || [],
+          lanes: (st.health.capacity.verifier_lanes || []).map(r => ({
+            id: r.id, agent: r.agent, state: r.state, ok: r.ok,
+            reason: r.reason || null, fix: r.fix || null,
+          })),
+        },
+      } : null,
     };
   } catch { automation = null; }
 
@@ -171,6 +241,10 @@ function readWorkspace(ws) {
       .map(r => ({ path: r.file, spec: r.request.spec, target_lane: r.request.target_lane }));
   } catch { verifyRequests = []; }
 
+  // The workspace's own repo (PROJECT.md `repo:`) feeds the git-derived
+  // lines-of-code stat. localRepoPath ~-expands local refs and returns null
+  // for URLs/unset — gitLineStats degrades to unavailable, never throws.
+  const projectMeta = parseFrontmatter(safeRead(path.join(dir, 'PROJECT.md')) || '').meta;
   return {
     name: ws.name, example: ws.example,
     config, intents, specs, threads, metrics, automation,
@@ -181,9 +255,10 @@ function readWorkspace(ws) {
       specs,
       metrics,
       experiments: readExperiments(ws),
+      repoDir: localRepoPath(projectMeta.repo),
     }),
     priorities: readFirst(path.join(dir, 'PRIORITIES.md'), path.join(dir, 'priorities.md')),
-    project: parseFrontmatter(safeRead(path.join(dir, 'PROJECT.md')) || '').meta,
+    project: projectMeta,
   };
 }
 
@@ -279,6 +354,11 @@ function readExperiments(ws) {
   const out = [];
   for (const id of fs.readdirSync(base).sort()) {
     if (id.startsWith('.') || !isDir(path.join(base, id))) continue;
+    // only real experiment dirs — an experiment is defined by its EXPERIMENT.md
+    // (docs/agent-experiments.md). queue/ holds pending request JSONs, not an
+    // experiment, and must never render as a phantom "UNKNOWN" row or count in
+    // insights; same for any other non-experiment dir under _experiments/.
+    if (id === 'queue' || !fs.existsSync(path.join(base, id, 'EXPERIMENT.md'))) continue;
     out.push(experimentSummary(path.join(base, id), id));
   }
   return out.sort((a, b) => (b.created || '').localeCompare(a.created || '') || b.mtime - a.mtime);
@@ -622,6 +702,47 @@ primeSnapshots();
 const INDEX = path.join(__dirname, 'index.html');
 const LOGO = path.join(ROOT, 'assets', 'logo.png');
 
+// ---------- write guard (same-session token) ----------
+// Binding to 127.0.0.1 keeps remote hosts out, but any web page open in the
+// local browser can still fire cross-origin POSTs at localhost. So every
+// mutating POST must carry a per-process random token: it is minted fresh at
+// startup, injected into the HTML served at GET / (window.TL_WRITE_TOKEN),
+// never persisted to disk, and required in the x-tl-token header by every
+// POST /api/* route uniformly — a foreign page can neither read the token
+// (same-origin policy; CORS stays closed) nor forge the header cross-site
+// without a preflight the server never approves. Origin/Referer are checked
+// as defense-in-depth: browsers stamp Origin on cross-site POSTs, so a
+// non-local Origin is refused even with a valid token. This blocks ambient
+// browser POSTs from other pages; it does NOT make the server internet-safe.
+
+const WRITE_TOKEN = crypto.randomBytes(24).toString('hex');
+const TOKEN_HEADER = 'x-tl-token';
+const TOKEN_SNIPPET = `<script>window.TL_WRITE_TOKEN=${JSON.stringify(WRITE_TOKEN)};</script>`;
+const TOKEN_HINT = 'cockpit writes require the per-process write token served with the UI — '
+  + `reload the cockpit tab; clients read it from GET / (window.TL_WRITE_TOKEN) and send it in the ${TOKEN_HEADER} header`;
+
+// true when an Origin/Referer value points at this server (localhost-only)
+function sameServer(v) {
+  try {
+    const h = new URL(v);
+    if (h.hostname !== 'localhost' && h.hostname !== '127.0.0.1' && h.hostname !== '[::1]') return false;
+    return (h.port || (h.protocol === 'https:' ? '443' : '80')) === String(PORT);
+  } catch { return false; }
+}
+
+// null when the request may write; otherwise the reason for the 403.
+// Missing Origin AND Referer is allowed (curl, local scripts) — the token is
+// the guard of record; the Origin check only rejects browser-stamped foreign origins.
+function writeGuardReject(req) {
+  const origin = req.headers.origin;
+  if (origin != null && !sameServer(origin)) return 'cross-origin POST refused';
+  if (origin == null && req.headers.referer != null && !sameServer(req.headers.referer)) return 'cross-origin POST refused';
+  const got = Buffer.from(String(req.headers[TOKEN_HEADER] || ''));
+  const want = Buffer.from(WRITE_TOKEN);
+  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) return 'missing or bad write token';
+  return null;
+}
+
 function json(res, code, data) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
@@ -671,12 +792,20 @@ const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://localhost');
   try {
     if (req.method === 'POST' && u.pathname.startsWith('/api/')) {
+      // one gate for the whole write surface — every POST route, current and
+      // future, sits behind the same-session token (never per-endpoint checks)
+      const reject = writeGuardReject(req);
+      if (reject) return json(res, 403, { error: reject, hint: TOKEN_HINT });
       readBody(req).then(body => handlePost(u.pathname, body, res)).catch(() => json(res, 400, { error: 'bad body' }));
       return;
     }
     if (u.pathname === '/') {
       res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
-      res.end(safeRead(INDEX) || 'index.html missing');
+      const html = safeRead(INDEX);
+      // hand the write token to the (same-origin) page — head injection, no template step
+      res.end(html === null ? 'index.html missing'
+        : html.includes('</head>') ? html.replace('</head>', TOKEN_SNIPPET + '\n</head>')
+          : TOKEN_SNIPPET + '\n' + html);
     } else if (u.pathname === '/logo.png') {
       const buf = (() => { try { return fs.readFileSync(LOGO); } catch { return null; } })();
       if (buf) { res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(buf); }
@@ -712,8 +841,8 @@ const server = http.createServer((req, res) => {
       const ws = listWorkspaces().find(w => w.name === u.searchParams.get('ws'));
       const rel = u.searchParams.get('path') || '';
       if (!ws) return json(res, 404, { error: 'unknown workspace' });
-      const full = path.resolve(ws.dir, rel);
-      if (!full.startsWith(path.resolve(ws.dir) + path.sep)) return json(res, 400, { error: 'bad path' });
+      const full = safePath(ws, rel);
+      if (!full) return json(res, 400, { error: 'bad path' });
       const content = safeRead(full);
       if (content === null) return json(res, 404, { error: 'not found' });
       json(res, 200, { path: rel, content });
@@ -733,6 +862,15 @@ const server = http.createServer((req, res) => {
       const detail = readExperimentDetail(ws, id);
       if (!detail) return json(res, 404, { error: 'experiment not found' });
       json(res, 200, detail);
+    } else if (u.pathname === '/api/recall') {
+      // read-only recall — same shared helpers as `tl recall` (lib/recall.js):
+      // plain text search over the workspace markdown, no index, no embeddings,
+      // no mutation. Results come back ranked, capped, and grouped by kind.
+      const ws = listWorkspaces().find(w => w.name === u.searchParams.get('ws'));
+      if (!ws) return json(res, 404, { error: 'unknown workspace' });
+      const q = String(u.searchParams.get('q') || '').trim();
+      if (!q) return json(res, 400, { error: 'missing query — /api/recall?ws=<name>&q=<query>' });
+      json(res, 200, recallSearch(ws.dir, q, { cap: RECALL_CAP }));
     } else if (u.pathname.startsWith('/api/ws/')) {
       const name = decodeURIComponent(u.pathname.slice('/api/ws/'.length));
       const ws = listWorkspaces().find(w => w.name === name);
@@ -860,7 +998,14 @@ function hThreadMove(ws, body, res) {
   if (text == null) return json(res, 500, { error: 'read failed' });
   fs.mkdirSync(path.dirname(destFull), { recursive: true });
   fs.writeFileSync(destFull, text);
-  fs.unlinkSync(srcFull);
+  try {
+    fs.unlinkSync(srcFull);
+  } catch (e) {
+    // Roll back the destination copy so a failed unlink never leaves a
+    // duplicate — the tree returns to its pre-move state (source intact).
+    try { fs.unlinkSync(destFull); } catch {}
+    return json(res, 500, { error: 'move failed — source not removed: ' + String(e && e.message || e) });
+  }
   return json(res, 200, { ok: true, path: rel, from_ws: ws.name, to_ws: destName });
 }
 
@@ -975,6 +1120,17 @@ function hReview(ws, body, res) {
     appendReviewLog(ws, {
       date: new Date().toISOString(), spec: rel + '/', action: 'accepted', via: 'cockpit', gate,
     });
+    // benchmark-log side effect — never blocks accept (failure-silent)
+    try {
+      const specText = safeRead(path.join(dest, 'SPEC.md'));
+      const feedbackText = safeRead(path.join(dest, 'outcome', 'FEEDBACK.md'));
+      const meta = parseFrontmatter(specText || '').meta || {};
+      const intentText = meta.intent ? safeRead(path.join(ws.dir, String(meta.intent))) : null;
+      appendBenchmarkRecord(ws.dir, buildBenchmarkRecord({
+        specText, specSlug: slug, project: ws.name, feedbackText,
+        goalIds: intentGoalIds(intentText),
+      }));
+    } catch { /* never block accept on metrics */ }
     return json(res, 200, { ok: true, path: 'done/' + slug + '/', gate });
   }
   if (action === 'reject') {
@@ -1018,6 +1174,73 @@ function hRelease(ws, body, res) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.renameSync(srcDir, dest); setSpecStatus(dest, 'ready');
   return json(res, 200, { ok: true, path: 'specs/' + slug + '/' });
+}
+
+function hReclaim(ws, body, res) {
+  // Explicit per-spec reclaim of a stalled in-progress claim. One slug, one
+  // recorded reason — never a bulk sweep. Eligibility + writes live in
+  // lib/stall.js (reclaimStalled); this handler only wires cockpit inputs.
+  const rel = String(body.spec || '').replace(/\/$/, '');
+  if (!/^in-progress\/[^/]+$/.test(rel)) {
+    return json(res, 400, { error: 'only a single in-progress/<slug> claim can be reclaimed' });
+  }
+  const reason = String(body.reason || '').trim();
+  if (!reason) return json(res, 400, { error: 'a non-empty reason is required' });
+  const by = String(body.by || 'cockpit').trim() || 'cockpit';
+  const slug = rel.split('/').pop();
+  let cfg = {};
+  try { cfg = parseYaml(safeRead(path.join(ws.dir, 'TRIAGE.yml')) || '') || {}; } catch { cfg = {}; }
+  const thresholdMs = stallThresholdMs(cfg);
+  // Continuations need the same shape detectStalledClaims/reclaimStalled expect
+  // ({ live: [...] }); readPendingContinuations already returns that list.
+  const specs = [
+    ...readStage(ws.dir, 'in-progress', 'in-progress'),
+    ...readStage(ws.dir, 'tests', 'tests'),
+  ];
+  const continuations = { live: readPendingContinuations(ws.dir, specs) };
+  const result = reclaimStalled(ws.dir, slug, { by, reason, thresholdMs, continuations });
+  if (!result.ok) {
+    const why = {
+      'reason-required': 'a non-empty reason is required',
+      'by-required': 'who is reclaiming is required',
+      'not-found': 'spec not found in in-progress',
+      'active-claim': 'claim shows recent activity — never force-steal live work',
+      'awaiting-verifier': 'verifier hand-off, not a stall',
+      'continuation-pending': 'a pending continuation owns the resume',
+      'blocked': 'spec records a blocker — unblock instead of reclaiming',
+      'destination-exists': 'destination folder already exists',
+      'no-evidence': 'no dateable activity for the claim',
+      'no-slug': 'missing spec slug',
+    }[result.reason] || result.reason;
+    const code = result.reason === 'not-found' ? 404
+      : (result.reason === 'active-claim' || result.reason === 'awaiting-verifier'
+        || result.reason === 'continuation-pending' || result.reason === 'blocked'
+        || result.reason === 'no-evidence') ? 409
+        : 400;
+    return json(res, code, { ok: false, error: why, reason: result.reason });
+  }
+  // Same append-only reclaim audit as `tl reclaim` — NOTES.md already written
+  // by reclaimStalled; add a handoff TRACE row that travels with the folder.
+  try {
+    appendSpecTraceEvent(path.join(ws.dir, result.to), {
+      type: 'handoff',
+      from_stage: result.from.split('/')[0],
+      to_stage: result.to.split('/')[0],
+      summary: `reclaimed by ${by} (${result.mode}): ${reason.slice(0, 200)} — prior claim ${result.priorClaimedBy || 'unstamped'}`,
+      actor_type: 'human', actor_id: String(by),
+      initiation: 'human', source: 'cockpit',
+    });
+  } catch { /* trace is observability; reclaim already succeeded */ }
+  return json(res, 200, {
+    ok: true,
+    mode: result.mode,
+    from: result.from,
+    to: result.to,
+    slug: result.slug,
+    priorClaimedBy: result.priorClaimedBy,
+    idleHours: result.idleHours,
+    thresholdHours: result.thresholdHours,
+  });
 }
 
 function hNote(ws, body, res) {
@@ -1107,62 +1330,30 @@ function hVerifyDecision(ws, body, res) {
   }
 }
 
+function hReflectDecision(ws, body, res) {
+  // Explicit human marker for a reflect proposal — viewing alone never writes this.
+  // Never auto-applies TRIAGE.yml; applied only records that the human already applied.
+  const proposalId = body.proposal_id || body.proposalId || body.date || body.id;
+  const action = String(body.action || '').toLowerCase();
+  try {
+    const got = recordReflectProposalDecision(ws.dir, {
+      proposalId,
+      action,
+      actor: 'human-cockpit',
+      via: 'cockpit',
+      note: String(body.note || '').trim(),
+    });
+    return json(res, 200, { ok: true, ...got });
+  } catch (e) {
+    return json(res, 400, { error: e && e.message ? e.message : String(e) });
+  }
+}
+
 // ---------- frontmatter list edits (map repair) ----------
 // lib/frontmatter covers single-line scalar fields; the map-repair handler also
 // edits small YAML lists (an intent's `specs:` / `goals:`). Same rules apply:
 // scoped to the leading frontmatter block, values sanitized to one safe line,
 // and the body is never touched. `key` is always a literal from this file.
-
-// append one value to a frontmatter list field — handles a missing key,
-// `key: []`, an inline `key: [a, b]`, or a block list; no-ops if already present.
-function appendToFrontmatterList(text, key, value) {
-  const src = String(text);
-  const m = src.match(/^(---\n)([\s\S]*?)(\n---\n?)/);
-  if (!m) return src;
-  const val = fmValue(value);
-  const unq = s => s.trim().replace(/^["']|["']$/g, '');
-  const lines = m[2].split('\n');
-  const keyRe = new RegExp(`^${key}:(.*)$`);
-  const ki = lines.findIndex(l => keyRe.test(l));
-  const item = `  - "${val}"`;
-  if (ki < 0) lines.unshift(`${key}:`, item);
-  else {
-    const rest = lines[ki].match(keyRe)[1].replace(/\s#.*$/, '').trim();
-    const inline = rest.match(/^\[(.*)\]$/);
-    if (inline && inline[1].trim()) {              // inline list with entries — keep it inline
-      const entries = inline[1].split(',').map(unq);
-      if (entries.includes(val)) return src;
-      lines[ki] = `${key}: [${entries.map(e => `"${e}"`).concat(`"${val}"`).join(', ')}]`;
-    } else if (inline || !rest) {                  // `key: []` or bare `key:` — block form
-      let j = ki + 1;
-      while (j < lines.length && /^\s+-\s/.test(lines[j])) {
-        if (unq(lines[j].replace(/^\s+-\s*/, '')) === val) return src;
-        j++;
-      }
-      lines[ki] = `${key}:`;
-      lines.splice(j, 0, item);
-    } else return src;                             // a scalar where a list should be — refuse
-  }
-  return m[1] + lines.join('\n') + m[3] + src.slice(m[0].length);
-}
-
-// replace-or-insert a frontmatter list field as a one-line inline list,
-// dropping any block items the old value had.
-function setFrontmatterList(text, key, values) {
-  const src = String(text);
-  const m = src.match(/^(---\n)([\s\S]*?)(\n---\n?)/);
-  if (!m) return src;
-  const line = `${key}: [${values.map(fmValue).join(', ')}]`;
-  const lines = m[2].split('\n');
-  const ki = lines.findIndex(l => new RegExp(`^${key}:`).test(l));
-  if (ki < 0) lines.unshift(line);
-  else {
-    let j = ki + 1;
-    while (j < lines.length && /^\s+-\s/.test(lines[j])) j++;   // absorb old block items
-    lines.splice(ki, j - ki, line);
-  }
-  return m[1] + lines.join('\n') + m[3] + src.slice(m[0].length);
-}
 
 function hMapRepair(ws, body, res) {
   // heal a throughline break from the Map: attach an orphan spec to an existing
@@ -1323,9 +1514,11 @@ const ROUTES = {
   '/api/research': hResearch,
   '/api/review': hReview,
   '/api/release': hRelease,
+  '/api/reclaim': hReclaim,
   '/api/note': hNote,
   '/api/verify-dispatch': hVerifyDispatch,
   '/api/verify-decision': hVerifyDecision,
+  '/api/reflect-decision': hReflectDecision,
 };
 
 function handlePost(pathname, body, res) {
