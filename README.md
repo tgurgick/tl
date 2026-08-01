@@ -84,6 +84,7 @@ throughline/                    # the tool (this repo, public)
 ├── ui/                         # local web UI — Learn / Run / Review (zero-dep node)
 ├── docs/                       # design process docs
 │   ├── agent-experiments.md    # portable task/candidate/judge model + TL mapping
+│   ├── canonical-e2e-path.md   # one operating path (steer → tl up → verify → review)
 │   ├── headless-lanes.md       # tl up + worker ticks / cron escape hatch
 │   └── repo-split.md
 │
@@ -141,7 +142,7 @@ Each workspace has its own `TRIAGE.yml` — one file encoding that project's pro
 - **Allocation targets** — target split across bugs, features, tech debt, research
 - **Priority rules** — automatic overrides (regressions → P0, widespread crashes → P0, stale bugs → flag)
 - **`auto_review`** (optional) — per-type fast-track dial: when `true` for a spec's `type`, `/tl run` still lands it in `in-review` but stamps `auto_reviewed: true` for a lighter-touch human review. Never skips the human gate or `FEEDBACK.md`.
-- **`automation`** (optional) — the `tl open` schedule profile: interval, headless lanes to tick, a verify toggle, an experiment dial. One block replaces N hand-written crons; absent means no schedules (see below).
+- **`automation`** (optional) — the `tl up` schedule profile: interval, headless lanes to tick, a verify toggle, an experiment dial. One block replaces N hand-written crons; absent means no schedules (see below). (`open` is an alias of `up`.)
 
 Edit the config when goals change. The backlog re-sorts on the next triage run. Because the config is per-project, two workspaces can run completely different priorities side by side.
 
@@ -157,9 +158,9 @@ Maintenance: run `tl sync-rules` after editing skills to refresh generated agent
 
 Run them on demand from any Claude Code session, or schedule them as routines — triage and dedup need no network, so a local scheduled task (or a cron'd headless run, e.g. `claude -p "/tl triage my-app"`) covers the core loop. The intended cadence: bug-capture every 15 minutes, dedup daily at 6am, triage daily at 8am — sweep before you rank.
 
-### /tl open
+### /tl up
 
-The day-to-day happy path. One command starts a project's operating path: brings up the cockpit (or reuses it), installs/refreshes that workspace's automation schedule from the `TRIAGE.yml` `automation:` profile (one per-workspace launchd plist on macOS, one paste-able cron line elsewhere — `--print-schedule` emits both in full), and ends on the one next human action. A listed lane missing its `lanes.<name>.command` fails loudly — no silent-green schedule. `PAUSE` stays the kill switch; `open` never claims or moves specs, and headless work still pools at `in-review/` for `/tl review`. Hand-rolled cron/launchd (`docs/headless-lanes.md`) remains the advanced escape hatch.
+The day-to-day happy path (`open` is an alias only). One command starts a project's operating path: brings up the cockpit (or reuses it), installs/refreshes that workspace's automation schedule from the `TRIAGE.yml` `automation:` profile (one per-workspace launchd plist on macOS, one paste-able cron line elsewhere — `--print-schedule` emits both in full), and ends on the one next human action. Prefer `automation.verify: true` for **one** scheduled verify drain; interactive `/tl run` and `/tl verify` keep the same contracts as manual recovery launchers. Cockpit verify-request files are routing hints, not queue truth. A listed lane missing its `lanes.<name>.command` fails loudly — no silent-green schedule. `PAUSE` stays the kill switch; `up` never claims or moves specs, and headless work still pools at `in-review/` for `/tl review` — **agents never move work to `done/`**. Full story: `docs/canonical-e2e-path.md`. Hand-rolled cron/launchd (`docs/headless-lanes.md`) remains the advanced escape hatch.
 
 ### /tl resume
 

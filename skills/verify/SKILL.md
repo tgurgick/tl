@@ -7,6 +7,8 @@ description: Independently verify specs waiting at the TESTS gate — a non-buil
 
 The independent half of the cross-model loop. `/tl run` builds; `/tl verify` is a **different agent** checking that work before the human sees it. A builder never verifies its own spec — that is the whole point (`done/allocation-actionable-prompt` is the incident that made this a gate instead of a convention). And the verifier is **read-only**: a requested mutation is a review finding, not permission to edit (`done/isolated-verifier-runner`).
 
+Prefer **one scheduled** verify drain (`automation.verify: true` → `tl-worker --mode verify`) as the primary path after `tl up`. Interactive `/tl verify` / `tl verify --execute` are **supported recovery launchers** with the **same** lease, read-only, and ALIGNMENT contract — not a second product. Cockpit verify-request files are routing hints only. Canonical story: `docs/canonical-e2e-path.md`.
+
 ## Resolve the workspace
 
 Same as `/tl triage`. `tl verify [workspace] [spec] [--agent <name>]` prints this procedure plus the queue, excluding specs built by `--agent`'s own lane.
@@ -51,7 +53,7 @@ Before touching a spec, take its exclusive expiring lease at `_metrics/verify-lo
 
 ## The human decision
 
-Your proposals are inputs to an explicit human choice (`tl verify` decision path / cockpit — `applyVerifyHumanDecision`): **authorize fix-forward** (a separate agent continuation implements it) or **kick back** to the builder. Neither path applies your patch silently, and you never pre-implement "so it's ready."
+Your proposals are inputs to an explicit human choice (`tl verify` decision path / cockpit — `applyVerifyHumanDecision`): **authorize fix-forward** (a **separate agent** continuation implements it) or **kick back** to the builder. Neither path applies your patch silently, and you never pre-implement "so it's ready." Mutation proposals always require human authorization; the verifier never edits source.
 
 ## Guardrails
 

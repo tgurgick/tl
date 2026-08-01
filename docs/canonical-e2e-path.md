@@ -1,47 +1,43 @@
-# Canonical Throughline E2E path
+# Canonical Throughline operating path
 
-_Draft for review — 2026-07-24. Proposes one operating story; does not change product behavior._
+_Final operator contract — 2026-07-31. One operating story; product behavior is unchanged by this doc alone._
 
 ## Purpose
 
-Throughline’s “E2E” has grown several overlapping stories (interactive run, headless workers, verify drains, experiment fixtures, skill-only loop). This doc picks **one** path as canonical so operators and reviewers share the same mental model. Everything else is advanced or orthogonal.
+Throughline’s “E2E” had overlapping stories (interactive run, headless workers, verify drains, experiment fixtures, skill-only loop). This doc is the **canonical** path so operators and reviewers share one mental model. Everything else is a recovery tool, an advanced escape hatch, or a separate product.
 
-## What E2E means here
+## Naming — three different proofs
 
-**Canonical E2E** = unattended (or lightly attended) work that moves a real-repo spec:
+| Name | What it is | What it is not |
+|------|------------|----------------|
+| **Canonical operating path** (this doc) | Unattended (or lightly attended) work that moves a real-repo spec `ready → in-progress → tests → in-review`, then a **human** accepts `in-review → done` | A Playwright suite; agents promoting to `done/` |
+| **Experiment fixture proof** | Shadow compare / research under `_experiments/` | “E2E” or the happy path |
+| **Browser / CI E2E** | Optional product UI or CI agent-lifecycle suites | The default operating story |
 
-```
-ready → in-progress → tests → in-review
-```
-
-…with **builder ≠ verifier**, then a **human** accepts `in-review → done`.
-
-It is **not**:
-
-- A Playwright / browser CI suite
-- Agents promoting work to `done/` (that hop is human-only)
-- The experiment fixture / shadow-compare loop under `_experiments/` (valuable, separate product — call it **experiment fixture proof**, not E2E)
-
-Proof that this path works: `projects/throughline/done/headless-e2e-todo-app/` (GO) and `docs/headless-lanes.md`.
+Proof that the operating path works: `projects/throughline/done/headless-e2e-todo-app/` (GO) and `docs/headless-lanes.md`.
 
 ## The one happy path
+
+```
+steer → tl up → builder tick → manifest-backed tests/ queue → independent read-only verifier → human review → done/
+```
 
 | Step | Who | What |
 |------|-----|------|
 | 1. Steer | Human | Shape intents / specs (`new`, `decompose`, `groom`, …) until something is in `specs/` |
-| 2. Start | Human | **`tl up <workspace>`** — cockpit + automation schedule from `TRIAGE.yml` + next human action |
-| 3. Build | Headless lane | `tl-worker <ws> --agent <lane>` ticks: claim → build → stop at tests with verify hand-off (`FEEDBACK`, `BUILDER.diff`, `awaiting_verifier`) |
-| 4. Verify | Other lane | Scheduled verify tick **or** `tl verify` — independent of builder; advances to `in-review` |
+| 2. Start | Human | **`tl up <workspace>`** — cockpit + automation schedule from `TRIAGE.yml` + next human action (`open` is an **alias only**) |
+| 3. Build | Headless lane | `tl-worker <ws> --agent <lane>` ticks: claim → build → finalize under lease → stop at `tests/` with a valid `outcome/HANDOFF.json` |
+| 4. Verify | Other lane | **One scheduled** `tl-worker --mode verify` tick (primary) — independent, read-only; advances a clean pass to `in-review` |
 | 5. Review | Human | `/tl review` or cockpit accept → `done/` (or kick back → `_dispatch/` continuation) |
 
-Human verbs (already shipped): **steer → run → review → learn**.  
-Run’s happy path command is **`tl up`** (`open` is only an alias).
+Human verbs: **steer → run → review → learn**.  
+Run’s happy-path command is **`tl up`**.
 
 ```
-┌─────────┐     ┌──────────────┐     ┌────────┐     ┌───────────┐     ┌──────┐
-│  steer  │ ──► │ tl up + ticks│ ──► │ verify │ ──► │  review   │ ──► │ done │
-│ (human) │     │ (automation) │     │ (≠bld) │     │  (human)  │     │      │
-└─────────┘     └──────────────┘     └────────┘     └───────────┘     └──────┘
+┌─────────┐     ┌──────────────┐     ┌────────────────┐     ┌───────────┐     ┌──────┐
+│  steer  │ ──► │ tl up + ticks│ ──► │ verify (≠ bld) │ ──► │  review   │ ──► │ done │
+│ (human) │     │ (automation) │     │  read-only     │     │  (human)  │     │      │
+└─────────┘     └──────────────┘     └────────────────┘     └───────────┘     └──────┘
 ```
 
 ## Stage contract (folder = status)
@@ -49,66 +45,57 @@ Run’s happy path command is **`tl up`** (`open` is only an alias).
 | Folder | Meaning | Who may advance |
 |--------|---------|-----------------|
 | `specs/` | Ready queue | Builder claim → `in-progress/` |
-| `in-progress/` | Claimed build | Builder → `tests/` |
-| `tests/` | Code complete; verify gate | Verifier (≠ `claimed_by`) → `in-review/` |
-| `in-review/` | Awaiting human | Human only → `done/` |
-| `done/` | Accepted | Human only |
+| `in-progress/` | Claimed build | Builder finalize → `tests/` (after valid `HANDOFF.json`) |
+| `tests/` | Code complete; verify gate | Verifier ≠ `claimed_by` → `in-review/` |
+| `in-review/` | Awaiting human | **Human only** → `done/` |
+| `done/` | Accepted | **Human only** — no agent path |
 
-Incomplete handoff smell: `FEEDBACK` / `VERIFY` / `BUILDER.diff` present under `in-progress/` without `tests/` + `awaiting_verifier`. That work is invisible to verify until advanced — a known throughput leak.
+**Verifier eligibility** is a spec in `tests/` with a **valid handoff manifest**. Frontmatter flags, `VERIFY.md`, and cockpit verify-request files are **not** a second source of queue truth.
 
-## What is *not* on the canonical path
+## Recovery vs artifacts
 
-Keep these; stop teaching them as the default E2E story.
+**Prepared-handoff recovery** (`tl recover`) finishes an interrupted `in-progress → tests` move only when:
 
-| Surface | Role | Why demoted |
-|---------|------|-------------|
-| Interactive `/tl run` | Same procedure as a worker tick, human-driven | Optional; automation is the default motion after `tl up` |
-| Cockpit “Request verify” | Writes a verify-request **file** only | Does not run a verifier; ticks/skills drain it |
-| `tl verify --execute` / skill verify | Valid drains | Prefer **one** configured verify tick in automation when possible |
-| `/tl loop` | Skill-only orchestration | No CLI; overlaps `tl up` + workers — advanced |
-| `tl open` | Alias of `tl up` | Footnote only |
-| Hand-rolled cron copy-paste | Pre-`automation:` era | Prefer `TRIAGE.yml` `automation:` + `tl up` |
-| Experiment queue/drain/apply | Shadow compare / research | Orthogonal product; do not call it “E2E” |
+1. A **valid, committed** `outcome/HANDOFF.json` is present (digests match), and  
+2. The builder lease is **expired** (or the documented no-lease grace path applies).
+
+**Artifacts alone are insufficient.** `FEEDBACK.md` + `BUILDER.diff` without a valid manifest is **legacy / no-manifest** — reclaim or repair by hand, never inferred completion. Recovery reuses the terminal manifest byte-identically (`reuse_only`); it never stamps or overwrites around an invalidated manifest.
+
+## Interactive verbs = same contract, recovery launchers
+
+| Surface | Role |
+|---------|------|
+| Interactive `/tl run` | Same procedure as a worker tick, human-driven — **supported** manual / recovery launcher |
+| Interactive `/tl verify` / `tl verify --execute` | Same read-only lease + ALIGNMENT contract as the scheduled verify tick — **supported** recovery drain |
+| Cockpit “Request verify” / `_metrics/verify-requests/*.json` | **Routing hints only** — do not execute a verifier and are not queue truth |
+| `/tl loop` | Skill-only orchestration — advanced; overlaps `tl up` + workers |
+| `tl open` | **Alias of `tl up`** — footnote only; do not teach as a separate product |
+| Hand-rolled cron / launchd | Advanced escape hatch; prefer `TRIAGE.yml` `automation:` + `tl up` |
+| Experiment queue / drain / apply | Orthogonal product — **experiment fixture proof**, not this path |
+
+Prefer **one** configured verify tick (`automation.verify: true`). Other verify launchers stay available with **identical** contracts when you need to recover by hand.
+
+## Verifier mutation proposals
+
+The verifier is **read-only**. Any desired source change is `human-decision-required` in `ALIGNMENT` + `NOTES` — never applied by the verifier. Fix-forward requires **human authorization** and a **separate agent** continuation. The human gate to `done/` is never removed.
 
 ## Gates (why three checks exist)
 
-1. **Tests folder** — builder’s acceptance checks green (or blocked with reason).
+1. **Tests folder** — builder’s acceptance checks green; terminal `HANDOFF.json` bound.
 2. **Independent verify** — second agent/model; writes `ALIGNMENT`; ceiling `in-review`.
 3. **Human review** — only path to `done/`; `auto_review` may lighten review, never skip it.
 
-These are intentional for multi-lane safety. Streamlining should target **operator surface and stuck handoffs**, not collapsing human `done/` into agents.
-
-## Known complexity (candidates to simplify later)
-
-Ordered by leverage — proposals only; not commitments:
-
-1. Teach a single operating path: `tl up` + scheduled run/verify ticks.
-2. One primary verify drain (automation tick); treat other launchers as recovery tools.
-3. Detect incomplete handoffs (artifacts in `in-progress/`) and advance into the verify queue without a 24h stall wait.
-4. Naming: “headless dogfood loop” vs “experiment fixture proof.”
-5. Retire dual naming in docs (`open` → alias footnote; TRIAGE KRs that still say agent → `done/`).
-6. Avoid adding CI agent-lifecycle E2E until (1)–(3) are calm — unit tests + one dogfood workspace remain the proof bar.
-
 ## Related reading
 
-- `README.md` — four-verb quick start
-- `docs/headless-lanes.md` — worker ticks, lane config, E2E validation pointer
-- `docs/agent-experiments.md` — experiment loop (not this E2E)
-- `projects/throughline/done/verb-collapse-four-surfaces/` — human surface collapse
+- `README.md` — four-verb quick start (`tl up`)
+- `docs/headless-lanes.md` — worker ticks, lane config
+- `docs/agent-experiments.md` — experiment loop (not this path)
+- `_templates/SCHEMA.md` — handoff, verification, automation
+- `skills/run/SKILL.md`, `skills/verify/SKILL.md` — interactive equivalents of the ticks
 - `projects/throughline/done/headless-e2e-todo-app/` — GO proof on a real repo
-- `projects/throughline/threads/2026-07-24-incomplete-handoff-stalls-queue.md` — stuck mid-handoff risk
-- `projects/throughline/specs/incomplete-handoff-advance/` — proposed fix for (3)
+- `projects/throughline/done/prepared-handoff-recovery/` — recovery = manifest + expired lease
+- `test/canonical-e2e.test.js` + `test/fixtures/canonical-e2e/` — deterministic lifecycle / failure regression (fake lanes; no paid agents)
 
-## Review asks
+## Optional dogfood validation
 
-When reviewing this draft, please comment on:
-
-1. Is **`tl up` + worker ticks + human review** the right single happy path?
-2. Should **interactive `/tl run`** stay first-class or become “advanced”?
-3. Is demoting **experiment** out of the E2E label clear enough?
-4. Which streamline item (1–6) should ship first — or is something missing?
-5. Anything here that contradicts how you actually operate day to day?
-
----
-
-_Status: draft for multi-reviewer feedback. No skills or product behavior changed by this file alone._
+CI and `npm test` use the deterministic suite above (injected seams, temporary git repos, no network or credentials). Optional live dogfood — two real headless lanes on a workspace after `tl up`, humans only at review — remains the proof in `projects/throughline/done/headless-e2e-todo-app/` and the recipes in `docs/headless-lanes.md`. That path is **not** required for the regression suite to stay green.

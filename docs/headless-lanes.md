@@ -23,12 +23,14 @@ worker's alarm clock, not its brain. The prompt is exactly the stdout of
 `node bin/tl.js run <ws> --agent <lane>`, so the driver can never drift from
 what an interactive run would say.
 
-## The happy path: `tl open`
+## The happy path: `tl up`
 
 You normally don't write the cron/launchd units below by hand anymore. Declare
 one `automation:` profile in the workspace's TRIAGE.yml and let
-`tl open <workspace>` install or refresh the schedule (plus start the cockpit
-and print the next human action):
+`tl up <workspace>` install or refresh the schedule (plus start the cockpit
+and print the next human action). (`tl open` is an alias of `tl up` — same
+command, not a second product.) Canonical operator story:
+`docs/canonical-e2e-path.md`.
 
 ```yaml
 automation:
@@ -51,24 +53,29 @@ verification:
       command: [agy]
 ```
 
-`tl open` generates a **single per-workspace schedule** — one launchd plist
+`tl up` generates a **single per-workspace schedule** — one launchd plist
 (`~/Library/LaunchAgents/com.tl.open.<ws>.plist`) on macOS, one cron line
 elsewhere — whose body ticks each listed lane sequentially with
 `bin/tl-worker.js <ws> --agent <lane>` (sequential is deliberate: calm over
-swarm, and the per-lane locks prevent overlap anyway). **v1 platform gap:**
-macOS gets write+`launchctl load`; Linux/other get a paste-able cron line only
-— `tl open` never runs `crontab` for you (use `--print-schedule` or paste from
-the open output). Try `tl open <ws> --dry-run` first; `tl open <ws>
---print-schedule` emits the complete paste-able cron line **and** plist — the
-right path when an agent is driving, because `launchctl load` can hang a
-headless session on a macOS permission prompt. A listed lane with no
-`lanes.<name>.command` fails loudly before anything is generated. `PAUSE`
-still stops every tick; full contract in `_templates/SCHEMA.md`.
+swarm, and the per-lane locks prevent overlap anyway). When
+`automation.verify: true`, the same schedule appends **one** isolated verify
+tick (`tl-worker --mode verify`) as the primary verify drain — cockpit
+verify-request files are routing hints only, not execution or queue truth.
+**v1 platform gap:** macOS gets write+`launchctl load`; Linux/other get a
+paste-able cron line only — `tl up` never runs `crontab` for you (use
+`--print-schedule` or paste from the up output). Try `tl up <ws> --dry-run`
+first; `tl up <ws> --print-schedule` emits the complete paste-able cron line
+**and** plist — the right path when an agent is driving, because
+`launchctl load` can hang a headless session on a macOS permission prompt. A
+listed lane with no `lanes.<name>.command` fails loudly before anything is
+generated. `PAUSE` still stops every tick; full contract in
+`_templates/SCHEMA.md`.
 
 Everything below — per-lane commands, quirks, and the hand-rolled cron/launchd
 recipes — still applies and remains the **advanced escape hatch** (offset
-schedules, per-lane intervals, non-standard layouts). `tl open` just writes
-the common case for you.
+schedules, per-lane intervals, non-standard layouts). `tl up` just writes the
+common case for you. Interactive `tl run` / `tl verify` keep identical
+contracts as manual recovery launchers.
 
 ## Configure the lanes (`TRIAGE.yml`)
 
@@ -284,7 +291,7 @@ When you add a workspace whose `repo` lives outside the tl checkout, create
 the profile before the lane's first tick — otherwise the first tick burns on
 the permission block.
 
-## cron recipes (advanced escape hatch — `tl open` writes the common case)
+## cron recipes (advanced escape hatch — `tl up` writes the common case)
 
 One line per lane. Ticks are cheap when there's no work (exit 0, one log
 line), so a short interval is fine — the per-lane lock prevents overlap even
@@ -302,7 +309,7 @@ if a session runs longer than the interval.
 same auth as your shell, or wrap the command in a login shell:
 `bash -lc '... tl-worker ...'`.)
 
-## launchd recipe (macOS — advanced escape hatch; `tl open` generates `com.tl.open.<ws>.plist`)
+## launchd recipe (macOS — advanced escape hatch; `tl up` generates `com.tl.open.<ws>.plist`)
 
 `~/Library/LaunchAgents/com.tl.worker.claude.plist`, one plist per lane:
 
@@ -392,7 +399,7 @@ time. Cockpit **Dispatch verify** (and `tl verify --dispatch`) only write
 tick or `tl verify --execute`.
 
 ```cron
-# optional hand-rolled verify tick (tl open already chains this when verify: true)
+# optional hand-rolled verify tick (tl up already chains this when verify: true)
 */15 * * * * cd $HOME/Documents/GitHub/throughline && /usr/local/bin/node bin/tl-worker.js throughline --mode verify >> /tmp/tl-worker-verify.log 2>&1
 ```
 
@@ -405,10 +412,10 @@ tick or `tl verify --execute`.
 | `off` | Inert — no experiment ticks in the schedule. |
 | `drain` | After lane (+ optional verify) ticks, run `node bin/tl.js experiment drain --agent <lane> <ws>` once per `automation.lanes` entry. |
 
-`drain` folds pending `_experiments/queue/*.json` request configs and drains queued candidate/judge rows for that agent lane — the same path as a manual drain. It does **not** queue new cohorts by itself (use `tl experiment queue`, the UI request form, or `experiments.auto_initiate`), and it never calls select/apply. Unsupported values fail loudly at `tl open` time (same as a missing lane command); `drain` with an empty `lanes` list is also a hard error. `tl open` status prints exactly which drain commands will run.
+`drain` folds pending `_experiments/queue/*.json` request configs and drains queued candidate/judge rows for that agent lane — the same path as a manual drain. It does **not** queue new cohorts by itself (use `tl experiment queue`, the UI request form, or `experiments.auto_initiate`), and it never calls select/apply. Unsupported values fail loudly at `tl up` time (same as a missing lane command); `drain` with an empty `lanes` list is also a hard error. `tl up` status prints exactly which drain commands will run. Experiment drain is **experiment fixture proof**, not the canonical operating path.
 
 ```cron
-# optional hand-rolled experiment drain (tl open chains these when experiment: drain)
+# optional hand-rolled experiment drain (tl up chains these when experiment: drain)
 */15 * * * * cd $HOME/Documents/GitHub/throughline && /usr/local/bin/node bin/tl.js experiment drain --agent claude throughline >> /tmp/tl-experiment-drain.log 2>&1
 ```
 
@@ -432,9 +439,10 @@ Watch for the signature in `worker-log.jsonl`: every lane logging
 `no_continuation` for days while a spec sits in `in-progress/` is a stranded
 claim.
 
-## End-to-end validation
+## End-to-end validation (headless lifecycle proof)
 
-The milestone that proves the loop — two lanes on cron draining a small
-project unattended, humans only reviewing — is parked as
-`threads/2026-07-04-headless-e2e-milestone-on-todo-app.md` in the throughline
-workspace.
+The milestone that proves the **canonical operating path** — two lanes on
+cron draining a small project unattended, humans only reviewing — shipped as
+`projects/throughline/done/headless-e2e-todo-app/`. That is headless lifecycle
+proof, not an experiment fixture and not a browser/CI E2E suite. See
+`docs/canonical-e2e-path.md`.
